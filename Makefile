@@ -68,6 +68,13 @@ realclean:
 	$(MAKE) clean
 	/bin/rm -f bin/*
 
+pgo-merge:
+	xcrun llvm-profdata merge -output=pgo_data/default.profdata pgo_data/*.profraw 2>/dev/null || \
+	llvm-profdata merge -output=pgo_data/default.profdata pgo_data/*.profraw
+
+pgo-clean:
+	/bin/rm -rf pgo_data
+
 
 # The following cleans up, then makes a .tar.gz file of the current
 # directory, leaving it in the parent directory.  (Gnu make only.)

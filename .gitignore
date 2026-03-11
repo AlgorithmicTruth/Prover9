@@ -19,6 +19,9 @@ test.src/tptp_test
 !.gitignore
 !.gitkeep
 
+# PGO profile data
+pgo_data/
+
 # Debug symbol bundles (macOS)
 *.dSYM/
 

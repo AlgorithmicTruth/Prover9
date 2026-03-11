@@ -48,6 +48,21 @@ endif
 ifdef DEBUG
   OPTFLAGS = -g -O0
   _BMODE = debug
+else ifdef NATIVE
+  OPTFLAGS = -O3 -march=native -flto
+  PLATFORM_FLAGS =
+  AR_CMD = $(AR) rs
+  ifdef PGO
+    ifeq ($(PGO),gen)
+      OPTFLAGS += -fprofile-generate=$(CURDIR)/../pgo_data
+      _BMODE = native-pgo-gen
+    else ifeq ($(PGO),use)
+      OPTFLAGS += -fprofile-use=$(CURDIR)/../pgo_data
+      _BMODE = native-pgo-use
+    endif
+  else
+    _BMODE = native
+  endif
 else
   OPTFLAGS = -O2
   _BMODE = release

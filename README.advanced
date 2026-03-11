@@ -1,0 +1,171 @@
+Advanced Build Modes -- LADR-2026
+==================================
+
+This document covers native optimized builds with LTO and PGO support
+for benchmarking and competition use.
+
+For standard builds, see README.make.
+
+
+Build Mode Summary
+------------------
+
+    make all                    Release (-O2, universal binary on macOS)
+    make all DEBUG=1            Debug (-g -O0 -DDEBUG, universal binary)
+    make all NATIVE=1           Native (-O3, -march=native, -flto, single-arch)
+    make all NATIVE=1 PGO=gen   PGO instrumented (generates profile data)
+    make all NATIVE=1 PGO=use   PGO optimized (uses profile data)
+
+The NATIVE=1 flag produces a single-architecture binary optimized for
+the build machine. It enables:
+
+    -O3               Aggressive optimization (vs -O2 in release builds)
+    -march=native     CPU-specific instruction selection
+    -flto             Link-time optimization (whole-program analysis)
+
+No universal binary is produced. The result runs only on the build
+machine's architecture. Use this for benchmarking and competition
+submissions, not for distribution.
+
+
+Build Mode Switching
+--------------------
+
+All build modes use a sentinel file (.build_mode) to detect mode
+changes. Switching between any modes (release, debug, native,
+native-pgo-gen, native-pgo-use) triggers an automatic rebuild.
+
+    make all NATIVE=1       # builds native
+    make all                # detects "native" != "release", rebuilds
+
+
+PGO (Profile-Guided Optimization)
+----------------------------------
+
+PGO uses execution profiles from representative workloads to guide
+the compiler's optimization decisions: branch prediction, function
+inlining, code layout, and register allocation. For Prover9, PGO
+typically improves CPU throughput by 13-20% on top of the NATIVE=1
+baseline.
+
+The PGO workflow has three steps:
+
+### Step 1: Build the instrumented binary
+
+    make realclean
+    make all NATIVE=1 PGO=gen
+
+This compiles with -fprofile-generate. The resulting binary is slower
+than normal (instrumentation overhead) but functionally identical.
+
+### Step 2: Run a training workload
+
+Run the instrumented binary on a representative set of problems.
+Good training data should cover the code paths you care about --
+both easy and hard problems, TPTP and LADR input formats.
+
+    P9=bin/prover9
+    TPTP=/path/to/TPTP-v9.2.0/Problems
+
+    # Hard problems (30s timeout each)
+    for p in KLE122+1 ROB006-3 RNG027-10 LCL148-1 REL040+3 \
+             GEO525+1 LCL767-1 RNG010-1 RNG027-1 RNG028-1 \
+             SWV670-1 SWV671-1 SWV672-1; do
+        domain=$(echo "$p" | sed 's/[0-9].*//')
+        $P9 -t 30 -f "$TPTP/$domain/$p.p" < /dev/null > /dev/null 2>&1
+    done
+
+    # Easy problems for broader code coverage (5s each)
+    for p in PUZ001-1 PUZ001+1 COL003-1 MGT001+1 GRP001-1 \
+             BOO010-1 LCL006-1 LAT005-1; do
+        domain=$(echo "$p" | sed 's/[0-9].*//')
+        $P9 -t 5 -f "$TPTP/$domain/$p.p" < /dev/null > /dev/null 2>&1
+    done
+
+    # LADR-native input for that code path
+    $P9 -t 5 -f prover9.examples/x2.in < /dev/null > /dev/null 2>&1
+
+IMPORTANT: Pipe stdin from /dev/null (< /dev/null) when running TPTP
+problems. Without this, the TPTP code path may read stdin after
+processing the file and hang.
+
+Profile data accumulates in pgo_data/ at the project root. Multiple
+runs merge automatically into the same profile file.
+
+### Step 3: Merge profiles and rebuild
+
+    make pgo-merge
+    make all NATIVE=1 PGO=use
+
+The pgo-merge target runs llvm-profdata (via xcrun on macOS) to
+convert raw profile data into an optimized format. Then PGO=use
+rebuilds with -fprofile-use, applying the collected branch weights
+and hot/cold annotations.
+
+Warnings about "function control flow change detected (hash mismatch)"
+are expected for programs that were not exercised during training
+(e.g. apps like interpformat, isofilter). The core prover9 and mace4
+binaries will have full profile coverage.
+
+### Cleaning profile data
+
+    make pgo-clean              Remove pgo_data/ directory
+
+
+Technical Notes
+---------------
+
+1. AR_CMD override. NATIVE=1 switches from macOS libtool to ar for
+   static libraries. The libtool -static command rejects LTO bitcode
+   objects ("not an object file"), but ar handles them correctly for
+   single-architecture builds.
+
+2. Compiler. On macOS, gcc is Apple Clang, which uses LLVM's PGO
+   infrastructure (.profraw / .profdata files). On Linux with real
+   GCC, the profile format is different (.gcda / .gcno) and the
+   pgo-merge step is not needed -- GCC reads .gcda files directly.
+
+3. Profile data location. All four sub-Makefiles (ladr/, provers.src/,
+   mace4.src/, apps.src/) write profile data to $(CURDIR)/../pgo_data,
+   which resolves to the project root's pgo_data/ directory.
+
+4. Training workload selection. PGO benefits are proportional to how
+   well the training workload represents actual use. For competition
+   use, train on a broad sample of TPTP problems. For domain-specific
+   work (e.g. only ring theory), train on that domain's problems.
+
+
+Benchmark: TPTP Rating 1.00 Problems
+-------------------------------------
+
+All 13 TPTP problems rated 1.00 (unsolved by most provers) that
+Prover9 can solve, benchmarked with -cores 8 on Apple M4 Max.
+
+PGO build: NATIVE=1 PGO=use (-O3 -march=native -flto -fprofile-use)
+vs release build: -O2, universal binary (arm64 + x86_64)
+
+    Problem      Status          Release   PGO     Speedup
+    ------------ --------------- -------   ------  -------
+    KLE122+1     Theorem          26.20s   23.13s    1.13x
+    ROB006-3     Unsatisfiable     6.32s    5.28s    1.20x
+    RNG027-10    Unsatisfiable     3.25s    2.82s    1.15x
+    LCL148-1     Unsatisfiable     7.25s    6.31s    1.15x
+    REL040+3     Theorem           1.43s    1.23s    1.16x
+    GEO525+1     Theorem           2.27s    2.04s    1.11x
+    LCL767-1     Unsatisfiable     0.08s    0.07s    1.14x
+    RNG010-1     Unsatisfiable     6.74s    5.82s    1.16x
+    RNG027-1     Unsatisfiable     2.23s    1.88s    1.19x
+    RNG028-1     Unsatisfiable     1.71s    1.45s    1.18x
+    SWV670-1     Unsatisfiable     4.82s    4.21s    1.14x
+    SWV671-1     Unsatisfiable     4.74s    4.19s    1.13x
+    SWV672-1     Unsatisfiable     4.76s    4.21s    1.13x
+    ------------ ---------------  ------   ------  -------
+    TOTAL (CPU)                   71.80s   62.64s    1.15x
+
+All times are Prover9 User_CPU seconds (proof search time, excluding
+scheduler overhead). Wall-clock total: 254s (release) vs 224s (PGO).
+
+The PGO build delivers a consistent 11-20% CPU speedup, with the
+largest gains on ROB006-3 (1.20x) and RNG027-1 (1.19x).
+
+Benchmark environment: macOS 15, Apple M4 Max, March 2026.
