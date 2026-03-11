@@ -227,7 +227,11 @@ struct arg_options get_command_line_args(int argc, char **argv)
       }
     }
     else if (strcmp(argv[i], "-comp") == 0) {
+#ifdef _SC_NPROCESSORS_ONLN
       long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+#else
+      long ncpu = 1;
+#endif
       if (ncpu < 1) ncpu = 4;
       if (ncpu > 64) ncpu = 64;
       opts.cores = (int) ncpu;
