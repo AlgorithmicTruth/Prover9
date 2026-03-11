@@ -1,0 +1,209 @@
+=============================================
+LADR: Prover9, Mace4, and Related Programs
+=============================================
+
+Version 2026-3A (March 2026)
+
+
+Overview
+--------
+
+LADR (Library for Automated Deduction Research) is a collection of
+programs for first-order logic: the Prover9 theorem prover, the Mace4
+finite model searcher, and over two dozen utility programs for proof
+transformation, model filtering, and clause manipulation.
+
+Prover9 searches for proofs by contradiction using resolution,
+paramodulation, and related inference rules. It reads first-order
+formulas (FOF) or clauses (CNF) and produces detailed proofs that can
+be independently verified.
+
+Mace4 searches for finite models (counterexamples). Given a set of
+first-order formulas, it tries to find an interpretation of a given
+domain size that satisfies them. It is often used together with
+Prover9: Prover9 tries to prove a conjecture while Mace4 tries to
+disprove it.
+
+Both programs read TPTP-format (.p) files directly and produce
+SZS-compliant status output and TSTP/TPTP-format proofs and models.
+Native LADR input format is also fully supported.
+
+
+Authorship
+----------
+
+Original LADR and Prover9/Mace4 by William McCune, Mathematics and
+Computer Science Division, Argonne National Laboratory, 2005-2009.
+
+  Original release: LADR-2009-11A (November 2009)
+
+Modernized and extended by Jeffrey Machado and Larry Lesyna, 2026.
+
+  Current release: LADR-2026-3A (March 2026)
+
+  Changes include: TPTP/TSTP input and output for Prover9 and Mace4,
+  SinE premise selection, strategy scheduling, checkpoint/resume,
+  CNF preprocessing timeout, performance optimizations for large
+  inputs (hash-indexed discrimination and FPA tries, iterative
+  conversions of recursive algorithms), and numerous bug fixes.
+  See the LADR-2026-*-Modifications.txt files for details.
+
+
+Building
+--------
+
+Requirements: C compiler (GCC or Clang), make.
+
+    make all             Build all programs (release, -O2).
+    make all DEBUG=1     Build with debug symbols (-g -O0 -DDEBUG).
+
+This compiles the LADR library, Mace4 library, Prover9, Mace4, and
+all utility programs, then copies them to ./bin/.
+
+On macOS, universal binaries (arm64 + x86_64) are built automatically.
+The Makefile uses libtool instead of ar for static libraries.
+
+Quick tests:
+
+    make test1           Basic Prover9 tests.
+    make test2           Basic Mace4 tests.
+    make test3           Utility program tests.
+    make test4           TPTP input/output tests.
+    make test5           SinE premise selection tests.
+
+
+Programs
+--------
+
+Main programs:
+
+  prover9            First-order theorem prover.
+  mace4              Finite model searcher.
+  prooftrans         Proof transformation (Ivy, hints, renumber, TSTP).
+
+Proof and clause utilities:
+
+  clausefilter       Filter clauses by properties.
+  clausetester       Test clause properties.
+  directproof        Extract direct (non-refutation) proofs.
+  get_givens         Extract given clauses from Prover9 output.
+  get_interps        Extract interpretations from Mace4 output.
+  get_kept           Extract kept clauses from Prover9 output.
+  gvizify            Convert proofs to Graphviz dot format.
+  idfilter           Filter clauses by ID.
+  rewriter           Apply term rewriting.
+  renamer            Rename symbols in formulas.
+
+Model and interpretation utilities:
+
+  interpfilter       Filter interpretations by formula evaluation.
+  interpformat       Reformat interpretations (standard, portable, etc.).
+  isofilter          Remove isomorphic interpretations.
+  isofilter0         Isofilter variant (canonicalization method).
+  isofilter2         Isofilter variant (discriminator method).
+  latfilter          Filter lattice interpretations.
+  olfilter           Filter ortholattice interpretations.
+
+TPTP conversion utilities:
+
+  tptp_to_ladr       Convert TPTP to LADR format.
+  ladr_to_tptp       Convert LADR to TPTP format.
+
+Other utilities:
+
+  attack             Combinatorial search.
+  complex            Term complexity analysis.
+  dprofiles          Discriminator profiles for isofilter.
+  fof-prover9        FOF reduction wrapper for Prover9.
+  gen_trc_defs       Generate TRC constant definitions.
+  looper             Loop saturation search.
+  miniscope          Miniscope formulas.
+  mirror-flip        Mirror/flip term operations.
+  newauto            Experimental auto mode.
+  newsax             New single axiom search.
+  perm3              Permutation utilities.
+  prover9-mace4      Run Prover9 and Mace4 concurrently.
+  sigtest            Test term signatures.
+  test_clause_eval   Test clause evaluation.
+  test_complex       Test term complexity.
+  unfast             Convert fast format to standard.
+  upper-covers       Compute upper covers for lattices.
+
+All programs accept "help" as an argument for a synopsis.
+
+
+Documentation
+-------------
+
+User guides (in this directory):
+
+  Command-Line-Reference.txt Command-line options for all programs.
+  Prover9-TPTP-HOWTO.txt     Prover9 TPTP/TSTP mode.
+  Mace4-TPTP-HOWTO.txt       Mace4 TPTP mode.
+  SinE-Premise-Selection.txt SinE premise selection for large inputs.
+  Strategy-Scheduling.txt    Parallel strategy scheduling.
+  Checkpoint-Resume.txt      Prover9 checkpoint and resume.
+  Proof-Verification.txt     Ivy and GDV proof verification.
+
+Change logs:
+
+  Whats-New.txt              Summary of all changes since 2009.
+  LADR-2026-Modifications.txt  Detailed per-version change logs.
+  Changelog                  Original McCune changelog (2005-2009).
+
+Examples:
+
+  prover9.examples/          Prover9 example input files.
+  mace4.examples/            Mace4 example input files.
+  tptp.examples/             TPTP test problems.
+  apps.examples/             Utility program examples.
+
+LADR library API:
+
+  ladr/html/index.html       Auto-generated library documentation.
+
+
+Quick Start
+-----------
+
+Prove a theorem from a TPTP file:
+
+    bin/prover9 -t 60 -f problem.p
+
+Search for a finite model:
+
+    bin/mace4 -t 60 -f problem.p
+
+Prove using native LADR input:
+
+    bin/prover9 -t 60 -f input.in
+
+Search for a model of size 6:
+
+    bin/mace4 -n 6 -f input.in
+
+Convert a proof to Ivy format for verification:
+
+    bin/prover9 -ladr_out -t 60 -f problem.p | bin/prooftrans ivy
+
+Extract hints from a proof for reuse:
+
+    bin/prooftrans hints < proof.out > hints.out
+
+
+References
+----------
+
+McCune, W. "Prover9 and Mace4."
+    http://www.cs.unm.edu/~mccune/prover9/
+
+McCune, W. "OTTER 3.3 Reference Manual."
+    Technical Report ANL/MCS-TM-263, Argonne National Laboratory, 2003.
+
+Sutcliffe, G. "The TPTP Problem Library and Associated Infrastructure."
+    Journal of Automated Reasoning, 59(4):483-502, 2017.
+    http://www.tptp.org
+
+McCune, W. and Shumsky, O. "IVY: A Preprocessor and Proof Checker
+    for First-Order Logic." In Computer-Aided Reasoning: ACL2 Case
+    Studies, Kluwer Academic Publishers, 2000.

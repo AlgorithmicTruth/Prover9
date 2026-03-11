@@ -1,0 +1,74 @@
+% SinE premise selection test in native LADR mode.
+%
+% Group theory axioms (relevant) + 50 irrelevant noise axioms.
+% SinE should select only the group axioms and prove commutativity
+% from x*x=e quickly.
+
+assign(sine, 200).     % tolerance 2.0, explicit enable
+
+formulas(sos).
+
+% --- Group theory (relevant to goal) ---
+  e * x = x.
+  x' * x = e.
+  (x * y) * z = x * (y * z).
+  x * x = e.
+
+% --- Noise: lattice operations (disjoint symbols) ---
+  join(a1, a1) = a1.
+  meet(a1, a1) = a1.
+  join(a1, meet(a1, a2)) = a1.
+  meet(a1, join(a1, a2)) = a1.
+  join(a1, a2) = join(a2, a1).
+  meet(a1, a2) = meet(a2, a1).
+  join(join(a1, a2), a3) = join(a1, join(a2, a3)).
+  meet(meet(a1, a2), a3) = meet(a1, meet(a2, a3)).
+  join(a1, bot) = a1.
+  meet(a1, top) = a1.
+
+% --- Noise: set membership (disjoint symbols) ---
+  member(b1, union(b2, b3)) <-> (member(b1, b2) | member(b1, b3)).
+  member(b1, intersect(b2, b3)) <-> (member(b1, b2) & member(b1, b3)).
+  subset(b1, b2) <-> (all b3 (member(b3, b1) -> member(b3, b2))).
+  member(b1, complement(b2)) <-> -member(b1, b2).
+  member(b1, emptyset) <-> $F.
+  subset(b1, b1).
+  subset(emptyset, b1).
+  union(b1, emptyset) = b1.
+  intersect(b1, b1) = b1.
+  union(b1, b1) = b1.
+
+% --- Noise: ordering relations (disjoint symbols) ---
+  leq(c1, c1).
+  leq(c1, c2) & leq(c2, c1) -> c1 = c2.
+  leq(c1, c2) & leq(c2, c3) -> leq(c1, c3).
+  leq(c1, c2) | leq(c2, c1).
+  leq(c1, c2) -> leq(c1, supremum(c1, c2)).
+  leq(c2, supremum(c1, c2)).
+  leq(infimum(c1, c2), c1).
+  leq(infimum(c1, c2), c2).
+  leq(c1, c2) & leq(c1, c3) -> leq(c1, infimum(c2, c3)).
+
+% --- Noise: ring axioms (disjoint symbols) ---
+  plus(d1, d2) = plus(d2, d1).
+  plus(plus(d1, d2), d3) = plus(d1, plus(d2, d3)).
+  plus(d1, e0) = d1.
+  plus(d1, neg(d1)) = e0.
+  times(times(d1, d2), d3) = times(d1, times(d2, d3)).
+  times(d1, e1) = d1.
+  times(e1, d1) = d1.
+  times(d1, plus(d2, d3)) = plus(times(d1, d2), times(d1, d3)).
+  times(plus(d1, d2), d3) = plus(times(d1, d3), times(d2, d3)).
+
+% --- Noise: graph predicates (disjoint symbols) ---
+  edge(f1, f2) -> edge(f2, f1).
+  edge(f1, f2) & edge(f2, f3) -> path(f1, f3).
+  edge(f1, f2) -> path(f1, f2).
+  connected(f1, f2) <-> path(f1, f2).
+  -edge(f1, f1).
+
+end_of_list.
+
+formulas(goals).
+  x * y = y * x.
+end_of_list.

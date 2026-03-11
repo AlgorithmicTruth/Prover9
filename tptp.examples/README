@@ -1,0 +1,21 @@
+TPTP Test Problems for Prover9
+==============================
+
+The .p files in this directory are verbatim copies from the TPTP
+problem library (Thousands of Problems for Theorem Provers),
+version 9.2.0:
+
+    http://www.tptp.org
+
+They are used to test Prover9's TPTP input and TSTP output modes.
+
+Copyright 1993-onwards, Geoff Sutcliffe & Christian Suttner.
+Redistribution is permitted provided it is clearly attributed
+to the TPTP.  See the TPTP ReadMe for full conditions of use.
+
+Problems included:
+
+  PUZ001-1.p   CNF  Puzzles (Who killed Aunt Agatha?)
+  PUZ001+1.p   FOF  Puzzles (Who killed Aunt Agatha?)
+  COL003-1.p   CNF  Combinatory Logic (Strong fixed point)
+  MGT001+1.p   FOF  Management Theory (Organizational ecology)

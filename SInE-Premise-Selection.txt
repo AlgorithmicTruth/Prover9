@@ -1,0 +1,306 @@
+=============================================
+SInE Premise Selection for Prover9
+=============================================
+
+LADR-2026-3C (March 2026)
+
+
+Overview
+--------
+
+SInE (Sumo Inference Engine) is a premise selection algorithm that
+filters large axiom sets down to a relevant subset before the search
+begins. It was introduced by Hoder and Voronkov (2011) and is used
+by most modern ATP systems (E, Vampire) for large-theory problems.
+
+Prover9's SInE implementation selects axioms based on symbol sharing
+with the goal formulas, using a breadth-first search (BFS) with
+configurable tolerance and depth. Axioms that share rare symbols with
+the goals are selected first, and the process propagates outward.
+
+SInE is designed for TPTP problems with many axioms. It is completely
+inert in LADR mode -- all defaults are no-ops when reading native
+LADR input.
+
+Added in LADR-2026-2W, with enhancements in 2026-2Y and 2026-2Z.
+
+
+1. Options
+===========
+
+assign(sine, N).
+
+    SInE tolerance control.
+
+    Default: -1 (auto-enable).
+
+    -1     Auto-enable for TPTP input with more than 128 axioms and
+           at least one goal formula. Sets tolerance to 200 (2.0x).
+    0      Disable SInE entirely.
+    >0     Enable SInE with explicit tolerance. The value is a
+           percentage: 200 means 2.0x, 150 means 1.5x, 100 means
+           1.0x (exact match only). Lower values select fewer axioms.
+
+    An axiom is selected if it contains a symbol s where:
+
+        occurrence_count(s) <= tolerance * min_occurrence_in_axiom
+
+    with tolerance expressed as a percentage. A tolerance of 200 means
+    a symbol is considered "rare enough" if it appears in at most twice
+    as many axioms as the rarest symbol in the candidate axiom.
+
+assign(sine_depth, N).
+
+    BFS depth limit for SInE propagation.
+
+    Default: 0 (run to fixpoint).
+
+    0      Run BFS until no new axioms are selected (fixpoint).
+    >0     Limit BFS to N levels. Depth 1 selects axioms sharing
+           symbols directly with the goals. Depth 2 adds axioms
+           sharing symbols with depth-1 axioms, and so on.
+
+    For problems with more than 5000 axioms and sine_depth=0, the
+    system automatically adjusts to depth 3 with tolerance 150 to
+    avoid selecting too many axioms.
+
+assign(sine_weight, N).
+
+    Depth-based clause weight penalty.
+
+    Default: 0 (disabled).
+
+    0      No depth penalty.
+    >0     Add N * (depth - 1) to the weight of each clause derived
+           from a SInE-selected axiom. Depth-1 axioms (closest to the
+           goal) get no penalty; depth-2 axioms get +N; depth-3 get
+           +2N; and so on.
+
+    This causes the given-clause selector to prefer clauses from
+    tightly related axioms. When sine_weight is set to a positive
+    value, the system automatically enables weight_part=2 and clears
+    input_sos_first so the weight selector is active from the start.
+
+    Auto-set to 100 in TPTP soft-filter mode (<=5000 axioms).
+    Not auto-set in depth-based mode (>5000 axioms) because all
+    SOS axioms are already at depth 1 in that mode.
+
+assign(sine_max_axioms, N).
+
+    Maximum number of axioms to select.
+
+    Default: 0 (unlimited).
+
+    0      No cap; select all axioms matching BFS criteria.
+    >0     Stop BFS early once the selected axiom count reaches N.
+
+    This option is primarily used by the strategy scheduler to give
+    different children different selection sizes.
+
+
+2. Operating Modes
+===================
+
+SInE operates in one of two modes depending on the number of axioms
+in the input.
+
+
+Soft Filter Mode (<=5000 axioms)
+.................................
+
+When the axiom count is 5000 or fewer, SInE uses a safe soft filter:
+
+  - All SInE-selected axioms go to SOS (the active search set).
+  - All unselected axioms go to usable (available for inference but
+    not selected as given clauses).
+  - No axioms are discarded.
+
+This is safe because no axioms are lost -- unselected axioms remain
+available in usable for back demodulation, unit deletion, and other
+simplification operations. The overhead of indexing a few thousand
+usable clauses is manageable.
+
+In this mode, sine_weight is auto-set to 100 (if not explicitly
+assigned), weight_part is set to 2, and input_sos_first is cleared.
+This causes the given-clause selector to prefer depth-1 axioms
+(closest to the goal) over deeper axioms.
+
+
+Depth-Based Mode (>5000 axioms)
+................................
+
+When the axiom count exceeds 5000, SInE uses a more aggressive
+depth-based filter to avoid the performance cost of indexing tens
+of thousands of irrelevant usable clauses:
+
+  - BFS depth 1 axioms (direct symbol sharing with goals) go to SOS.
+  - BFS depth 2+ axioms go to usable.
+  - Unselected axioms are discarded entirely.
+
+Parameters are auto-adjusted:
+  - Tolerance: 150 (1.5x, tighter than the default 200).
+  - Depth: 3 (limited BFS, not fixpoint).
+
+sine_weight is NOT auto-enabled in this mode because all SOS axioms
+are already at depth 1 (no depth penalty needed).
+
+
+3. What SInE Excludes from Symbol Counting
+============================================
+
+To avoid spurious cross-linking of unrelated axioms, two categories
+of symbols are excluded from SInE's occurrence counting:
+
+  - The equality symbol (=). Equality appears in virtually every
+    equational axiom, so counting it would link all equational axioms
+    regardless of subject matter.
+
+  - Formula-level variables. In TPTP's Prolog-style variable
+    convention, variables are uppercase symbols that appear in every
+    formula. Counting them would link everything.
+
+This follows the standard practice of E prover and Vampire.
+
+
+4. Hypothesis Role Seeding
+===========================
+
+TPTP formulas with role "hypothesis" are treated specially by SInE:
+they are pre-selected (seeded) at BFS depth 1, the same as goals.
+This means hypothesis formulas are always included and their symbols
+seed the BFS propagation, helping to select axioms relevant to both
+the conjecture and any problem-specific hypotheses.
+
+
+5. Auto-Enable Conditions
+===========================
+
+SInE auto-enables (when assign(sine, -1)) if ALL of:
+
+  1. TPTP input mode is active.
+  2. The input contains more than 128 axioms.
+  3. The input contains at least one goal (conjecture) formula.
+
+If any condition is not met, SInE is silently skipped.
+
+In LADR mode, SInE is never auto-enabled. The default sine=-1 is
+a no-op because condition 1 is not met.
+
+
+6. Interaction with Other Features
+====================================
+
+Strategy scheduling:
+
+  The sliding-window scheduler (-cores N) gives each child different
+  SInE parameters (tolerance, depth, max_axioms) for diversity. See
+  Strategy-Scheduling.txt for details.
+
+Checkpoint/resume:
+
+  SInE runs during preprocessing, before the search begins. A
+  checkpoint captures the post-SInE clause set. On resume, SInE
+  does not re-run.
+
+Multi-ordering trial:
+
+  Runs after SInE, before the search. SInE filtering reduces the
+  symbol count, which can change the optimal precedence ordering.
+
+LADR mode:
+
+  All SInE options are inert. No axioms are filtered, no weights are
+  adjusted, no auto-enable occurs. Default sine=-1 is a silent no-op.
+
+
+7. Examples
+============
+
+Example 1: Default behavior (auto-enable for large TPTP inputs)
+
+    prover9 -t 60 -f large_problem.p
+
+  If large_problem.p has more than 128 axioms and a conjecture,
+  SInE activates automatically with tolerance 200 (2.0x).
+
+Example 2: Explicit tolerance
+
+    % prover9: assign(sine, 150).
+
+  In a TPTP .p file as a magic comment, or in LADR input:
+
+    assign(sine, 150).
+
+  Tolerance 150 (1.5x) selects fewer axioms than the default 200.
+
+Example 3: Disable SInE
+
+    % prover9: assign(sine, 0).
+
+  Disables SInE even for large inputs.
+
+Example 4: Tune depth and weight
+
+    % prover9: assign(sine, 200).
+    % prover9: assign(sine_depth, 5).
+    % prover9: assign(sine_weight, 50).
+
+  Tolerance 2.0x, BFS depth 5, weight penalty of 50 per depth level.
+
+Example 5: Command-line override
+
+    prover9 -t 60 -f problem.p -- 'assign(sine, 150).'
+
+  (Depending on shell, the assign command may need to be in the input
+  file or as a magic comment.)
+
+
+8. Diagnostic Output
+=====================
+
+SInE prints diagnostic information to stderr when it runs:
+
+  For soft-filter mode:
+
+    % SInE: 342 to sos, 786 to usable, of 1128 axioms
+      (tolerance 200, depth 0 [fixpoint]).
+
+  For depth-based mode:
+
+    % SInE (scan): 156 tight + 412 loose of 38241 (3 depths):
+      d1=156 + 0 d2=0 + 289 d3=0 + 123
+
+  The "tight" count is depth-1 axioms going to SOS. The "loose" count
+  is deeper axioms going to usable (or discarded in scan mode).
+
+
+9. Performance Notes
+=====================
+
+SInE provides the most benefit on problems with thousands of axioms
+where most axioms are irrelevant to the conjecture. Typical speedups:
+
+  - 1000-axiom problems: 2-10x speedup.
+  - 10,000-axiom problems: 10-50x speedup.
+  - 38,000-axiom problems: enables proofs that would otherwise time out.
+
+For problems with fewer than ~100 axioms, SInE overhead is minimal
+but the benefit is negligible (most axioms are relevant).
+
+CSR domain results (96 problems, 60-second timeout):
+
+  With SInE:     56 Theorem, 37 GaveUp, 3 Timeout.
+  Without SInE:  Same problems solved; SInE adds zero regressions.
+
+CSR113+2 (10,188 axioms): 0.68s with depth-based SInE (was 14.86s
+with all axioms in usable).
+
+
+10. References
+===============
+
+Hoder, K. and Voronkov, A. "Sine Qua Non for Large Theory Reasoning."
+    Proceedings of CADE-23, LNAI 6803, pp. 299-314, 2011.
+
+Sutcliffe, G. "The TPTP Problem Library."
+    http://www.tptp.org

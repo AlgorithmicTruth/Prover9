@@ -1,0 +1,330 @@
+=====================================================
+Mace4-TPTP-HOWTO: Using Mace4's TPTP Input/Output
+=====================================================
+
+Mace4 reads TPTP FOF/CNF input and produces SZS status lines and
+TPTP-format finite interpretations (models), enabling direct integration
+with the TPTP toolchain and comparison with other model finders.
+
+Added in LADR-2026-3A.
+
+LADR-mode behavior is completely unchanged -- native model format,
+no SZS output, same options handling.
+
+
+1. Invoking TPTP Mode
+======================
+
+Input mode (any one of):
+
+  mace4 -f problem.p              Auto-detected by .p extension.
+  mace4 -f axioms.ax              Auto-detected by .ax extension.
+  mace4 problem.p                 Bare positional .p file.
+  mace4 axioms.ax                 Bare positional .ax file.
+  mace4 -tptp -f problem.tptp     Explicit flag with any extension.
+
+The .p and .ax extensions are matched on the last 2 or 3 characters
+of the filename. The -tptp flag forces TPTP mode regardless of the
+file extension.
+
+Output mode (TPTP/SZS):
+
+  Auto-enabled when TPTP input is detected (any of the above).
+  No manual override is needed.
+
+When TPTP mode is active:
+
+  - Banner is printed as TPTP comments (% prefix).
+  - Command-line parameter echo is suppressed.
+  - Models are printed in TPTP finite interpretation format.
+  - SZS status line is printed on exit.
+
+
+2. Command-Line Options
+========================
+
+All existing Mace4 command-line options work identically in TPTP mode.
+
+Basic options:
+
+  -f file    Input file.
+  -n n       Start domain size (assign domain_size and start_size).
+  -N n       End domain size (assign end_size).
+  -t n       Time limit in seconds (assign max_seconds).
+  -m n       Maximum number of models (assign max_models).
+  -b n       Memory limit in megabytes (assign max_megs).
+  -i n       Domain size increment (assign increment).
+
+Model output:
+
+  -P 1       Print models in standard format (set print_models).
+  -p 1       Print models in tabular format (set print_models_tabular).
+
+Search tuning:
+
+  -O n       Selection order (0, 1, or 2).
+  -M n       Selection measure (0-4).
+  -L 1       LNH (Least Number Heuristic).
+  -G 1       Negation propagation (set negprop).
+  -R 1       Integer ring arithmetic (set integer_ring).
+  -S 1       Skolems last (set skolems_last).
+
+TPTP output:
+
+  -ladr_out  Force LADR-format model output with TPTP input.
+  -ladr-out  Models are printed in native LADR format instead of
+             TPTP finite interpretation format. Compatible with
+             interpformat, isofilter, and other LADR model tools.
+
+Other:
+
+  -v 1       Verbose output (set verbose).
+  -c         Compatibility mode (ignore unrecognized options).
+  -tptp      Force TPTP input mode.
+  -e n       Progress reports to stderr every n seconds during search.
+             Maps to: assign(report_stderr, n).
+
+
+3. TPTP Language Support
+=========================
+
+Mace4 supports the same TPTP language subset as Prover9:
+
+Formula types:
+
+  fof(name, role, formula).       First-order formulas.
+  cnf(name, role, clause).        Clausal normal form.
+
+Include directives:
+
+  include('file').                Include all formulas from file.
+  include('file', [n1, n2]).      Include only named formulas.
+
+Roles:
+
+  conjecture            Goal (model must falsify this).
+  axiom                 Assumption (model must satisfy).
+  hypothesis            Assumption.
+  negated_conjecture    Assumption (already negated).
+  (all other roles)     Treated as assumptions.
+
+Variables: Uppercase (Prolog convention).
+
+Connectives: &, |, ~, =>, <=>, <~>, ~|, ~&, !, ?.
+
+Built-ins: $true, $false.
+
+See Prover9-TPTP-HOWTO.txt for the full language description.
+
+
+4. SZS Status Output
+======================
+
+On exit, Mace4 prints an SZS status line:
+
+  % SZS status <Status> for <problem_name>
+
+The problem name is extracted from the .p filename (basename with
+extension stripped). If no .p file was given, the "for <name>"
+suffix is omitted.
+
+Exit condition                  SZS status (with goals)    (no goals)
+------------------------------  -------------------------  ----------
+Model found                     CounterSatisfiable         Satisfiable
+Search exhausted (all sizes)    GaveUp                     GaveUp
+max_seconds exceeded            Timeout                    Timeout
+max_megs exceeded               MemoryOut                  MemoryOut
+Fatal error                     Error                      Error
+SIGINT (user interrupt)         User                       User
+
+The distinction between CounterSatisfiable and Satisfiable depends on
+whether conjecture or goal formulas were present in the input. If the
+input contains a conjecture and Mace4 finds a model, the model is a
+counterexample to the conjecture, hence CounterSatisfiable.
+
+Note: "Search exhausted" maps to GaveUp, not Unsatisfiable, because
+Mace4 only searches finite domains up to end_size. It cannot prove
+general unsatisfiability.
+
+
+5. TPTP Model Output Format
+=============================
+
+When a model is found in TPTP mode, it is printed in TPTP finite
+interpretation format, wrapped in SZS output delimiters.
+
+Domain elements are named d0, d1, ..., d{N-1} where N is the domain
+size.
+
+The format has three sections:
+
+  fi_domain        -- declares the domain elements
+  fi_functors      -- defines all function/constant values
+  fi_predicates    -- defines all relation values
+
+Example (group of order 2):
+
+  % SZS output start FiniteModel for GRP001-1
+  fof(interp_domain, fi_domain,
+      ! [X] : ( X = d0 | X = d1 )).
+
+  fof(interp_functions, fi_functors, (
+      e = d0 &
+      d0 * d0 = d0 &
+      d0 * d1 = d1 &
+      d1 * d0 = d1 &
+      d1 * d1 = d0 &
+      inverse(d0) = d0 &
+      inverse(d1) = d1 )).
+
+  fof(interp_relations, fi_predicates, (
+      p(d0) &
+      ~p(d1) )).
+  % SZS output end FiniteModel for GRP001-1
+
+If there are no function symbols, the fi_functors section is omitted.
+If there are no relation symbols, the fi_predicates section is omitted.
+
+The equality symbol (=) is not included in the function output; it is
+implicit in the domain declaration.
+
+Constants (arity 0) are printed as: c = d0.
+Functions (arity >= 1) enumerate all input tuples: f(d0,d1) = d2.
+Relations print each tuple as positive or negative: p(d0) or ~p(d0).
+
+
+6. Examples
+============
+
+Example 1: Find a model (no conjecture --> Satisfiable)
+
+  File: group_axioms.p
+
+    fof(assoc, axiom, ! [X,Y,Z] : ((X * Y) * Z = X * (Y * Z))).
+    fof(id, axiom, ! [X] : (e * X = X)).
+    fof(inv, axiom, ! [X] : (inverse(X) * X = e)).
+
+  Run:
+
+    mace4 -n 2 -N 6 -t 60 -f group_axioms.p
+
+  Output:
+
+    % SZS output start FiniteModel for group_axioms
+    fof(interp_domain, fi_domain,
+        ! [X] : ( X = d0 | X = d1 )).
+
+    fof(interp_functions, fi_functors, (
+        e = d0 &
+        inverse(d0) = d0 &
+        inverse(d1) = d1 &
+        d0 * d0 = d0 &
+        d0 * d1 = d1 &
+        d1 * d0 = d1 &
+        d1 * d1 = d0 )).
+    % SZS output end FiniteModel for group_axioms
+
+    % SZS status Satisfiable for group_axioms
+
+
+Example 2: Counterexample (with conjecture --> CounterSatisfiable)
+
+  File: non_abelian.p
+
+    fof(assoc, axiom, ! [X,Y,Z] : ((X * Y) * Z = X * (Y * Z))).
+    fof(id, axiom, ! [X] : (e * X = X)).
+    fof(inv, axiom, ! [X] : (inverse(X) * X = e)).
+    fof(abelian, conjecture, ! [X,Y] : (X * Y = Y * X)).
+
+  Run:
+
+    mace4 -n 2 -N 8 -t 60 -f non_abelian.p
+
+  Output includes a non-abelian group (size 6), with:
+
+    % SZS status CounterSatisfiable for non_abelian
+
+
+Example 3: Search exhausted (no model found --> GaveUp)
+
+    mace4 -n 2 -N 4 -t 60 -f unsatisfiable.p
+
+  If no model exists in sizes 2-4:
+
+    % SZS status GaveUp for unsatisfiable
+
+
+Example 4: LADR mode is unchanged
+
+    echo 'assign(domain_size, 2).
+    formulas(assumptions).
+      x * x = e.
+    end_of_list.' | mace4
+
+  This produces native LADR output: no SZS status, tabular model
+  format, full banners and statistics. TPTP mode is only activated
+  by .p/.ax files or the -tptp flag.
+
+
+Example 5: Using -ladr_out with interpformat
+
+    mace4 -ladr_out -n 2 -N 8 -m 1 -f problem.p > model.out
+    interpformat tabular < model.out
+
+  The -ladr_out flag produces native LADR-format models even with
+  TPTP input. This lets you use interpformat, isofilter, and other
+  LADR model tools on the output.
+
+  To find non-isomorphic models:
+
+    mace4 -ladr_out -n 4 -m 100 -f group_axioms.p | isofilter
+
+
+7. Differences from Prover9 TPTP Mode
+=======================================
+
+Feature                  Prover9                    Mace4
+-----------------------  -------------------------  -------------------------
+SInE premise selection   Yes (auto for >128 axioms) No (not needed)
+Strategy scheduling      Yes (ML portfolio, -cores)  No (iterates domain sizes)
+Magic comments           Yes (% prover9: ...)       No
+TSTP proof output        Yes (CNFRefutation)        N/A (models, not proofs)
+Model output             N/A                        TPTP FiniteModel format
+SZS "found" status       Theorem / Unsatisfiable    CounterSatisfiable /
+                                                    Satisfiable
+SZS "exhausted" status   GaveUp / Satisfiable       GaveUp (always)
+-ladr_out flag           Yes (force LADR output)    Yes (force LADR models)
+
+
+8. Notes and Limitations
+=========================
+
+1. No SInE premise selection
+
+   Mace4 does not use SInE. Finite model search typically needs all
+   axioms to correctly constrain the model. Premise selection could
+   cause Mace4 to find spurious models that satisfy only a subset of
+   the axioms.
+
+2. No strategy scheduling
+
+   Mace4 already has built-in iteration over domain sizes (start_size
+   to end_size). Adding fork-based scheduling on top of this would
+   not provide significant benefit.
+
+3. Include path resolution
+
+   Same as Prover9: tries direct path, then $TPTP environment
+   variable, then /Problems/ auto-detection from the source file path.
+
+4. EXHAUSTED_EXIT maps to GaveUp, not Unsatisfiable
+
+   Mace4 only searches finite domains up to end_size. Exhausting all
+   sizes does not prove unsatisfiability (there might be a model at a
+   larger size). Therefore the SZS status is GaveUp, not Unsatisfiable.
+
+5. Memory limit
+
+   Default max_megs is 48 GB (same as Prover9). Override with -b:
+
+     mace4 -b 4096 -f problem.p      (4 GB limit)

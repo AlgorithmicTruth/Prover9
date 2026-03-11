@@ -1,0 +1,375 @@
+=======================================
+Prover9 Checkpoint/Resume User Guide
+=======================================
+
+LADR-2026-2T (February 2026)
+
+
+Overview
+--------
+
+Prover9 can save its search state to disk (checkpoint) and later resume
+from that saved state. This is useful for:
+
+  - Long-running proofs where you want insurance against crashes or
+    machine reboots
+  - Splitting a long run across multiple sessions
+  - Examining intermediate search state
+  - Moving a run to a different machine
+
+The checkpoint captures all clause lists, indexing metadata, symbol
+precedence, selector state, clause justifications, and goal formulas.
+When resumed, the search continues as if it had never stopped. Given
+clause selection, kept counts, proofs, and proof content are fully
+deterministic across checkpoint/resume.
+
+
+Setting Up for Checkpoints
+--------------------------
+
+Add these options to your Prover9 input file:
+
+  set(checkpoint_ancestors).    % save ancestor clauses (default: on)
+
+The checkpoint_ancestors option saves the disabled clause list, which
+contains ancestor clauses needed for proof reconstruction. This is on
+by default. If you turn it off, proofs found after resume will show
+[assumption] for all checkpoint-loaded clauses instead of their real
+derivation history.
+
+Optionally, to have Prover9 exit immediately after writing a
+checkpoint (rather than continuing the search):
+
+  set(checkpoint_exit).         % exit after checkpoint (default: off)
+
+
+Creating a Checkpoint
+---------------------
+
+While Prover9 is running, send it the SIGUSR2 signal:
+
+  kill -USR2 <pid>
+
+where <pid> is the Prover9 process ID.
+
+To find the process ID:
+
+  ps aux | grep prover9
+
+Or, if you started Prover9 in the background:
+
+  prover9 -f input.in > output.out 2> errors.err &
+  echo $!          # prints the PID
+
+Example:
+
+  $ prover9 -f myprob.in > myprob.out 2> myprob.err &
+  [1] 12345
+  $ kill -USR2 12345
+
+Prover9 will write a checkpoint directory in the current working
+directory and print a confirmation:
+
+  Checkpoint requested at given #15919...
+  Checkpoint written (experimental): prover9_12345_ckpt_15919 (89685 clauses, 15 MB)
+
+The directory name includes the process ID and given clause count:
+
+  prover9_<pid>_ckpt_<given>/
+
+If checkpoint_exit is set, Prover9 exits with code 107. Otherwise, it
+continues searching.
+
+
+What the Checkpoint Contains
+----------------------------
+
+The checkpoint directory contains these files:
+
+  metadata.txt         Stats, timing, selector state, version info
+  sos.clauses          Set-of-support clauses
+  usable.clauses       Usable clauses
+  demods.clauses       Demodulator clauses
+  hints.clauses        Hint clauses (if any)
+  limbo.clauses        Limbo clauses (if any)
+  disabled.clauses     Ancestor clauses (if checkpoint_ancestors is set)
+  clause_data.txt      Per-clause ID, weight, and initial flag
+  options.txt          All option settings at checkpoint time
+  precedence.txt       Symbol ordering (function/relation precedence)
+  fpa_ids.txt          FPA index term IDs (for deterministic indexing)
+  justifications.txt   Clause derivation history
+  formulas.txt         Goal formulas (if any)
+
+Typical checkpoint size is about 15% of the process memory footprint.
+For example, a run using ~100 MB of RAM produces a ~15 MB checkpoint.
+
+
+Resuming from a Checkpoint
+--------------------------
+
+To resume, use the -r flag with the checkpoint directory:
+
+  prover9 -r prover9_12345_ckpt_15919 -f myprob.in > resumed.out 2> resumed.err
+
+IMPORTANT: You must supply the same input file (with -f) that was used
+for the original run. Prover9 reads the input file to register symbols
+and set up parsing infrastructure, then loads the checkpoint state on
+top of it.
+
+On resume, Prover9 prints restoration messages:
+
+  % Restored 24 formulas from checkpoint.
+  % Restored justifications for 89660 clauses from checkpoint.
+
+The search then continues exactly where it left off.
+
+
+Complete Example
+----------------
+
+1. Start a long-running proof:
+
+   $ prover9 -f hard_problem.in > run1.out 2> run1.err &
+   [1] 54321
+
+2. After some time, create a checkpoint:
+
+   $ kill -USR2 54321
+
+   Prover9 saves the checkpoint and continues running.
+
+3. If the machine needs to restart, or you want to stop:
+
+   $ kill 54321
+
+4. Later, resume from the checkpoint:
+
+   $ prover9 -r prover9_54321_ckpt_15919 -f hard_problem.in > run2.out 2> run2.err &
+
+5. You can checkpoint the resumed run too:
+
+   $ kill -USR2 $!
+
+   This creates a new checkpoint directory (e.g., prover9_54322_ckpt_28000).
+
+
+Checkpoint-and-Exit Workflow
+----------------------------
+
+If you want Prover9 to save and stop (not continue running), add this
+to your input file:
+
+  set(checkpoint_exit).
+
+Then:
+
+  $ prover9 -f myprob.in > run.out 2> run.err &
+  $ kill -USR2 $!
+
+Prover9 writes the checkpoint and exits with code 107. You can check
+the exit code:
+
+  $ echo $?
+  107
+
+This is useful in scripts:
+
+  #!/bin/bash
+  prover9 -f "$1" > run.out 2> run.err &
+  PID=$!
+  sleep 3600                    # run for 1 hour
+  kill -USR2 $PID               # request checkpoint
+  wait $PID
+  EXIT=$?
+  if [ $EXIT -eq 107 ]; then
+      echo "Checkpointed successfully"
+  elif [ $EXIT -eq 0 ]; then
+      echo "Proof found before checkpoint"
+  else
+      echo "Exited with code $EXIT"
+  fi
+
+
+Multiple Checkpoints
+--------------------
+
+You can send SIGUSR2 multiple times during a run. Each checkpoint
+creates a new directory with the current given count in its name:
+
+  prover9_12345_ckpt_5000/
+  prover9_12345_ckpt_15919/
+  prover9_12345_ckpt_28000/
+
+Earlier checkpoints are not overwritten. You can resume from any of
+them.
+
+
+Periodic Automatic Checkpoints
+------------------------------
+
+For long-running proofs, you can have Prover9 create checkpoints
+automatically at regular intervals:
+
+  assign(checkpoint_minutes, 30).   % checkpoint every 30 minutes
+
+This uses wall-clock time (not CPU time). The timer starts when the
+search phase begins, so the first checkpoint appears N minutes into
+the search (not counting preprocessing time). Checkpoints are checked
+once per given-clause iteration.
+
+The minimum interval is 15 minutes. If you set a value between 1 and
+14, Prover9 prints a warning and uses 15 minutes:
+
+  WARNING: checkpoint_minutes=5 too small, using 15.
+
+By default, only the most recent 3 automatic checkpoint directories
+are kept on disk. When a new periodic checkpoint is written and would
+exceed this limit, the oldest automatic checkpoint is removed:
+
+  assign(checkpoint_keep, 5).   % keep last 5 auto checkpoints
+
+Rotation removes the oldest directory by deleting all files inside it
+and then removing the directory itself. Prover9 prints a message:
+
+  Periodic checkpoint at given #101460...
+  Checkpoint written (experimental): prover9_54196_ckpt_101460 (141961 clauses, 200 MB)
+    Removing old checkpoint: prover9_54196_ckpt_52668
+
+SIGUSR2 manual checkpoints are completely independent of rotation.
+They are not counted against the checkpoint_keep limit and are never
+removed by the rotation mechanism. You can freely mix manual and
+automatic checkpoints.
+
+Example: automatic checkpoints with manual override:
+
+  % In input file:
+  assign(checkpoint_minutes, 30).
+  assign(checkpoint_keep, 3).
+
+  $ prover9 -f hard_problem.in > run.out 2> run.err &
+  [1] 54196
+
+  % Prover9 creates checkpoints automatically every 30 minutes.
+  % At any time, you can also manually checkpoint:
+  $ kill -USR2 54196
+
+  % The manual checkpoint is kept forever; automatic ones rotate.
+
+You can resume from any checkpoint directory, whether it was created
+automatically or manually. The -r flag works the same either way.
+
+
+Determinism Guarantees
+----------------------
+
+After resuming, the following match the original (non-checkpointed)
+run exactly:
+
+  - Given clause count
+  - Kept clause count
+  - Number of proofs
+  - Proof formulas and derivation history
+  - Given clause selection order (same clause IDs in same order)
+  - Max_Clause_ID
+
+The Generated count may differ by ~0.5-1% because forward-subsumed
+intermediate clauses depend on FPA trie internal traversal order,
+which differs slightly between bulk re-indexing (resume) and
+incremental insertion (normal run). This does not affect which clauses
+are kept or which proofs are found.
+
+
+Proof Output After Resume
+--------------------------
+
+With checkpoint_ancestors set (the default), proofs found after resume
+contain the full derivation history. For example:
+
+  24 P(D(D(D(D(D(D(D(D(x))))))))).  [goal].
+  25 -P(D(D(D(D(D(D(D(D(x))))))))).  [deny(24)].
+  27 P(f(x,f(f(x,f(x,y)),y))).  [hyper(3,a,17,a)].
+
+Without checkpoint_ancestors, all checkpoint-loaded clauses appear as
+[assumption] in the proof output. The proof is still valid, but the
+derivation history is lost.
+
+
+Options Reference
+-----------------
+
+  set(checkpoint_ancestors).    Save disabled clauses for proof history.
+                                Default: on.
+
+  clear(checkpoint_ancestors).  Don't save disabled clauses. Saves disk
+                                space but loses proof derivation history
+                                for checkpoint-loaded clauses.
+
+  set(checkpoint_exit).         Exit (code 107) after writing checkpoint.
+                                Default: off.
+
+  clear(checkpoint_exit).       Continue searching after checkpoint.
+
+  assign(checkpoint_minutes, N).  Periodic checkpoint interval in
+                                minutes (wall-clock time).
+                                Default: -1 (disabled).
+                                Minimum: 15.  Values 1-14 are clamped
+                                to 15 with a warning on stderr.
+
+  assign(checkpoint_keep, K).   Max automatic checkpoint directories to
+                                retain on disk.  Default: 3.  Oldest
+                                auto checkpoint is removed when a new
+                                one would exceed this count.  Does not
+                                affect SIGUSR2 manual checkpoints.
+
+
+Exit Codes
+----------
+
+  0     Proof found (max_proofs reached)
+  2     SOS empty (search exhausted)
+  3     max_megs exceeded
+  4     max_seconds exceeded
+  5     max_given exceeded
+  6     max_kept exceeded
+  7     Action exit
+  101   Interrupted (SIGINT / Ctrl-C)
+  107   Checkpoint saved (with checkpoint_exit set)
+
+
+Backward Compatibility
+----------------------
+
+Checkpoints are forward-compatible: if a checkpoint is missing newer
+files (fpa_ids.txt, justifications.txt, formulas.txt), Prover9 proceeds
+gracefully:
+
+  - Without fpa_ids.txt: search is slightly less deterministic (older
+    checkpoint format from 2026-2P)
+  - Without justifications.txt: proofs show [assumption] for
+    checkpoint-loaded clauses (pre-2026-2R format)
+  - Without formulas.txt: same as above, plus proofs involving goal
+    formulas may fail during ancestor tracing
+
+
+Troubleshooting
+---------------
+
+Problem: "get_clanc, clause with id=N not found"
+  Cause: checkpoint_ancestors was not set, so ancestor clauses are
+  missing. The proof tracer cannot find parent clauses.
+  Fix: Re-run with set(checkpoint_ancestors). and re-checkpoint.
+
+Problem: Proofs show [assumption] for all clauses
+  Cause: Old checkpoint format without justifications.txt, or
+  checkpoint_ancestors was off.
+  Fix: Re-run with current version and set(checkpoint_ancestors).
+
+Problem: Checkpoint directory not created
+  Cause: Prover9 may not have reached the checkpoint check point in
+  the main loop yet (it checks between given clauses, not during
+  inference). Send SIGUSR2 again after a moment.
+  Fix: Wait for the current given clause processing to complete.
+
+Problem: Different Generated count after resume
+  This is expected (see Determinism Guarantees above). The difference
+  is typically under 1% and does not affect proofs or kept clauses.
