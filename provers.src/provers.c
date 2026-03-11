@@ -701,10 +701,12 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
       int eff_tolerance = 0;
 
       if (sine_val == -1) {
-        if (scan_n_axioms > 128 && scan->n_goals > 0)
+        if (scan_n_axioms > 128 &&
+            (scan->n_goals > 0 || scan->has_neg_conj))
           eff_tolerance = 200;
       }
-      else if (sine_val > 0 && scan->n_goals > 0) {
+      else if (sine_val > 0 &&
+               (scan->n_goals > 0 || scan->has_neg_conj)) {
         eff_tolerance = sine_val;
       }
 
@@ -1606,10 +1608,12 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
     int eff_tolerance = 0;
 
     if (sine_val == -1) {
-      if (scan_n_axioms > 128 && scan->n_goals > 0)
+      if (scan_n_axioms > 128 &&
+          (scan->n_goals > 0 || scan->has_neg_conj))
         eff_tolerance = 200;
     }
-    else if (sine_val > 0 && scan->n_goals > 0) {
+    else if (sine_val > 0 &&
+             (scan->n_goals > 0 || scan->has_neg_conj)) {
       eff_tolerance = sine_val;
     }
 
