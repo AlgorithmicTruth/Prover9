@@ -28,6 +28,10 @@
 #include <sys/wait.h>
 #include <sys/time.h>
 #include <sys/mman.h>
+/* Portability: older BSD/macOS uses MAP_ANON instead of MAP_ANONYMOUS */
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
 #include <signal.h>
 #include <fcntl.h>
 
@@ -600,7 +604,7 @@ pid_t spawn_child(int slot, int si, int order_idx, int slice_sec,
       shm_fp = shm_stdout_open(my_output);
       if (shm_fp) {
         setbuf(shm_fp, NULL);
-        stdout = shm_fp;
+        *stdout = *shm_fp;
       }
     }
 

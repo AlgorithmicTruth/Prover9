@@ -1738,7 +1738,7 @@ static void scan_tptp_input(Lexer *lex,
 
     /* fof or cnf */
     {
-      BOOL is_fof;
+      BOOL is_fof = FALSE;
       char formula_name[256];
       char role[MAX_TOKEN_LEN];
       struct body_buf bb;

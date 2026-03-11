@@ -519,7 +519,7 @@ void *safe_malloc(size_t n)
     return NULL;
 
   /* Catch negative-int-cast-to-size_t and other overflow bugs. */
-  if (n > (size_t)1 << 40) {
+  if (n > (unsigned long long)1 << 40) {
     fprintf(stderr,
             "safe_malloc: absurd allocation of %lu bytes "
             "(probable integer overflow)\n", (unsigned long)n);
@@ -705,7 +705,7 @@ void *safe_malloc(size_t n)
     return NULL;
 
   /* Catch negative-int-cast-to-size_t and other overflow bugs. */
-  if (n > (size_t)1 << 40) {
+  if (n > (unsigned long long)1 << 40) {
     fprintf(stderr,
             "safe_malloc: absurd allocation of %lu bytes "
             "(probable integer overflow)\n", (unsigned long)n);
