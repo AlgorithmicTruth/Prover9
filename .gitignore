@@ -1,7 +1,8 @@
 # Build artifacts -- object files, static libraries, compiled binaries
 *.o
 *.a
-bin/
+bin/*
+!bin/.gitkeep
 provers.src/prover9
 provers.src/autosketches4
 provers.src/fof-prover9
@@ -16,6 +17,7 @@ test.src/tptp_test
 # Hidden files and directories (dotfiles)
 .*
 !.gitignore
+!.gitkeep
 
 # Debug symbol bundles (macOS)
 *.dSYM/
