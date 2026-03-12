@@ -4164,7 +4164,12 @@ BOOL read_metadata_str(FILE *fp, const char *key, char *val, int val_size)
   while (fgets(buf, sizeof(buf), fp)) {
     if (sscanf(buf, "%127s %127s", name, sval) == 2) {
       if (strcmp(name, key) == 0) {
-        snprintf(val, val_size, "%s", sval);
+        {
+          int n = strlen(sval);
+          if (n >= val_size) n = val_size - 1;
+          memcpy(val, sval, n);
+          val[n] = '\0';
+        }
         return TRUE;
       }
     }
