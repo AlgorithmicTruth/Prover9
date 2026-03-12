@@ -2,7 +2,7 @@
 Command-Line Reference
 =============================================
 
-LADR-2026-3C (March 2026)
+LADR-2026-3E (March 2026)
 
 
 This file documents command-line options for Prover9, Mace4, and

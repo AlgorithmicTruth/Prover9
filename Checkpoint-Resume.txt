@@ -2,7 +2,7 @@
 Prover9 Checkpoint/Resume User Guide
 =======================================
 
-LADR-2026-2T (February 2026)
+LADR-2026-3E (March 2026)
 
 
 Overview

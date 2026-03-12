@@ -2,7 +2,7 @@
 Strategy Scheduling for Prover9
 =============================================
 
-LADR-2026-3C (March 2026)
+LADR-2026-3E (March 2026)
 
 
 Overview
@@ -12,7 +12,7 @@ Strategy scheduling runs multiple Prover9 search strategies concurrently
 using a sliding-window scheduler and takes the first proof found. Each
 strategy uses different search parameters (ordering, weight limits,
 given-clause selection, demodulation, SInE) drawn from a machine-learned
-portfolio of 96 strategies.
+portfolio of 139 strategies.
 
 The scheduler is invoked with -cores N, which forks N concurrent child
 processes. A parent process manages the children using sleep/wake
@@ -59,13 +59,13 @@ LADR-2026-3C.
 
     Override Phase 1 breadth cap. Limits how many strategies are
     tried in Phase 1 of the sliding-window scheduler. Clamped to
-    [1, 96]. See "Two-Phase Scheduling" below.
+    [1, 139]. See "Two-Phase Scheduling" below.
 
 
 2. ML Strategy Portfolio
 =========================
 
-The portfolio contains 96 strategies: 95 specialist strategies trained
+The portfolio contains 139 strategies: 138 specialist strategies trained
 on problems that auto_default fails on, plus auto_default itself (the
 standard Prover9 automatic mode with no parameter overrides).
 
@@ -92,7 +92,7 @@ on hard TPTP problems).
 
 A decision tree classifies each input problem into a leaf node based on
 syntactic features (symbol counts, clause counts, formula structure).
-Each leaf node has a ranking of all 96 strategies, ordered by how often
+Each leaf node has a ranking of all 139 strategies, ordered by how often
 each strategy solved problems at that leaf during training.
 
 The decision tree and per-leaf rankings are defined in dtree_data.h,
@@ -295,7 +295,7 @@ Example 1: 4-core scheduling, 5-minute timeout
 
     prover9 -cores 4 -t 300 -f problem.p
 
-  Four concurrent children, sliding window over 96 strategies.
+  Four concurrent children, sliding window over 139 strategies.
   Phase 1 tries as many strategies as fit in ~150 seconds, then
   Phase 2 resumes the most promising.
 

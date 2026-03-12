@@ -2,7 +2,7 @@
 Prover9 Proof Verification for TPTP Files
 ==========================================
 
-LADR-2026-3B (March 2026)
+LADR-2026-3E (March 2026)
 
 
 Overview

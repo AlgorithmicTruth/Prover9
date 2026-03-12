@@ -1,13 +1,11 @@
 =============================================
-What's New in LADR-2026-3C
+What's New in LADR-2026-3E
 =============================================
 
 Summary of changes from LADR-2009-11A (November 2009) to
-LADR-2026-3C (March 2026).
+LADR-2026-3E (March 2026).
 
 Development by Jeffrey Machado and Larry Lesyna, 2026.
-
-For detailed per-version change logs, see LADR-2026-Modifications.txt.
 
 
 New Features
@@ -70,7 +68,7 @@ sets to relevant subsets before the search begins.
 ML Strategy Portfolio (3B)
 ---------------------------
 
-Machine-learned strategy portfolio with 96 trained strategies (95
+Machine-learned strategy portfolio with 139 trained strategies (138
 specialists + auto_default). Strategies are selected by a decision
 tree classifier based on syntactic features of the input problem.
 
@@ -325,24 +323,27 @@ Full TPTP v9.2.0 FOF/CNF (13,374 problems, 60-second timeout):
   6,176 PASS (46.2%).
   3 domains swept 100%: PHI (9), HWC (4), HEN (65).
 
-Prover9 rating 1.00 problems (11 solved):
+Prover9 rating 1.00 problems (13 solved):
 
-  Problem     Rating  Prover9 2026-3C  E 3.2.5 (300s)  Vampire 4.9 (300s)
-  ----------  ------  ---------------  --------------  ------------------
-  KLE122+1    1.00    Theorem   26.0s  ResourceOut     Timeout
-  ROB006-3    1.00    Unsat     11.9s  ResourceOut     Timeout
-  RNG027-10   1.00    Unsat      3.4s  ResourceOut     Timeout
-  LCL148-1    1.00    Unsat      8.0s  ResourceOut     Timeout
-  REL040+3    1.00    Theorem   28.2s  ResourceOut     Timeout
-  GRP188-1    1.00    Unsat      2.2s  ResourceOut     Timeout
-  GRP188-2    1.00    Unsat      1.1s  ResourceOut     Timeout
-  LAT408-1    1.00    Unsat      3.8s  ResourceOut     Timeout
-  REL032+3    1.00    Theorem   33.8s  ResourceOut     Timeout
-  RNG027-8    1.00    Unsat      3.2s  ResourceOut     Timeout
-  RNG027-9    1.00    Unsat      5.6s  ResourceOut     Timeout
+  Problem     Rating  Prover9 (-cores 8)
+  ----------  ------  ------------------
+  KLE122+1    1.00    Theorem   26.20s
+  ROB006-3    1.00    Unsat      6.32s
+  RNG027-10   1.00    Unsat      3.25s
+  LCL148-1    1.00    Unsat      7.25s
+  REL040+3    1.00    Theorem    1.43s
+  GEO525+1    1.00    Theorem    2.27s
+  LCL767-1    1.00    Unsat      0.08s
+  RNG010-1    1.00    Unsat      6.74s
+  RNG027-1    1.00    Unsat      2.23s
+  RNG028-1    1.00    Unsat      1.71s
+  SWV670-1    1.00    Unsat      4.82s
+  SWV671-1    1.00    Unsat      4.74s
+  SWV672-1    1.00    Unsat      4.76s
 
-  The first 5 were solved by auto_default; the additional 6 were
-  found by the ML strategy training grid.
+  Times are Prover9 User_CPU seconds with -cores 8 on Apple M4 Max.
+  The first 5 were solved by auto_default; the additional 8 were
+  found by the ML strategy portfolio.
 
 Mace4 rating 1.00 problems (2 solved):
 

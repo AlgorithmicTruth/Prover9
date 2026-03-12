@@ -2,7 +2,7 @@
 LADR: Prover9, Mace4, and Related Programs
 =============================================
 
-Version 2026-3A (March 2026)
+Version 2026-3E (March 2026)
 
 
 Overview
@@ -39,14 +39,14 @@ Computer Science Division, Argonne National Laboratory, 2005-2009.
 
 Modernized and extended by Jeffrey Machado and Larry Lesyna, 2026.
 
-  Current release: LADR-2026-3A (March 2026)
+  Current release: LADR-2026-3E (March 2026)
 
   Changes include: TPTP/TSTP input and output for Prover9 and Mace4,
   SinE premise selection, strategy scheduling, checkpoint/resume,
   CNF preprocessing timeout, performance optimizations for large
   inputs (hash-indexed discrimination and FPA tries, iterative
   conversions of recursive algorithms), and numerous bug fixes.
-  See the LADR-2026-*-Modifications.txt files for details.
+  See Whats-New.txt for details.
 
 
 Building
@@ -148,8 +148,6 @@ User guides (in this directory):
 Change logs:
 
   Whats-New.txt              Summary of all changes since 2009.
-  LADR-2026-Modifications.txt  Detailed per-version change logs.
-  Changelog                  Original McCune changelog (2005-2009).
 
 Examples:
 
