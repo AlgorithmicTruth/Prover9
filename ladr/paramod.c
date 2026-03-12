@@ -348,7 +348,7 @@ void para_into(Literals from_lit, int from_side, Context cf, Ilist from_pos,
   struct { Term node; int child; Ilist pos_node; BOOL skip; } stack[1000];
   int top;
 
-  if (!((!VARIABLE(into) | Para_into_vars) && basic_check(into)))
+  if (!(((!VARIABLE(into)) | Para_into_vars) && basic_check(into)))
     return;
 
   top = 0;
@@ -383,7 +383,7 @@ void para_into(Literals from_lit, int from_side, Context cf, Ilist from_pos,
       stack[top].child++;
       stack[top].pos_node->i++;
 
-      if ((!VARIABLE(ch) | Para_into_vars) && basic_check(ch)) {
+      if (((!VARIABLE(ch)) | Para_into_vars) && basic_check(ch)) {
         top++;
         stack[top].node = ch;
         stack[top].child = -1;

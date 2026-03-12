@@ -211,15 +211,10 @@ void kid_hash_build(Fpa_trie node)
   while (cap < node->num_kids * 2)
     cap *= 2;
 
-  ht = malloc(sizeof(struct kid_ht) + cap * sizeof(Fpa_trie));
+  ht = calloc(1, sizeof(struct kid_ht) + cap * sizeof(Fpa_trie));
   if (ht == NULL)
     fatal_error("kid_hash_build: malloc failed");
   ht->cap = cap;
-  {
-    int i;
-    for (i = 0; i < cap; i++)
-      ht->e[i] = NULL;
-  }
   for (k = node->kids; k != NULL; k = k->next)
     kid_hash_insert_entry(ht, k);
   node->kid_hash = ht;
@@ -238,12 +233,10 @@ void kid_hash_resize(Fpa_trie node)
   struct kid_ht *ht;
   int i;
 
-  ht = malloc(sizeof(struct kid_ht) + new_cap * sizeof(Fpa_trie));
+  ht = calloc(1, sizeof(struct kid_ht) + new_cap * sizeof(Fpa_trie));
   if (ht == NULL)
     fatal_error("kid_hash_resize: malloc failed");
   ht->cap = new_cap;
-  for (i = 0; i < new_cap; i++)
-    ht->e[i] = NULL;
   for (i = 0; i < old_cap; i++) {
     if (old->e[i] != NULL)
       kid_hash_insert_entry(ht, old->e[i]);
@@ -813,6 +806,8 @@ void fpa_paths(Term root, Term t, struct path *p, int bound,
   stack[top].type = 0;
   stack[top].t = t;
   stack[top].bound = bound;
+  stack[top].argpos = 0;
+  stack[top].save = NULL;
   top++;
 
   while (top > 0) {

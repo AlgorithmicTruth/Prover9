@@ -1523,8 +1523,10 @@ static
 void remove_checkpoint_dir(const char *dir)
 {
   char cmd[1024];
+  int rc;
   sprintf(cmd, "rm -rf %s", dir);
-  (void) system(cmd);
+  rc = system(cmd);
+  (void) rc;
 }  /* remove_checkpoint_dir */
 
 /*************
@@ -1566,7 +1568,7 @@ void record_auto_checkpoint(const char *dir)
 void write_mace4_checkpoint(Plist clauses)
 {
   char dir_name[256];
-  char tmp_name[256];
+  char tmp_name[264];
   char path[512];
   FILE *fp;
   int d;

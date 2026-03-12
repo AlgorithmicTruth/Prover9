@@ -390,16 +390,11 @@ void discrim_ht_build(Discrim node)
   while (cap < rigid_count * 2)
     cap *= 2;
 
-  ht = malloc(sizeof(struct discrim_ht) + cap * sizeof(Discrim));
+  ht = calloc(1, sizeof(struct discrim_ht) + cap * sizeof(Discrim));
   if (ht == NULL)
     fatal_error("discrim_ht_build: malloc failed");
   ht->cap = cap;
   ht->count = 0;
-  {
-    int i;
-    for (i = 0; i < cap; i++)
-      ht->e[i] = NULL;
-  }
   for (k = node->u.kids; k != NULL; k = k->next) {
     if (!DVAR(k)) {
       discrim_ht_insert(ht, k);
@@ -426,13 +421,11 @@ void discrim_ht_resize(Discrim node)
   struct discrim_ht *ht;
   int i;
 
-  ht = malloc(sizeof(struct discrim_ht) + new_cap * sizeof(Discrim));
+  ht = calloc(1, sizeof(struct discrim_ht) + new_cap * sizeof(Discrim));
   if (ht == NULL)
     fatal_error("discrim_ht_resize: malloc failed");
   ht->cap = new_cap;
   ht->count = old->count;
-  for (i = 0; i < new_cap; i++)
-    ht->e[i] = NULL;
   for (i = 0; i < old_cap; i++) {
     if (old->e[i] != NULL)
       discrim_ht_insert(ht, old->e[i]);

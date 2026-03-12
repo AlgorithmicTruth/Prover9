@@ -102,7 +102,7 @@ Plist discrim_flat_retrieve_leaf(Flatterm fin, Discrim root,
 {
   Flatterm f = NULL;
   Discrim d = NULL;
-  BOOL status = GO;
+  int status = GO;
 
   if (root) {  /* first call */
     d = root->u.kids;

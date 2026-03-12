@@ -16,6 +16,12 @@
     Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
 */
 
+/* fopencookie() for shared-memory stdout capture requires _GNU_SOURCE
+   on glibc.  Must precede all #includes (before <stdio.h>). */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #define PROVER_NAME     "Prover9"
 #include "../VERSION_DATE.h"
 
