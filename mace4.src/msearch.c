@@ -1367,7 +1367,7 @@ Mace_results mace4(Plist clauses, Mace_options opt)
 
   while (n >= 2 && (rc == SEARCH_GO_NO_MODELS || rc == SEARCH_GO_MODELS)) {
     if (!Mace4_tptp_mode) {
-      char str[20];
+      char str[24];
       sprintf(str, "DOMAIN SIZE %d", n);
       print_separator(stdout, str, TRUE);
       fflush(stdout);

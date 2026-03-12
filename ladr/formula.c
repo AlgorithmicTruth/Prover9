@@ -683,6 +683,8 @@ Term formula_to_term(Formula f)
         /* First, create (arity-1) binary nodes chained right-associatively. */
         int nops = cur->arity - 1;
         Term *chain_terms = malloc(nops * sizeof(Term));
+        if (chain_terms == NULL)
+          fatal_error("formula_to_term: malloc failed");
         for (i = 0; i < nops; i++)
           chain_terms[i] = get_rigid_term(sym, 2);
         /* Link them: chain_terms[i]->args[1] = chain_terms[i+1] */
@@ -784,6 +786,8 @@ Term formula_to_term(Formula f)
         char *sym = (cur->type == AND_FORM ? and_sym() : or_sym());
         int nops = cur->arity - 1;
         Term *chain_terms = malloc(nops * sizeof(Term));
+        if (chain_terms == NULL)
+          fatal_error("formula_to_term: malloc failed");
         for (i = 0; i < nops; i++)
           chain_terms[i] = get_rigid_term(sym, 2);
         for (i = 0; i < nops - 1; i++)

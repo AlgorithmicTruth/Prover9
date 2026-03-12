@@ -3935,7 +3935,7 @@ void write_checkpoint_input(const char *dir)
 static
 void write_checkpoint(void)
 {
-  char tmpdir[512], finaldir[512];
+  char tmpdir[520], finaldir[512];
   FILE *fp;
   int n;
 
@@ -4164,8 +4164,7 @@ BOOL read_metadata_str(FILE *fp, const char *key, char *val, int val_size)
   while (fgets(buf, sizeof(buf), fp)) {
     if (sscanf(buf, "%127s %127s", name, sval) == 2) {
       if (strcmp(name, key) == 0) {
-        strncpy(val, sval, val_size - 1);
-        val[val_size - 1] = '\0';
+        snprintf(val, val_size, "%s", sval);
         return TRUE;
       }
     }

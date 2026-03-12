@@ -61,9 +61,11 @@ static volatile sig_atomic_t Pending_kill = 0;
 static
 void timeout_handler(int sig)
 {
+  ssize_t wr;
   (void) sig;
   if (No_kill) { Pending_kill = 1; return; }
-  write(STDOUT_FILENO, "\n% SZS status Timeout\n", 22);
+  wr = write(STDOUT_FILENO, "\n% SZS status Timeout\n", 22);
+  (void) wr;
   _exit(MAX_SECONDS_EXIT);
 }  /* timeout_handler */
 
@@ -132,7 +134,8 @@ void clear_no_kill_and_check(void)
 {
   No_kill = 0;
   if (Pending_kill) {
-    write(STDOUT_FILENO, "\n% SZS status Timeout\n", 22);
+    ssize_t wr = write(STDOUT_FILENO, "\n% SZS status Timeout\n", 22);
+    (void) wr;
     _exit(MAX_SECONDS_EXIT);
   }
 }  /* clear_no_kill_and_check */

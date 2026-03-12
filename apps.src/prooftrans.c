@@ -416,9 +416,9 @@ int main(int argc, char **argv)
     Plist proof = NULL;
     number_of_proofs++;
 
-    (void) fscanf(fin, "%s", s);         /* "%" or clause id */
+    if (fscanf(fin, "%s", s) < 1) s[0] = '\0';  /* "%" or clause id */
     while (str_ident(s, "%")) {
-      fgets(s, BUF_MAX, fin);
+      if (!fgets(s, BUF_MAX, fin)) s[0] = '\0';
       /* in case prooftrans is run multiple times */
       if (!substring("Comments from original proof", s)) {
 	sb_append(comment, "%");
@@ -432,7 +432,7 @@ int main(int argc, char **argv)
 	  sb_append_char(comment, c);
 	} while (c != '\n');
       }
-      (void) fscanf(fin, "%s", s);       /* "%" or clause id */
+      if (fscanf(fin, "%s", s) < 1) s[0] = '\0';  /* "%" or clause id */
     }
 
     while (!substring("==========", s)) {  /* separator at end of proof */
@@ -459,7 +459,7 @@ int main(int argc, char **argv)
 	register_clause_with_id(cl);
       proof = plist_prepend(proof, cl);
 
-      (void) fscanf(fin, "%s", s);         /* clause id */
+      if (fscanf(fin, "%s", s) < 1) s[0] = '\0';  /* clause id */
     }
     proof = reverse_plist(proof);
     proofs = plist_append(proofs, proof);

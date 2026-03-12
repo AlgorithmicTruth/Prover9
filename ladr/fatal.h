@@ -31,13 +31,19 @@ This package is just a few utilities for handling fatal errors.
 
 /* Public function prototypes from fatal.c */
 
+#ifdef __GNUC__
+#define NORETURN __attribute__((noreturn))
+#else
+#define NORETURN
+#endif
+
 void bell(FILE *fp);
 
 int get_fatal_exit_code();
 
 void set_fatal_exit_code(int exit_code);
 
-void fatal_error(char *message);
+NORETURN void fatal_error(char *message);
 
 void set_fatal_tptp_mode(BOOL mode, char *problem_name);
 
