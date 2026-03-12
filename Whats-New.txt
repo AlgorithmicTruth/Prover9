@@ -349,19 +349,3 @@ Mace4 rating 1.00 problems (2 solved):
 
   GRP735-1    1.00    Satisfiable (domain 15, GDV verified)
   LDA040-1    1.00    Satisfiable
-
-
-Ivy (ACL2) Proof Verification
-==============================
-
-1,841 proofs across three long-running benchmarks verified by the
-Ivy proof checker (ACL2):
-
-  Benchmark                          Proofs  Ivy Result
-  ---------                          ------  ----------
-  Scharle24 (D3 to Nicod)                24  All correct
-  Sobocinski (to Lukasiewicz 3)           3  All correct
-  CItest (11 symbol to single axioms)  1814  All correct
-  Total                                1841  All correct
-
-See Proof-Verification.txt for Ivy and GDV verification workflows.
