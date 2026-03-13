@@ -1,0 +1,699 @@
+Checkpoint File Format Specification
+=====================================
+
+Internal specification for the Prover9 and Mace4 checkpoint file formats.
+Intended audience: developers writing tools that read, write, or inspect
+checkpoint directories.
+
+Applies to LADR version 2026-3E and later.
+
+
+========================================================================
+PART 1: PROVER9 CHECKPOINT DIRECTORY
+========================================================================
+
+Directory Naming
+----------------
+
+  prover9_<pid>_ckpt_<given>/
+
+  <pid>       Process ID of the prover9 process (decimal integer).
+  <given>     Number of given clauses processed at checkpoint time
+              (unsigned long long, decimal).
+
+Example: prover9_42106_ckpt_1613/
+
+The directory is created atomically: prover9 writes to a temporary
+directory named prover9_<pid>_ckpt_<given>.tmp, then renames it to the
+final name.  Readers should only process directories without the .tmp
+suffix.
+
+Source: search.c, write_checkpoint().
+
+
+Files in the Directory
+----------------------
+
+A Prover9 checkpoint directory contains up to 14 files:
+
+  ALWAYS PRESENT:
+    metadata.txt          Key-value search state and statistics
+    sos.clauses           SOS (set of support) clauses
+    usable.clauses        Usable clauses
+    demods.clauses        Demodulator clauses
+    clause_data.txt       Per-clause metadata (ID, weight, flags)
+    options.txt           Human-readable option dump (NOT used on resume)
+    precedence.txt        Symbol ordering (function/predicate precedence)
+    fpa_ids.txt           FPA index term IDs
+    justifications.txt    Clause derivation histories
+    saved_input.txt       Self-contained LADR input for standalone resume
+
+  CONDITIONALLY PRESENT:
+    hints.clauses         Hint clauses (only if hints list is non-empty)
+    limbo.clauses         Limbo clauses (only if limbo list is non-empty)
+    disabled.clauses      Disabled ancestor clauses (only if the
+                          checkpoint_ancestors flag is set, which is the
+                          default)
+    formulas.txt          Non-clause formulas, e.g. goals (only if any
+                          formulas exist in the clause ID hash table)
+
+
+------------------------------------------------------------------------
+1. metadata.txt
+------------------------------------------------------------------------
+
+Format: One key-value pair per line, separated by a space.
+
+  <key> <value>\n
+
+All values are either unsigned long long integers, floating-point
+numbers, or short strings (no spaces).
+
+Keys (in order as written):
+
+  version <string>           LADR version string, e.g. "2026-3E"
+  date <string>              Version date, e.g. "March" followed by "2026"
+                             NOTE: date spans two tokens ("March 2026"),
+                             so a reader using sscanf("%s %s") will only
+                             capture the first word.
+  max_clause_id <ull>        Highest clause ID assigned so far
+  given <ull>                Number of given clauses processed
+  generated <ull>            Total clauses generated
+  kept <ull>                 Total clauses kept
+  proofs <ull>               Number of proofs found
+  back_subsumed <ull>        Back-subsumed clause count
+  back_demodulated <ull>     Back-demodulated clause count
+  subsumed <ull>             Forward-subsumed clause count
+  sos_limit_deleted <ull>    Clauses deleted by SOS size limit
+  new_demodulators <ull>     New demodulators created
+  new_lex_demods <ull>       New lex-dependent demodulators
+  back_unit_deleted <ull>    Back unit-deleted clause count
+  demod_attempts <ull>       Demodulation attempts
+  demod_rewrites <ull>       Demodulation rewrites applied
+  res_instance_prunes <ull>  Resolution instance prunes
+  para_instance_prunes <ull> Paramodulation instance prunes
+  basic_para_prunes <ull>    Basic paramodulation prunes
+  nonunit_fsub <ull>         Non-unit forward subsumption count
+  nonunit_bsub <ull>         Non-unit back subsumption count
+  new_constants <ull>        New Skolem constants introduced
+  kept_by_rule <ull>         Clauses kept by keep rules
+  deleted_by_rule <ull>      Clauses deleted by delete rules
+  sos_displaced <ull>        Clauses displaced from SOS
+  sos_removed <ull>          Clauses removed from SOS
+  user_seconds <float>       User CPU time at checkpoint (%.2f format)
+  low_selector <string>      Given-clause selection cycle state: current
+                             selector name (e.g. "F", "A", "W", "R")
+  low_selector_count <int>   Remaining count in current selector cycle
+
+The reader must handle the "date" key specially: the value "March 2026"
+contains a space, so a simple "%s %llu" scan will capture "March" for
+date and leave "2026" unconsumed.  The existing reader (read_metadata_ull)
+scans with "%s %llu" per line, which works for all integer-valued keys.
+
+Source: search.c, write_checkpoint() lines 3960-4003.
+
+
+------------------------------------------------------------------------
+2. sos.clauses, usable.clauses, demods.clauses
+------------------------------------------------------------------------
+
+Format: LADR CL_FORM_BARE -- one clause per line, terminated by a
+period and newline.  No clause ID, no justification.  The file ends
+with an "end_of_list.\n" sentinel.
+
+  <clause_term>.\n
+  <clause_term>.\n
+  ...
+  end_of_list.\n
+
+CL_FORM_BARE writes the clause as a LADR term followed by ".":
+  - Equalities: left = right
+  - Disjunctions: lit1 | lit2 | ...
+  - Negated atoms: -P(...)
+  - Variables: x, y, z, u, w, v5, v6, ...
+
+Clause attributes (labels, etc.) are preserved in the term representation.
+
+Example (sos.clauses):
+
+  f(x,y) * (f(z,u) * f(u,w)) = i(f(y,x)) * f(z,w).
+  f(x,y) * f(z,u) = i(f(y,x)) * (f(z,w) * f(w,u)).
+  ...
+  end_of_list.
+
+The list name used internally for clause_data.txt is:
+  - "sos" for sos.clauses
+  - "usable" for usable.clauses
+  - "demodulators" for demods.clauses
+
+Source: search.c, write_clist_bare(); ladr/ioutil.c, fwrite_clause()
+with CL_FORM_BARE.
+
+
+------------------------------------------------------------------------
+3. hints.clauses, limbo.clauses, disabled.clauses
+------------------------------------------------------------------------
+
+Same format as sos.clauses (CL_FORM_BARE with end_of_list sentinel).
+These files are only created when the corresponding list is non-empty.
+
+  hints.clauses     -- list name "hints" in clause_data.txt
+  limbo.clauses     -- list name "limbo" in clause_data.txt
+  disabled.clauses  -- list name "disabled" in clause_data.txt
+                       Only written when flag(checkpoint_ancestors) is
+                       set (default: TRUE).  Contains ancestor clauses
+                       needed for proof reconstruction.
+
+Clauses with id == 0 are skipped during writing.
+
+Source: search.c, write_checkpoint() lines 4044-4071.
+
+
+------------------------------------------------------------------------
+4. clause_data.txt
+------------------------------------------------------------------------
+
+Per-clause metadata, one line per clause, in the same order clauses
+appear in their respective .clauses files.
+
+Format:
+
+  <list_name> <position> <id> <weight> <initial>\n
+
+Fields:
+  list_name   String: "sos", "usable", "demodulators", "hints",
+              "limbo", or "disabled"
+  position    0-based index within the list (int, decimal)
+  id          Clause ID (unsigned long long, decimal)
+  weight      Clause weight (double, %.6f format, e.g. "20.000000")
+  initial     1 if the clause is from the original input, 0 otherwise
+              (maps to Topform.initial flag)
+
+The entries are grouped by list in this order: sos, usable,
+demodulators, hints (if present), limbo (if present), disabled
+(if present).  Within each group, position counts from 0.
+
+Example:
+
+  sos 0 838 20.000000 0
+  sos 1 839 20.000000 0
+  ...
+  usable 0 3 11.000000 1
+  usable 1 4 9.000000 1
+  ...
+  demodulators 0 3 11.000000 1
+  ...
+  disabled 0 2 0.000000 0
+  ...
+
+Note: a clause may appear in multiple groups (e.g. both usable and
+demodulators) with the same ID but different positions.
+
+Source: search.c, write_clist_bare() lines 3419-3420.
+
+
+------------------------------------------------------------------------
+5. options.txt
+------------------------------------------------------------------------
+
+Human-readable dump of all Prover9 options at checkpoint time.
+Generated by fprint_options().
+
+Format: banner line, then groups of set()/clear()/assign() commands
+separated by spaces, with line wrapping.
+
+  \n
+  --------------- options ---------------\n
+  clear(prolog_style_variables). clear(clocks). ...\n
+  set(paramodulation). ...\n
+  \n
+  assign(max_weight, 100). assign(sos_limit, 20000). ...\n
+  ...
+
+There is no end_of_list sentinel; the file simply ends after the last
+option command.
+
+This file is for human reference only and is NOT read during resume.
+The saved_input.txt file is used instead.
+
+Source: search.c, write_checkpoint() lines 4076-4081.
+
+
+------------------------------------------------------------------------
+6. precedence.txt
+------------------------------------------------------------------------
+
+Symbol ordering for deterministic resume.  One symbol per line.
+
+Format:
+
+  <type> <name> <arity> [S]\n
+
+Fields:
+  type    "F" for function symbol, "R" for predicate (relation) symbol
+  name    Symbol name string (no spaces)
+  arity   Integer arity (0 for constants)
+  S       Optional flag: present only for Skolem constants/functions
+
+Function symbols are listed first (in precedence order), then
+predicate symbols (in precedence order).
+
+Example:
+
+  F 1 0
+  F a 0
+  F b 0
+  F * 2
+  F i 1
+  F f 2
+  F g 1
+  R = 2
+
+On resume, the reader parses this file to set preliminary precedence
+via set_preliminary_precedence_ilist(), ensuring the term ordering
+matches the original run exactly.
+
+Source: search.c, write_checkpoint() lines 4083-4100;
+        resume_load_precedence() lines 4315-4365.
+
+
+------------------------------------------------------------------------
+7. fpa_ids.txt
+------------------------------------------------------------------------
+
+FPA (Fingerprint/Path) index term IDs for deterministic leaf ordering
+on resume.  FPA indexing assigns a unique integer ID to each subterm
+position.
+
+Format:
+
+  fpa_id_count <N>\n
+  <clause_id> <fpa_id> <fpa_id> ... <fpa_id>\n
+  ...
+
+Line 1: total FPA ID count (unsigned int).
+
+Subsequent lines: one per clause, starting with the clause ID
+(unsigned long long), followed by FPA IDs for all subterms of all
+literals in the clause, written in pre-order DFS traversal.
+
+The FPA IDs for a clause are: for each literal (in order), for the
+atom of that literal, write FPA_ID(atom) then recurse into arguments
+left-to-right.
+
+Clauses are grouped by list: usable, sos, hints, limbo (in that order).
+Demodulators are NOT included (they use DISCRIM indexing, not FPA).
+
+Example:
+
+  fpa_id_count 301906
+  3 1 10 11 0 0 0 12 0 13 0 0
+  4 2 14 15 0 0
+  ...
+
+On resume, the reader walks the same DFS structure to reassign
+FPA_IDs, ensuring deterministic FPA leaf ordering.
+
+Source: search.c, write_fpa_ids() lines 3457-3494;
+        write_term_fpa_ids() lines 3437-3443.
+
+
+------------------------------------------------------------------------
+8. justifications.txt
+------------------------------------------------------------------------
+
+Clause derivation histories for proof reconstruction.
+
+Format: one clause per line.
+
+  <clause_id> <justification_term>.\n
+
+The clause ID is an unsigned long long.  The justification is a LADR
+term in standard justification notation, terminated by a period.
+
+Example:
+
+  838 [para(312(a,1),20(a,1)),flip(a)].
+  839 [para(312(a,1),20(a,2))].
+  840 [para(22(a,1),312(a,1,1)),rewrite([3(6),3(5)])].
+
+Justifications are written for all clauses in: sos, usable,
+demodulators, hints (if non-empty), limbo (if non-empty), and
+disabled (if checkpoint_ancestors flag is set and list is non-empty).
+
+On resume, the reader replaces the placeholder input_just()
+justifications assigned during clause loading with the real
+justifications from this file.  This enables proof output that
+shows actual derivation steps rather than "[assumption]".
+
+Source: search.c, write_justifications() lines 3797-3820;
+        write_clist_justifications() lines 3769-3785.
+
+
+------------------------------------------------------------------------
+9. formulas.txt
+------------------------------------------------------------------------
+
+Non-clause formulas (e.g. goal formulas) needed for proof
+reconstruction.  These are referenced by denial clauses via
+[deny(N)] justifications.
+
+Format: groups of three lines per formula.
+
+  <id>\n
+  <formula_term>.\n
+  <justification_term>.\n
+
+Fields:
+  id                  Formula ID (unsigned long long)
+  formula_term        LADR formula term with attributes, period-terminated
+  justification_term  Justification in standard notation, period-terminated
+
+Example:
+
+  1
+  g(i(a) * b) = i(a) * g(b) # label(non_clause) # label(goal).
+  [goal].
+
+This file is optional.  Old checkpoints without formulas.txt are
+handled gracefully -- proof output will show [assumption] for
+goal-derived clauses instead of proper ancestry.
+
+Source: search.c, write_checkpoint_formulas() lines 3657-3703.
+
+
+------------------------------------------------------------------------
+10. saved_input.txt
+------------------------------------------------------------------------
+
+Self-contained LADR input file that captures the complete runtime
+state.  This file enables resume without the original input file:
+
+  prover9 -r prover9_<pid>_ckpt_<given>
+
+Format: standard LADR input syntax.
+
+  % Saved input from checkpoint (auto-generated)\n
+  % Runtime state including auto-mode changes\n
+  \n
+  set(ignore_option_dependencies).\n
+  \n
+  <option commands>\n
+  \n
+  <configuration lists>\n
+
+The file always begins with set(ignore_option_dependencies) to prevent
+dependency cascades during read-back.  The saved options represent the
+final runtime state (post-dependency-resolution), so re-triggering
+dependencies would produce incorrect values.
+
+Option commands: set()/clear()/assign() for all flags and parameters,
+reflecting the runtime state at checkpoint time (including auto-mode
+changes).  Written by fwrite_options_input().
+
+Configuration lists (only non-empty ones): written in LADR
+list(name). ... end_of_list. format.  Possible lists:
+
+  list(weights).
+  list(kbo_weights).
+  list(actions).
+  list(interpretations).
+  list(given_selection).
+  list(keep).
+  list(delete).
+
+Note: The clause lists (sos, usable, etc.) are NOT in saved_input.txt.
+They are loaded from the separate .clauses files during resume.
+
+Source: search.c, write_checkpoint_input() lines 3885-3927.
+
+
+========================================================================
+PART 2: MACE4 CHECKPOINT DIRECTORY
+========================================================================
+
+Directory Naming
+----------------
+
+  mace4_<pid>_ckpt_<selections>/
+
+  <pid>          Process ID of the mace4 process (decimal integer).
+  <selections>   Number of cell selections at checkpoint time
+                 (unsigned int, decimal).
+
+Example: mace4_42764_ckpt_1/
+
+Like Prover9, the directory is created atomically via a .tmp rename.
+
+Source: msearch.c, write_mace4_checkpoint().
+
+
+Files in the Directory
+----------------------
+
+A Mace4 checkpoint directory always contains exactly 4 files:
+
+  metadata.txt        Key-value search state and statistics
+  trail.txt           DPLL decision trail
+  saved_input.txt     Self-contained LADR input (with clauses)
+  options.txt         Human-readable option dump (NOT used on resume)
+
+
+------------------------------------------------------------------------
+1. metadata.txt
+------------------------------------------------------------------------
+
+Format: One key-value pair per line, separated by a space.
+
+  <key> <value>\n
+
+Keys (in order as written):
+
+  version <string>              Always "mace4"
+  tptp_mode <int>               1 if TPTP input mode, 0 otherwise
+  domain_size <int>             Current domain size being searched
+  total_models <uint>           Number of models found so far
+  start_seconds <float>         CPU seconds at start of current domain
+                                (%.2f format)
+  start_megs <lld>              Memory (MB) at start of current domain
+  selections <uint>             Cell selection count (DPLL decisions)
+  assignments <uint>            Cell assignment count
+  propagations <uint>           Propagation count
+  cross_offs <uint>             Cross-off count (value elimination)
+  ground_clauses_seen <uint>    Ground clauses generated
+  ground_clauses_kept <uint>    Ground clauses kept
+  search_depth <int>            Current DPLL search depth (number of
+                                active stack frames)
+
+Source: msearch.c, write_mace4_checkpoint() lines 1637-1657.
+
+
+------------------------------------------------------------------------
+2. trail.txt
+------------------------------------------------------------------------
+
+The DPLL decision trail: one line per stack frame, from depth 0 to
+search_depth - 1.
+
+Format:
+
+  <depth> <cell_id> <value_index> <last> <max_constrained>\n
+
+Fields (all integers):
+  depth             0-based depth index (should match line number)
+  cell_id           Selected cell ID at this depth.  Cell IDs are
+                    offsets into Mace4's 1-dimensional cell array,
+                    computed from the symbol's base ID and the term's
+                    domain arguments.
+  value_index       Current value index being tried (0-based into the
+                    domain).  The actual domain value is value_index
+                    itself (since domain elements are 0..domain_size-1).
+  last              Maximum value index to try at this depth (typically
+                    domain_size - 1).
+  max_constrained   max_constrained value at this depth.  -1 means
+                    unconstrained (no constraint propagation limit).
+
+Example:
+
+  0 0 0 0 -1
+
+On resume, Mace4 reads these frames into a saved_trail array, then
+replays the trail by re-establishing cell assignments and propagating
+constraints at each depth.
+
+Source: msearch.c, write_mace4_checkpoint() lines 1659-1674;
+        struct search_frame in msearch.h lines 161-167.
+
+
+------------------------------------------------------------------------
+3. saved_input.txt
+------------------------------------------------------------------------
+
+Self-contained LADR input for standalone resume.
+
+Format:
+
+  set(ignore_option_dependencies).\n
+  \n
+  <option commands>\n
+  \n
+  formulas(mace4_clauses).\n
+  <clause>.\n
+  ...\n
+  end_of_list.\n
+
+Unlike Prover9, Mace4's saved_input includes the clausified formulas
+in a single list named "mace4_clauses", written in CL_FORM_BARE format
+with STANDARD_STYLE variables (x, y, z, ...).
+
+The option commands reflect the runtime state, including auto-mode
+adjustments to domain_size, start_size, end_size, and selection
+parameters.
+
+Resume usage:
+
+  mace4 -r mace4_<pid>_ckpt_<selections>
+
+The -r flag causes mace4 to read saved_input.txt for options and
+clauses, then metadata.txt and trail.txt for search state.
+
+Source: msearch.c, write_mace4_checkpoint() lines 1676-1693.
+
+
+------------------------------------------------------------------------
+4. options.txt
+------------------------------------------------------------------------
+
+Human-readable dump of all Mace4 options.  Same format as Prover9's
+options.txt: banner line followed by set()/clear()/assign() commands.
+
+This file is for human reference only and is NOT read during resume.
+
+Source: msearch.c, write_mace4_checkpoint() lines 1695-1701.
+
+
+========================================================================
+PART 3: COMMON DETAILS
+========================================================================
+
+Atomic Write Pattern
+--------------------
+
+Both Prover9 and Mace4 use the same atomic write pattern:
+
+  1. Create a temporary directory: <final_name>.tmp
+  2. Write all files into the temporary directory
+  3. rename() the temporary directory to the final name
+
+This ensures that a reader never sees a partially-written checkpoint.
+If the process is killed during step 2, only the .tmp directory exists
+and should be ignored (or cleaned up) by tools.
+
+A stale .tmp directory is removed (rmdir) before step 1 if it exists.
+This handles the case where a previous checkpoint attempt failed.
+
+Source: search.c line 3953; msearch.c line 1631.
+
+
+Signal Handling (SIGUSR2)
+-------------------------
+
+Sending SIGUSR2 to a running prover9 or mace4 process sets an internal
+flag (Checkpoint_requested / Mace4_checkpoint_requested_flag).
+
+For Prover9, the flag is checked in the main given-clause loop, after
+each iteration (after make_inferences, before limbo_process).  The
+checkpoint is written at the earliest opportunity after the signal.
+
+For Mace4, the flag is checked at the top of each DPLL search loop
+iteration, both in the iterative and recursive search variants.
+
+SIGUSR2 is only enabled after the search structures are initialized.
+Sending SIGUSR2 during startup or preprocessing has no effect until the
+main search loop begins.
+
+The handler simply sets a volatile sig_atomic_t flag.  All file I/O
+happens in the main thread when the flag is polled.
+
+Source: provers.c lines 440-478; msearch.c lines 826-831, 1027-1031.
+
+
+Checkpoint Exit (Exit Code 107)
+-------------------------------
+
+If the flag checkpoint_exit is set:
+  - Prover9 calls done_with_search(CHECKPOINT_EXIT) after writing.
+  - Mace4 returns MACE_CHECKPOINT_EXIT from the search function.
+
+Both exit with code 107.  A wrapper script can check $? == 107 to
+detect that a checkpoint was written and the process exited cleanly.
+
+If checkpoint_exit is NOT set, the process continues searching after
+writing the checkpoint.
+
+Source: search-structures.h line 325; msearch.h line 155.
+
+
+Periodic Auto-Checkpoints (checkpoint_minutes)
+-----------------------------------------------
+
+  assign(checkpoint_minutes, N).    (default -1 = disabled)
+  assign(checkpoint_keep, K).       (default 3)
+
+When checkpoint_minutes > 0, a checkpoint is written automatically
+every N minutes (minimum 15) during the given-clause loop.  The
+checkpoint_keep parameter controls rotation: only the most recent K
+auto-checkpoint directories are kept.  Older ones are deleted
+automatically via a circular buffer.
+
+SIGUSR2-triggered checkpoints are NOT subject to rotation.
+
+Source: search.c lines 4846-4892, record_auto_checkpoint() lines
+        3601-3640; msearch.c lines 1532-1560.
+
+
+Resume Invocation
+-----------------
+
+Prover9:
+  prover9 -r <checkpoint_dir> [-f <extra_input>] [-t <timeout>]
+
+  The -r flag sets resume mode.  If saved_input.txt exists in the
+  checkpoint directory, it is read automatically (stdin is redirected).
+  Additional -f files are processed after the saved input.
+
+  Resume sequence:
+    1. Read saved_input.txt (options, configuration lists)
+    2. resume_load_clauses() -- load clause files + clause_data.txt
+    3. restore_fpa_ids() -- rebuild FPA index deterministically
+    4. restore_checkpoint_formulas() -- reload goal formulas
+    5. restore_justifications() -- replace placeholder justifications
+    6. resume_load_precedence() -- set symbol ordering
+    7. basic_clause_properties() -- compute clause properties
+    8. init_search() -- full initialization with clauses present
+    9. resume_index_clauses() -- orient, index, and insert clauses
+   10. Continue given-clause loop from where it left off
+
+Mace4:
+  mace4 -r <checkpoint_dir> [-f <extra_input>] [-t <timeout>]
+
+  Resume sequence:
+    1. Read saved_input.txt (options, clausified formulas)
+    2. Read metadata.txt (domain_size, stats, search_depth)
+    3. Read trail.txt (DPLL decision trail)
+    4. Rebuild domain-size structures
+    5. Replay the trail (re-assign cells, propagate)
+    6. Continue DPLL search from the checkpoint position
+
+Source: provers.c lines 1003-1028; search.c lines 4754-4768;
+        mace4.c lines 348-559.
+
+
+SZS Status on Checkpoint Exit
+------------------------------
+
+When a checkpoint triggers exit code 107:
+  - Prover9 TPTP output: "% SZS status User for <problem>"
+  - Mace4 TPTP output: "% SZS status User for <problem>"
+
+The "User" status indicates a user-initiated interruption.
