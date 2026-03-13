@@ -16,7 +16,7 @@ The modernization effort addresses long-standing implementation constraints to b
 - **Fault Tolerance:** Correction of historical clause-handling defects to ensure robustness.
 - **State Management:** Deterministic, architecture-neutral checkpoint and restore capability.
 
-**Note on Clause Handling:** A legacy defect present in earlier Prover9 releases has been corrected. While the intended paramodulation calculus remains unchanged, the correction affects clause processing order and may alter proof search timing or derivation structure relative to historical versions. This corrected behavior is canonical in LADR-2026.
+**Drop-in Compatibility:** By default, LADR-2026 produces identical search behavior to McCune's original LADR-2009-11A. Two optional clause-handling improvements are available via `set(back_subsume_skip_used)` and `set(back_subsume_skip_limbo)`. When enabled, these may alter proof search timing or derivation structure but do not change the underlying calculus.
 
 ---
 
@@ -59,4 +59,4 @@ In multi-tasking mode, multiple search configurations execute in parallel. In th
 LADR-2026 is an implementation-level modernization of a historically significant engine. We welcome independent benchmarking and scrutiny.
 
 - **License:** Open source under GPLv2, consistent with the original LADR license.
-- **Artifacts:** Source code, build instructions, and verification artifacts will be published at release.
+- **Artifacts:** Source code and build instructions are included in each release.
