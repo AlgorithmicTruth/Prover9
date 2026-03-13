@@ -16,7 +16,7 @@ The modernization effort addresses long-standing implementation constraints to b
 - **Fault Tolerance:** Correction of historical clause-handling defects to ensure robustness.
 - **State Management:** Deterministic, architecture-neutral checkpoint and restore capability.
 
-**Drop-in Compatibility:** By default, LADR-2026 produces identical search behavior to McCune's original LADR-2009-11A. Two optional clause-handling improvements are available via `set(back_subsume_skip_used)` and `set(back_subsume_skip_limbo)`. When enabled, these may alter proof search timing or derivation structure but do not change the underlying calculus.
+**Drop-in Compatibility:** LADR-2026 produces identical search behavior to McCune's original LADR-2009-11A.
 
 ---
 
