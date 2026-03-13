@@ -171,6 +171,8 @@ Prover_options init_prover_options(void)
   p->safe_unit_conflict     = init_flag("safe_unit_conflict",     FALSE);
   p->reuse_denials          = init_flag("reuse_denials",          FALSE);
   p->back_subsume           = init_flag("back_subsume",            TRUE);
+  p->back_subsume_skip_used = init_flag("back_subsume_skip_used", FALSE);
+  p->back_subsume_skip_limbo= init_flag("back_subsume_skip_limbo",FALSE);
   p->unit_deletion          = init_flag("unit_deletion",          FALSE);
   p->factor                 = init_flag("factor",                 FALSE);
   p->cac_redundancy         = init_flag("cac_redundancy",          TRUE);
@@ -2213,7 +2215,7 @@ void limbo_process(BOOL pre_search)
 	   also skips used clauses.  This prevents a clause from escaping
 	   forward subsumption (due to being marked used) but then being
 	   caught by back subsumption. */
-	if (d->used) {
+	if (flag(Opt->back_subsume_skip_used) && d->used) {
 	  subsumees = plist_pop(subsumees);
 	  continue;
 	}
@@ -2225,7 +2227,7 @@ void limbo_process(BOOL pre_search)
 	   back_subsumption of a different limbo clause being processed
 	   in the same limbo_process() loop.  The limbo clause will be
 	   handled in its own iteration of the loop. */
-	if (clist_member(d, Glob.limbo)) {
+	if (flag(Opt->back_subsume_skip_limbo) && clist_member(d, Glob.limbo)) {
 	  subsumees = plist_pop(subsumees);
 	  continue;
 	}

@@ -72,6 +72,8 @@ struct prover_options {
     safe_unit_conflict,
     reuse_denials,
     back_subsume,
+    back_subsume_skip_used,
+    back_subsume_skip_limbo,
     unit_deletion,
     factor,
     cac_redundancy,
