@@ -123,7 +123,7 @@ dep:
 	util/make_dep $(OBJECTS)
 
 clean:
-	/bin/rm -f *.o .build_mode
+	/bin/rm -f *.o
 
 realclean:
 	/bin/rm -f *.o *.a .build_mode

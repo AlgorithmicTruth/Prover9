@@ -87,13 +87,13 @@ FORCE:
 
 PROGRAMS = latfilter olfilter clausefilter idfilter renamer unfast clausetester rewriter isofilter0 isofilter isofilter2 dprofiles interpfilter upper-covers miniscope interpformat prooftrans mirror-flip perm3 sigtest directproof test_clause_eval test_complex complex gen_trc_defs
 
-all: ladr apps install realclean
+all: ladr apps install
 
 ladr:
 	cd ../ladr && $(MAKE) libladr.a
 
 clean:
-	/bin/rm -f *.o .build_mode
+	/bin/rm -f *.o
 
 realclean:
 	/bin/rm -f *.o $(PROGRAMS) .build_mode
@@ -101,7 +101,7 @@ realclean:
 install:
 	@for f in $(PROGRAMS); do \
 	  codesign -s - -f "$$f" 2>/dev/null || true; \
-	  /bin/mv "$$f" ../bin; \
+	  /bin/cp -p "$$f" ../bin; \
 	done
 
 tags:

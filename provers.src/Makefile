@@ -103,26 +103,24 @@ PROGRAMS = prover9 fof-prover9 autosketches4 newauto newsax\
 
 ##############################################################################
 
-all: libs $(PROGRAMS) install clean
+all: libs $(PROGRAMS) install
 
 libs: ladr libmace4
 
 ladr libladr:
 	cd ../ladr && $(MAKE) libladr
-	$(MAKE) clean
 
 libmace libmace4:
 	cd ../mace4.src && $(MAKE) libmace4
-	$(MAKE) clean
 
 install:
 	@for f in $(PROGRAMS); do \
 	  codesign -s - -f "$$f" 2>/dev/null || true; \
-	  /bin/mv "$$f" ../bin; \
+	  /bin/cp -p "$$f" ../bin; \
 	done
 
 clean:
-	/bin/rm -f *.o .build_mode
+	/bin/rm -f *.o
 
 realclean:
 	/bin/rm -f *.o $(PROGRAMS) .build_mode

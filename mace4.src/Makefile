@@ -101,7 +101,6 @@ lib libmace4:
 
 ladr:
 	cd ../ladr && $(MAKE) libladr.a
-	$(MAKE) clean
 
 mace4: libmace4.a mace4.o $(OBJECTS)
 	$(CC) $(CFLAGS) -o mace4 mace4.o libmace4.a ../ladr/libladr.a
@@ -112,11 +111,11 @@ tags:
 	etags *.c ../ladr/*.c
 
 clean:
-	/bin/rm -f *.o .build_mode
+	/bin/rm -f *.o
 
 realclean:
 	/bin/rm -f *.o *.a mace4 .build_mode
 
 install:
 	codesign -s - -f mace4 2>/dev/null || true
-	/bin/mv mace4 ../bin
+	/bin/cp -p mace4 ../bin
