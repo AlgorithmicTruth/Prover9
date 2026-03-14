@@ -67,6 +67,11 @@ static int    Auto_ckpt_count = 0;            // number of entries in buffer
 static unsigned long long To_trace_id = 0;
 static Topform To_trace_cl = NULL;
 
+/* Hitlist for print_derivations (Veroff feature) */
+#define MAX_HSIZE 5000
+static int HIT_LIST[MAX_HSIZE];
+static int Hsize = 0;
+
 // The following is a global structure for this file.
 
 static struct {
@@ -180,6 +185,9 @@ Prover_options init_prover_options(void)
   p->limit_hint_matchers    = init_flag("limit_hint_matchers",    FALSE);
   p->back_demod_hints       = init_flag("back_demod_hints",        TRUE);
   p->collect_hint_labels    = init_flag("collect_hint_labels",    FALSE);
+  p->print_matched_hints    = init_flag("print_matched_hints",    FALSE);
+  p->print_derivations      = init_flag("print_derivations",      FALSE);
+  p->derivations_only       = init_flag("derivations_only",        TRUE);
   p->dont_flip_input        = init_flag("dont_flip_input",        FALSE);
 
   p->echo_input             = init_flag("echo_input",              TRUE);
@@ -265,6 +273,8 @@ Prover_options init_prover_options(void)
   p->max_vars =         init_parm("max_vars",             -1,     -1,INT_MAX);
   p->demod_step_limit = init_parm("demod_step_limit",   1000,     -1,INT_MAX);
   p->demod_increase_limit = init_parm("demod_increase_limit",1000,-1,INT_MAX);
+  p->max_nohints  = init_parm("max_nohints",   -1, -1, INT_MAX);
+  p->degrade_limit = init_parm("degrade_limit",  0, -1, INT_MAX);
   p->backsub_check    = init_parm("backsub_check",       500,     -1,INT_MAX);
 
   p->variable_weight =  init_floatparm("variable_weight",       1.0,-DBL_LARGE,DBL_LARGE);
@@ -299,6 +309,7 @@ Prover_options init_prover_options(void)
   p->sine_depth =         init_parm("sine_depth",             0,      0,INT_MAX);
   p->sine_max_axioms =    init_parm("sine_max_axioms",        0,      0,INT_MAX);
   p->cl_to_trace =        init_parm("cl_to_trace",            0,      0,INT_MAX);
+  p->hint_derivations =   init_parm("hint_derivations",       0,      0,INT_MAX);
   p->cores =              init_parm("cores",                  0,      0,     64);
 
   // FLOATPARMS:
@@ -412,6 +423,7 @@ Prover_options init_prover_options(void)
 
   flag_flag_dependency(p->default_output, TRUE, p->print_kept,          FALSE);
   flag_flag_dependency(p->default_output, TRUE, p->print_gen,           FALSE);
+  flag_flag_dependency(p->default_output, TRUE, p->print_matched_hints, FALSE);
 
   // auto_setup
 
@@ -749,6 +761,7 @@ char *exit_string(int code)
   case MAX_GIVEN_EXIT:   message = "max_given";   break;
   case MAX_KEPT_EXIT:    message = "max_kept";    break;
   case ACTION_EXIT:      message = "action";      break;
+  case MAX_NOHINTS_EXIT: message = "max_nohints"; break;
   case SIGSEGV_EXIT:     message = "SIGSEGV";     break;
   case SIGINT_EXIT:      message = "SIGINT";      break;
   case CHECKPOINT_EXIT:  message = "checkpoint";  break;
@@ -780,6 +793,7 @@ char *szs_status_string(int code)
   case MAX_GIVEN_EXIT:
   case MAX_KEPT_EXIT:
   case ACTION_EXIT:
+  case MAX_NOHINTS_EXIT:
     return "GaveUp";
   case SIGSEGV_EXIT:
   case FATAL_EXIT:
@@ -1620,6 +1634,40 @@ void handle_proof_and_maybe_exit(Topform empty_clause)
     else
       fprintf(stdout, "\n");
   }
+  /* print_matched_hints: three lists per proof (Veroff feature) */
+  if (flag(Opt->print_matched_hints)) {
+    print_separator(stdout, "MATCHED HINTS", TRUE);
+    fprintf(stdout,
+	    "\nformulas(hints).  %% Hints matched by proof clauses.\n");
+    for (p = proof; p; p = p->next) {
+      Topform h = ((Topform) p->v)->matching_hint;
+      if (h != NULL)
+	fwrite_clause(stdout, h, CL_FORM_BARE);
+    }
+    fprintf(stdout, "end_of_list.\n");
+    print_separator(stdout, "end of matched hints", TRUE);
+
+    print_separator(stdout, "HINT MATCHERS", TRUE);
+    fprintf(stdout,
+	    "\nformulas(hints).  %% Proof clauses that match a hint.\n");
+    for (p = proof; p; p = p->next) {
+      if (((Topform) p->v)->matching_hint != NULL)
+	fwrite_clause(stdout, p->v, CL_FORM_BARE);
+    }
+    fprintf(stdout, "end_of_list.\n");
+    print_separator(stdout, "end of hint matchers", TRUE);
+
+    print_separator(stdout, "NON HINT MATCHERS", TRUE);
+    fprintf(stdout,
+	    "\nformulas(hints).  %% Proof clauses that do not match any hints.\n");
+    for (p = proof; p; p = p->next) {
+      if (((Topform) p->v)->matching_hint == NULL)
+	fwrite_clause(stdout, p->v, CL_FORM_BARE);
+    }
+    fprintf(stdout, "end_of_list.\n");
+    print_separator(stdout, "end of non hint matchers", TRUE);
+  }
+
   fflush(stdout);
   clear_no_kill_and_check();
   if (answers)
@@ -1751,6 +1799,115 @@ void cl_process_simplify(Topform c)
   }
 }  // cl_process_simplify
 
+/*************
+ *
+ *   get_hit_list() -- read "hitlist" file of clause IDs (Veroff feature)
+ *
+ *************/
+
+static
+void get_hit_list(void)
+{
+  FILE *fp;
+  int n;
+  fp = fopen("hitlist", "r");
+  if (fp == NULL)
+    fatal_error("get_hit_list: cannot open file \"hitlist\"");
+  Hsize = 0;
+  while (fscanf(fp, "%d", &n) == 1) {
+    if (Hsize >= MAX_HSIZE) {
+      printf("WARNING: hitlist truncated at %d entries.\n", MAX_HSIZE);
+      break;
+    }
+    /* insertion sort to keep list sorted */
+    {
+      int i, j;
+      for (i = 0; i < Hsize && HIT_LIST[i] < n; i++)
+	;
+      for (j = Hsize; j > i; j--)
+	HIT_LIST[j] = HIT_LIST[j-1];
+      HIT_LIST[i] = n;
+      Hsize++;
+    }
+  }
+  fclose(fp);
+  printf("\n%% Hit list (%d entries):", Hsize);
+  {
+    int i;
+    for (i = 0; i < Hsize; i++)
+      printf(" %d", HIT_LIST[i]);
+  }
+  printf("\n");
+}  /* get_hit_list */
+
+/*************
+ *
+ *   on_hit_list() -- check if clause ID is next on the sorted hitlist
+ *
+ *************/
+
+static
+BOOL on_hit_list(int x)
+{
+  static int next_cl_pos = 0;
+  while (next_cl_pos < Hsize && HIT_LIST[next_cl_pos] < x)
+    next_cl_pos++;
+  if (next_cl_pos < Hsize && HIT_LIST[next_cl_pos] == x) {
+    next_cl_pos++;
+    /* skip duplicates */
+    while (next_cl_pos < Hsize && HIT_LIST[next_cl_pos] == x)
+      next_cl_pos++;
+    return TRUE;
+  }
+  return FALSE;
+}  /* on_hit_list */
+
+/*************
+ *
+ *   print_derivation() -- print derivation for a hitlist clause (Veroff feature)
+ *
+ *************/
+
+static
+void print_derivation(Topform cl)
+{
+  Plist proof, p;
+  static int pfcount = 0;
+  proof = get_clause_ancestors(cl);
+  uncompress_clauses(proof);
+  pfcount++;
+  print_separator(stdout, "PROOF", TRUE);
+  printf("\n%% Derivation (Proof) %d (Clause #%llu): ", pfcount, cl->id);
+  fwrite_clause(stdout, cl, CL_FORM_BARE);
+  printf("\n%% Length of derivation is %d.\n\n", proof_length(proof));
+  for (p = proof; p; p = p->next)
+    fwrite_clause(stdout, p->v, CL_FORM_STD);
+  print_separator(stdout, "end of proof", TRUE);
+
+  if (flag(Opt->derivations_only) && Hsize > 0
+      && cl->id >= (unsigned) HIT_LIST[Hsize - 1]) {
+    printf("\n%% %d derivations completed.  Terminating execution.\n", Hsize);
+    done_with_search(ACTION_EXIT);  /* clean exit via longjmp */
+  }
+}  /* print_derivation */
+
+static
+void hint_derivation(Topform cl)
+{
+  Plist proof, p;
+  static int pfcount = 0;
+  proof = get_clause_ancestors(cl);
+  uncompress_clauses(proof);
+  pfcount++;
+  print_separator(stdout, "PROOF", TRUE);
+  printf("\n%% Hint derivation (Proof) %d: ", pfcount);
+  fwrite_clause(stdout, cl, CL_FORM_BARE);
+  printf("\n%% Length of derivation is %d.\n\n", proof_length(proof));
+  for (p = proof; p; p = p->next)
+    fwrite_clause(stdout, p->v, CL_FORM_STD);
+  print_separator(stdout, "end of proof", TRUE);
+}  /* hint_derivation */
+
 static
 void cl_process_keep(Topform c)
 {
@@ -1759,6 +1916,8 @@ void cl_process_keep(Topform c)
     renumber_variables(c, MAX_VARS);
   if (c->id == 0)
     assign_clause_id(c);  // unit conflict or input: already has ID
+  if (flag(Opt->print_derivations) && on_hit_list(c->id))
+    print_derivation(c);
   if (To_trace_id != 0 && c->id == To_trace_id) {
     To_trace_cl = c;
     printf("\n*** Trace: clause %llu kept.\n", c->id);
@@ -1766,8 +1925,12 @@ void cl_process_keep(Topform c)
   mark_parents_as_used(c);
   mark_maximal_literals(c->literals);
   mark_selected_literals(c->literals, stringparm1(Opt->literal_selection));
-  if (c->matching_hint != NULL)
+  if (c->matching_hint != NULL) {
     keep_hint_matcher(c);
+    if (parm(Opt->hint_derivations) > 0
+	&& c->matching_hint->id < (unsigned) parm(Opt->hint_derivations))
+      hint_derivation(c);
+  }
 
   if (flag(Opt->print_clause_properties))
       c->attributes = set_term_attribute(c->attributes,
@@ -2483,6 +2646,25 @@ void make_inferences(void)
     }
 
     Stats.given++;
+    given_clause->was_given = TRUE;
+
+    /* max_nohints: exit after N consecutive givens w/o hint match (Veroff) */
+    {
+      static int nohints_count = 0;
+      BOOL hint_matcher = given_clause->matching_hint != NULL
+	&& (parm(Opt->degrade_limit) == -1
+	    || (int)(given_clause->weight / 1000) <= parm(Opt->degrade_limit));
+      if (given_clause->initial || hint_matcher)
+	nohints_count = 0;
+      else
+	nohints_count++;
+      if (parm(Opt->max_nohints) > 0
+	  && nohints_count > parm(Opt->max_nohints)) {
+	printf("\n%% %d givens in a row w/o an input clause or a hint matcher "
+	       "(max_nohints).\n", parm(Opt->max_nohints));
+	done_with_search(MAX_NOHINTS_EXIT);
+      }
+    }
 
     // Clause-count-based reporting
     if (parm(Opt->report_given) > 0)
@@ -3123,8 +3305,10 @@ void index_and_process_initial_clauses(void)
   // Hints
   
   if (Glob.hints->first) {
+    int hint_id_number = 1;
     for (p = Glob.hints->first; p != NULL; p = p->next) {
       Topform h = p->c;
+      h->id = hint_id_number++;
       orient_equalities(h, TRUE);
       renumber_variables(h, MAX_VARS);
       index_hint(h);
@@ -4588,11 +4772,15 @@ void resume_index_clauses(void)
     init_dollar_eval(Glob.demods);
 
   /* Index hints */
-  for (p = Glob.hints->first; p != NULL; p = p->next) {
-    Topform h = p->c;
-    orient_equalities(h, TRUE);
-    renumber_variables(h, MAX_VARS);
-    index_hint(h);
+  {
+    int hint_id_number = 1;
+    for (p = Glob.hints->first; p != NULL; p = p->next) {
+      Topform h = p->c;
+      h->id = hint_id_number++;
+      orient_equalities(h, TRUE);
+      renumber_variables(h, MAX_VARS);
+      index_hint(h);
+    }
   }
 
   /* Index limbo clauses (they were cl_processed in the original run,
@@ -4771,6 +4959,8 @@ Prover_results search(Prover_input p)
       if (Resume_low_selector_name[0] != '\0')
         set_low_selector_state(Resume_low_selector_name,
                                Resume_low_selector_count);
+      if (flag(Opt->print_derivations))
+	get_hit_list();
     }
     else {
       // Normal path.
@@ -4826,6 +5016,8 @@ Prover_results search(Prover_input p)
                           (int) megs_malloced());
 
       index_and_process_initial_clauses();
+      if (flag(Opt->print_derivations))
+	get_hit_list();
     }
 
     if (!flag(Opt->quiet))

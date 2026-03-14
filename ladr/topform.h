@@ -81,6 +81,7 @@ struct topform {
   char   initial;         /* existed at the start of the search */
   char   neg_compressed;  /* negative and compressed */
   char   subsumer;        /* has this clause back subsumed anything? */
+  char   was_given;       /* was this clause selected as given? */
 
 };
 
@@ -151,5 +152,7 @@ void append_label_attribute(Topform tf, char *s);
 Ordertype cl_id_compare(Topform c1, Topform c2);
 
 Ordertype cl_wt_id_compare(Topform c1, Topform c2);
+
+Ordertype cl_hint_id_compare(Topform c1, Topform c2);
 
 #endif  /* conditional compilation of whole file */

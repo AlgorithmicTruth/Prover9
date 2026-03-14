@@ -74,7 +74,8 @@ enum { CL_EVAL_AND,
        CL_EVAL_VARIABLES,
        CL_EVAL_DEPTH,
        CL_EVAL_LITERALS,
-       CL_EVAL_LEVEL
+       CL_EVAL_LEVEL,
+       CL_EVAL_HINT_AGE
  };  /* type of clause eval nodes */
 
 /* Following for the commpiled form of an evaluation rule. */
@@ -247,6 +248,8 @@ Clause_eval compile_clause_eval_rule(Term t)
       p->type = CL_EVAL_LITERALS;
     else if (is_term(a0, "level",  0))
       p->type = CL_EVAL_LEVEL;
+    else if (is_term(a0, "hint_age", 0))
+      p->type = CL_EVAL_HINT_AGE;
     else
       return NULL;
 
@@ -348,7 +351,8 @@ BOOL eval_clause_in_rule(Topform c, Clause_eval p)
   case CL_EVAL_VARIABLES:
   case CL_EVAL_DEPTH:
   case CL_EVAL_LITERALS:
-  case CL_EVAL_LEVEL: {
+  case CL_EVAL_LEVEL:
+  case CL_EVAL_HINT_AGE: {
     double val = 0;
     switch (p->type) {
     case CL_EVAL_WEIGHT:    val = c->weight;                  break;
@@ -356,6 +360,9 @@ BOOL eval_clause_in_rule(Topform c, Clause_eval p)
     case CL_EVAL_DEPTH:     val = literals_depth(lits);       break;
     case CL_EVAL_LITERALS:  val = number_of_literals(lits);   break;
     case CL_EVAL_LEVEL:     val = clause_level(c);            break;
+    case CL_EVAL_HINT_AGE:
+      val = (c->matching_hint != NULL) ? c->matching_hint->id : 99999;
+      break;
     }
     switch (p->relation) {
     case LESS_THAN:                return val <  p->test_val;

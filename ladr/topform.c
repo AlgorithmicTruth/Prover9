@@ -897,3 +897,44 @@ Ordertype cl_wt_id_compare(Topform c1, Topform c2)
     return SAME_AS;
 }  /* cl_wt_id_compare */
 
+/*************
+ *
+ *   cl_hint_id_compare()
+ *
+ *************/
+
+/* DOCUMENTATION
+Order clauses by matched hint ID, then by clause ID.
+Clauses matching a hint come before those that don't.
+*/
+
+/* PUBLIC */
+Ordertype cl_hint_id_compare(Topform c1, Topform c2)
+{
+  /* Both match a hint: order by hint ID, break ties by clause ID */
+  if (c1->matching_hint != NULL && c2->matching_hint != NULL) {
+    if (c1->matching_hint->id < c2->matching_hint->id)
+      return LESS_THAN;
+    else if (c1->matching_hint->id > c2->matching_hint->id)
+      return GREATER_THAN;
+    else if (c1->id < c2->id)
+      return LESS_THAN;
+    else if (c1->id > c2->id)
+      return GREATER_THAN;
+    else
+      return SAME_AS;
+  }
+  /* Hint matcher before non-matcher */
+  else if (c1->matching_hint != NULL)
+    return LESS_THAN;
+  else if (c2->matching_hint != NULL)
+    return GREATER_THAN;
+  /* Neither matches: order by clause ID */
+  else if (c1->id < c2->id)
+    return LESS_THAN;
+  else if (c1->id > c2->id)
+    return GREATER_THAN;
+  else
+    return SAME_AS;
+}  /* cl_hint_id_compare */
+

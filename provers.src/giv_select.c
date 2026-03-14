@@ -25,6 +25,7 @@
 
 enum { GS_ORDER_WEIGHT,
        GS_ORDER_AGE,
+       GS_ORDER_HINT_AGE,
        GS_ORDER_RANDOM
 };  /* order */
 
@@ -172,12 +173,16 @@ void init_giv_select(Plist rules)
       gs->order = GS_ORDER_AGE;
       gs->compare = (Ordertype (*) (void *, void *)) cl_id_compare;
     }
+    else if (is_constant(order_term,"hint_age")) {
+      gs->order = GS_ORDER_HINT_AGE;
+      gs->compare = (Ordertype (*) (void *, void *)) cl_hint_id_compare;
+    }
     else if (is_constant(order_term,"random")) {
       gs->order = GS_ORDER_RANDOM;
       gs->compare = (Ordertype (*) (void *, void *)) cl_id_compare;
     }
     else
-      fatal_error("Given selection order must be weight, age, or random.");
+      fatal_error("Given selection order must be weight, age, hint_age, or random.");
     gs->property = compile_clause_eval_rule(property_term);
     if (gs->property == NULL)
       fatal_error("Error in clause-property expression of given selection rule");
@@ -651,6 +656,7 @@ void selector_report(void)
     switch (gs->order) {
     case GS_ORDER_WEIGHT: s2 = "weight"; break;
     case GS_ORDER_AGE: s2 = "age"; break;
+    case GS_ORDER_HINT_AGE: s2 = "hint_age"; break;
     case GS_ORDER_RANDOM: s2 = "random"; break;
     default: s2 = "???"; break;
     }
@@ -664,6 +670,7 @@ void selector_report(void)
     switch (gs->order) {
     case GS_ORDER_WEIGHT: s2 = "weight"; break;
     case GS_ORDER_AGE: s2 = "age"; break;
+    case GS_ORDER_HINT_AGE: s2 = "hint_age"; break;
     case GS_ORDER_RANDOM: s2 = "random"; break;
     default: s2 = "???"; break;
     }

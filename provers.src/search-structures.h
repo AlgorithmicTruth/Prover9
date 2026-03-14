@@ -81,6 +81,9 @@ struct prover_options {
     limit_hint_matchers,
     back_demod_hints,
     collect_hint_labels,
+    print_matched_hints,     // print matched/unmatched hints per proof
+    print_derivations,       // print derivation for clauses in hitlist file
+    derivations_only,        // exit after last hitlist derivation
     dont_flip_input,
     eval_rewrite,
 
@@ -169,6 +172,8 @@ struct prover_options {
     max_vars,
     demod_step_limit,
     demod_increase_limit,
+    max_nohints,             // exit after N consecutive givens w/o hint match
+    degrade_limit,           // hint matcher only if degradation_count <= N
     backsub_check,
 
     variable_weight,        // weighting parameters
@@ -203,6 +208,7 @@ struct prover_options {
     sine_depth,            // SInE BFS depth limit (0=unlimited/fixpoint)
     sine_max_axioms,       // SInE max selected axioms (0=unlimited)
     cl_to_trace,           // trace lifecycle of clause with this ID (0 = off)
+    hint_derivations,      // print derivation of matchers for hints with ID < N (0=off)
     cores;                 // sliding-window scheduler: N concurrent children (0=off)
 
   // Stringparms (string options)
@@ -318,6 +324,7 @@ enum {
   MAX_GIVEN_EXIT    = 5,
   MAX_KEPT_EXIT     = 6,
   ACTION_EXIT       = 7,
+  MAX_NOHINTS_EXIT  = 8,
 
   SIGINT_EXIT       = 101,
   SIGSEGV_EXIT      = 102,
