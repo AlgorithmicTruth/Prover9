@@ -97,6 +97,31 @@ double max_clause_weight(Plist p)
 
 /*************
  *
+ *   imax_clause_weight()
+ *
+ *************/
+
+/* DOCUMENTATION
+Given a Plist of clauses, return the maximum "real" weight
+(weight % 500), which strips hint degradation (which adds N*1000).
+*/
+
+/* PUBLIC */
+int imax_clause_weight(Plist p)
+{
+  int best = INT_MIN;
+  while (p != NULL) {
+    Topform c = p->v;
+    int real_weight = (int) c->weight % 500;
+    if (real_weight > best)
+      best = real_weight;
+    p = p->next;
+  }
+  return best;
+}  /* imax_clause_weight */
+
+/*************
+ *
  *   max_clause_symbol_count()
  *
  *************/

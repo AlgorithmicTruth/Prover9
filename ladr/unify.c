@@ -464,13 +464,70 @@ The calling sequence and the use of Contexts and Trails is similar
 to those for unify().
 */
 
+/*************
+ *
+ *   match_anyconst() -- helper for _AnyConst matching in hints
+ *
+ *************/
+
+static BOOL match_anyconst(Term t1, Term t2, int *anyctx, Ilist *anytrp)
+{
+  int anyconst1 = any_const(SYMNUM(t1));
+  int anyconst2 = any_const(SYMNUM(t2));
+  int anyconst, i;
+  Term t;
+
+  /* CASE 1: neither is _AnyConst* */
+  if (anyconst1 == -1 && anyconst2 == -1)
+    return SYMNUM(t1) == SYMNUM(t2);
+
+  /* CASE 2: both are _AnyConst* */
+  if (anyconst1 != -1 && anyconst2 != -1) {
+    if (anyconst1 == 0 || anyconst2 == 0)
+      return TRUE;
+    return anyconst1 == anyconst2;
+  }
+
+  /* CASE 3: exactly one is _AnyConst* */
+  if (anyconst1 == -1) { anyconst = anyconst2; t = t1; }
+  else                  { anyconst = anyconst1; t = t2; }
+
+  if (anyconst == 0)
+    return TRUE;  /* generic _AnyConst matches any constant */
+
+  if (anyctx[anyconst] == -1) {
+    /* Not bound yet -- check no other _AnyConst_m is bound to this constant */
+    for (i = 1; i < MAX_ANYCONSTS; i++) {
+      if (anyctx[i] == SYMNUM(t))
+        return FALSE;
+    }
+    anyctx[anyconst] = SYMNUM(t);
+    *anytrp = ilist_prepend(*anytrp, anyconst);
+    return TRUE;
+  }
+  return anyctx[anyconst] == SYMNUM(t);
+}  /* match_anyconst */
+
+/*************
+ *
+ *   match_hints() -- match with external _AnyConst context
+ *
+ *   Like match(), but takes external anyctx/anytrp for _AnyConst
+ *   bindings that persist across multiple calls (e.g., in subsume_literals).
+ *   When anyctx is NULL, behaves exactly like standard match().
+ *
+ *************/
+
 /* PUBLIC */
-BOOL match(Term t1, Context c1, Term t2, Trail *trp)
+BOOL match_hints(Term t1, Context c1, Term t2, Trail *trp,
+                 int *anyctx, Ilist *anytrp)
 {
   struct { Term t1; Term t2; int child; int arity; } stack[1000];
   int top = 0;
   Trail entry_trail = *trp;
+  Ilist entry_anytrp = (anytrp != NULL) ? *anytrp : NULL;
   Term s1 = t1, s2 = t2;
+  BOOL use_anyconst = (anyctx != NULL);
 
   for (;;) {
     if (VARIABLE(s1)) {
@@ -483,6 +540,17 @@ BOOL match(Term t1, Context c1, Term t2, Trail *trp)
     }
     else if (VARIABLE(s2)) {
       goto fail;
+    }
+    else if (ARITY(s1) == 0 && ARITY(s2) == 0) {
+      /* Both constants -- handle _AnyConst matching */
+      if (use_anyconst) {
+        if (!match_anyconst(s1, s2, anyctx, anytrp))
+          goto fail;
+      }
+      else {
+        if (SYMNUM(s1) != SYMNUM(s2))
+          goto fail;
+      }
     }
     else if (SYMNUM(s1) != SYMNUM(s2)) {
       goto fail;
@@ -522,7 +590,37 @@ fail:
     }
     *trp = entry_trail;
   }
+  /* Restore anyctx bindings made by this call */
+  if (use_anyconst) {
+    while (*anytrp != entry_anytrp) {
+      anyctx[(*anytrp)->i] = -1;
+      *anytrp = ilist_pop(*anytrp);
+    }
+  }
   return FALSE;
+}  /* match_hints */
+
+/*************
+ *
+ *   match() -- one-way pattern matching (wrapper)
+ *
+ *************/
+
+/* PUBLIC */
+BOOL match(Term t1, Context c1, Term t2, Trail *trp)
+{
+  if (MATCH_HINTS_ANYCONST && AnyConstsEnabled) {
+    int anyctx[MAX_ANYCONSTS];
+    Ilist anytrp = NULL;
+    BOOL ret;
+    int i;
+    for (i = 0; i < MAX_ANYCONSTS; i++)
+      anyctx[i] = -1;
+    ret = match_hints(t1, c1, t2, trp, anyctx, &anytrp);
+    zap_ilist(anytrp);
+    return ret;
+  }
+  return match_hints(t1, c1, t2, trp, NULL, NULL);
 }  /* match */
 
 /*************
@@ -937,16 +1035,63 @@ void p_trail(Trail t)
 
 /*************
  *
+ *   AnyVariable matching for weight rules (Veroff/Justermans, 2016)
+ *
+ *************/
+
+static BOOL AnyVarsInited = FALSE;
+static int AnyVars[MAX_ANYVARS];
+
+static int any_var(int sn)
+{
+  int i;
+  if (!AnyVarsInited) {
+    char str[16];
+    AnyVars[0] = str_to_sn("_", 0);
+    for (i = 1; i < MAX_ANYVARS; i++) {
+      snprintf(str, 16, "_%d", i);
+      AnyVars[i] = str_to_sn(str, 0);
+    }
+    AnyVarsInited = TRUE;
+  }
+  for (i = 0; i < MAX_ANYVARS; i++) {
+    if (AnyVars[i] == sn)
+      return i;
+  }
+  return -1;
+}  /* any_var */
+
+static BOOL match_anyvar(int anyvar, Term t2, int *anyvar_ctx)
+{
+  int i;
+  if (!VARIABLE(t2))
+    return FALSE;
+  if (anyvar == 0)
+    return TRUE;  /* "_" matches any variable */
+  if (anyvar_ctx[anyvar] == -1) {
+    for (i = 1; i < MAX_ANYVARS; i++) {
+      if (anyvar_ctx[i] == VARNUM(t2))
+        return FALSE;  /* another _m already bound to this var */
+    }
+    anyvar_ctx[anyvar] = VARNUM(t2);
+    return TRUE;
+  }
+  return anyvar_ctx[anyvar] == VARNUM(t2);
+}  /* match_anyvar */
+
+/*************
+ *
  *   match_weight()
  *
  *************/
 
 /* DOCUMENTATION
 Special-purpose match for weighting.
+The anyvar_ctx array (size MAX_ANYVARS) tracks _/_1.._9 bindings.
 */
 
 /* PUBLIC */
-BOOL match_weight(Term t1, Context c1, Term t2, Trail *trp, int var_sn)
+BOOL match_weight(Term t1, Context c1, Term t2, Trail *trp, int *anyvar_ctx)
 {
   struct { Term t1; Term t2; int child; int arity; } stack[1000];
   int top = 0;
@@ -954,34 +1099,37 @@ BOOL match_weight(Term t1, Context c1, Term t2, Trail *trp, int var_sn)
   Term s1 = t1, s2 = t2;
 
   for (;;) {
-    if (SYMNUM(s1) == var_sn) {
-      if (!VARIABLE(s2))
-        goto fail;
-    }
-    else if (SYMNUM(s1) == str_to_sn("@", 0)) {
-      if (!CONSTANT(s2))
-        goto fail;
-    }
-    else if (VARIABLE(s1)) {
-      int vn = VARNUM(s1);
-      if (c1->terms[vn] == NULL) {
-        BIND_TR(vn, c1, s2, NULL, trp)
+    {
+      int anyvar = any_var(SYMNUM(s1));
+      if (anyvar != -1) {
+        if (!match_anyvar(anyvar, s2, anyvar_ctx))
+          goto fail;
       }
-      else if (!term_ident(c1->terms[vn], s2))
+      else if (SYMNUM(s1) == str_to_sn("@", 0)) {
+        if (!CONSTANT(s2))
+          goto fail;
+      }
+      else if (VARIABLE(s1)) {
+        int vn = VARNUM(s1);
+        if (c1->terms[vn] == NULL) {
+          BIND_TR(vn, c1, s2, NULL, trp)
+        }
+        else if (!term_ident(c1->terms[vn], s2))
+          goto fail;
+      }
+      else if (VARIABLE(s2)) {
         goto fail;
-    }
-    else if (VARIABLE(s2)) {
-      goto fail;
-    }
-    else if (SYMNUM(s1) != SYMNUM(s2)) {
-      goto fail;
-    }
-    else if (ARITY(s1) > 0) {
-      stack[top].t1 = s1; stack[top].t2 = s2;
-      stack[top].child = 1; stack[top].arity = ARITY(s1);
-      top++;
-      s1 = ARG(s1,0); s2 = ARG(s2,0);
-      continue;
+      }
+      else if (SYMNUM(s1) != SYMNUM(s2)) {
+        goto fail;
+      }
+      else if (ARITY(s1) > 0) {
+        stack[top].t1 = s1; stack[top].t2 = s2;
+        stack[top].child = 1; stack[top].arity = ARITY(s1);
+        top++;
+        s1 = ARG(s1,0); s2 = ARG(s2,0);
+        continue;
+      }
     }
 
     while (top > 0) {

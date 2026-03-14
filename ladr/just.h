@@ -229,6 +229,10 @@ BOOL has_copy_just(Topform c);
 
 BOOL has_copy_flip_just(Topform c);
 
+BOOL has_deny_just(Topform c);
+
+BOOL has_goal_just(Topform c);
+
 void sb_tagged_write_just(String_buf sb, Just just, I3list map);
 
 const char *tptp_rule_name(Just_type type);

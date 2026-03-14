@@ -2155,6 +2155,38 @@ BOOL has_copy_flip_just(Topform c)
 	  c->justification->next->next == NULL);
 }  /* has_copy_flip_just */
 
+/*************
+ *
+ *   has_deny_just()
+ *
+ *************/
+
+/* DOCUMENTATION
+Does a clause have justification "deny"?
+*/
+
+/* PUBLIC */
+BOOL has_deny_just(Topform c)
+{
+  return primary_just_type(c, DENY_JUST);
+}  /* has_deny_just */
+
+/*************
+ *
+ *   has_goal_just()
+ *
+ *************/
+
+/* DOCUMENTATION
+Does a clause have justification "goal"?
+*/
+
+/* PUBLIC */
+BOOL has_goal_just(Topform c)
+{
+  return primary_just_type(c, GOAL_JUST);
+}  /* has_goal_just */
+
 /* ************************************************************************
    BV(2007-aug-20):  new functions to support tagged proofs (prooftrans)
    ***********************************************************************/

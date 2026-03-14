@@ -57,6 +57,12 @@
 
 /* Private definitions and types */
 
+/* _AnyConst matching (Veroff/Justermans, 2016) */
+BOOL AnyConstsEnabled = TRUE;
+
+static BOOL AnyConstsInited = FALSE;
+static int AnyConsts[MAX_ANYCONSTS];
+
 static Term Shared_variables[MAX_VNUM];
 
 /*
@@ -2485,4 +2491,64 @@ Plist free_vars_term(Term t, Plist vars)
   }
   return vars;
 }  /* free_vars_term */
+
+/*************
+ *
+ *   init_any_consts()
+ *
+ *************/
+
+static void init_any_consts(void)
+{
+  int i;
+  char str[64];
+  AnyConsts[0] = str_to_sn(ANYCONST, 0);
+  for (i = 1; i < MAX_ANYCONSTS; i++) {
+    snprintf(str, 64, "%s_%d", ANYCONST, i);
+    AnyConsts[i] = str_to_sn(str, 0);
+  }
+  AnyConstsInited = TRUE;
+}  /* init_any_consts */
+
+/*************
+ *
+ *   any_const()
+ *
+ *************/
+
+/* DOCUMENTATION
+Return the _AnyConst index (0 for _AnyConst, 1-9 for _AnyConst_1 .. _9)
+if sn is an _AnyConst symbol; otherwise return -1.
+*/
+
+/* PUBLIC */
+int any_const(int sn)
+{
+  int i;
+  if (!AnyConstsInited)
+    init_any_consts();
+  for (i = 0; i < MAX_ANYCONSTS; i++) {
+    if (AnyConsts[i] == sn)
+      return i;
+  }
+  return -1;
+}  /* any_const */
+
+/*************
+ *
+ *   any_const_sn()
+ *
+ *************/
+
+/* DOCUMENTATION
+Return the symbol number for _AnyConst (n==0) or _AnyConst_n (n==1..9).
+*/
+
+/* PUBLIC */
+int any_const_sn(int n)
+{
+  if (!AnyConstsInited)
+    init_any_consts();
+  return AnyConsts[n];
+}  /* any_const_sn */
 

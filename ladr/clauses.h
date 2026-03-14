@@ -37,6 +37,8 @@ Plist intersect_clauses(Plist a, Plist b);
 
 double max_clause_weight(Plist p);
 
+int imax_clause_weight(Plist p);
+
 int max_clause_symbol_count(Plist p);
 
 Plist nonneg_clauses(Plist clauses);

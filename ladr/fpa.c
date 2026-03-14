@@ -1281,6 +1281,19 @@ Fpa_state build_query(Term t, Context c, Querytype type,
 
     if (CONSTANT(t) || bound <= 0 || is_assoc_comm(SYMNUM(t))) {
       q1 = query_leaf(p->first, index);
+      /* _AnyConst multi-path: also query all _AnyConst_n paths */
+      if (MATCH_HINTS_ANYCONST && AnyConstsEnabled && CONSTANT(t)) {
+        int ac_i;
+        int save_sym = p->last->i;  /* save original SYMNUM(t) */
+        for (ac_i = 0; ac_i < MAX_ANYCONSTS; ac_i++) {
+          Fpa_state qAny;
+          p->last->i = any_const_sn(ac_i);
+          qAny = query_leaf(p->first, index);
+          if (qAny)
+            q1 = (q1 == NULL) ? qAny : query_union(q1, qAny);
+        }
+        p->last->i = save_sym;  /* restore */
+      }
     }
     else if ((type == INSTANCE || type == UNIFY) &&
 	     all_args_vars_in_context(t, c)) {

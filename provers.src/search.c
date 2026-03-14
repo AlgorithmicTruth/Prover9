@@ -188,6 +188,7 @@ Prover_options init_prover_options(void)
   p->print_matched_hints    = init_flag("print_matched_hints",    FALSE);
   p->print_derivations      = init_flag("print_derivations",      FALSE);
   p->derivations_only       = init_flag("derivations_only",        TRUE);
+  p->print_new_hints        = init_flag("print_new_hints",        FALSE);
   p->dont_flip_input        = init_flag("dont_flip_input",        FALSE);
 
   p->echo_input             = init_flag("echo_input",              TRUE);
@@ -275,6 +276,8 @@ Prover_options init_prover_options(void)
   p->demod_increase_limit = init_parm("demod_increase_limit",1000,-1,INT_MAX);
   p->max_nohints  = init_parm("max_nohints",   -1, -1, INT_MAX);
   p->degrade_limit = init_parm("degrade_limit",  0, -1, INT_MAX);
+  p->para_restr_beg = init_parm("para_restr_beg", INT_MAX, -1, INT_MAX);
+  p->para_restr_end = init_parm("para_restr_end",      -1, -1, INT_MAX);
   p->backsub_check    = init_parm("backsub_check",       500,     -1,INT_MAX);
 
   p->variable_weight =  init_floatparm("variable_weight",       1.0,-DBL_LARGE,DBL_LARGE);
@@ -1618,10 +1621,47 @@ void handle_proof_and_maybe_exit(Topform empty_clause)
     }
     printf(".\n");
 
-    printf("%% Length of proof is %d.\n", proof_length(proof));
-    printf("%% Level of proof is %d.\n", clause_level(empty_clause));
-    printf("%% Maximum clause weight is %.3f.\n", max_clause_weight(proof));
-    printf("%% Given clauses %s.\n\n", comma_num(Stats.given));
+    {
+      int pf_level;
+      double max_pf_wt;
+      Topform proof_cl;
+      int pf_nothint_ct = 0;
+      int pf_total_given = 0;
+      int pf_nothint_given = 0;
+
+      for (p = proof; p; p = p->next) {
+	proof_cl = (Topform) p->v;
+	if (proof_cl->was_given)
+	  pf_total_given++;
+	if (proof_cl->matching_hint == NULL
+	    && !has_input_just(proof_cl)
+	    && !has_goal_just(proof_cl)
+	    && !proof_cl->initial
+	    && !has_deny_just(proof_cl)
+	    && number_of_literals(proof_cl->literals) != 0) {
+	  pf_nothint_ct++;
+	  if (proof_cl->was_given)
+	    pf_nothint_given++;
+	}
+      }
+
+      printf("%% Length of proof: %d (%d new hints)\n",
+	     proof_length(proof), pf_nothint_ct);
+
+      pf_level = clause_level(empty_clause);
+      printf("%% Level of proof: %d\n", pf_level);
+
+      max_pf_wt = max_clause_weight(proof);
+      if (max_pf_wt > 500.00)
+	printf("%% Maximum clause weight: %.3f (%d w/o degradation)\n",
+	       max_pf_wt, imax_clause_weight(proof));
+      else
+	printf("%% Maximum clause weight: %.3f\n", max_pf_wt);
+
+      printf("%% Given clauses in run: %s\n", comma_num(Stats.given));
+      printf("%% Given clauses in proof: %d (%d new hints)\n\n",
+	     pf_total_given, pf_nothint_given);
+    }
     for (p = proof; p; p = p->next)
       fwrite_clause(stdout, p->v, CL_FORM_STD);
     print_separator(stdout, "end of proof", TRUE);
@@ -1636,14 +1676,21 @@ void handle_proof_and_maybe_exit(Topform empty_clause)
   }
   /* print_matched_hints: three lists per proof (Veroff feature) */
   if (flag(Opt->print_matched_hints)) {
+    int pmh_count = 0;
     print_separator(stdout, "MATCHED HINTS", TRUE);
     fprintf(stdout,
 	    "\nformulas(hints).  %% Hints matched by proof clauses.\n");
     for (p = proof; p; p = p->next) {
       Topform h = ((Topform) p->v)->matching_hint;
-      if (h != NULL)
-	fwrite_clause(stdout, h, CL_FORM_BARE);
+      if (h != NULL) {
+	if (true_clause(h->literals))
+	  pmh_count++;
+	else
+	  fwrite_clause(stdout, h, CL_FORM_BARE);
+      }
     }
+    printf("%% *** Not including %d hints that were back demodulated. ***\n",
+	   pmh_count);
     fprintf(stdout, "end_of_list.\n");
     print_separator(stdout, "end of matched hints", TRUE);
 
@@ -1666,6 +1713,39 @@ void handle_proof_and_maybe_exit(Topform empty_clause)
     }
     fprintf(stdout, "end_of_list.\n");
     print_separator(stdout, "end of non hint matchers", TRUE);
+  }
+
+  if (flag(Opt->print_new_hints)) {
+    Topform proof_cl;
+    print_separator(stdout, "NEW HINTS", TRUE);
+    fprintf(stdout, "\nGiven clauses:\n\n");
+    for (p = proof; p; p = p->next) {
+      proof_cl = (Topform) p->v;
+      if (proof_cl->matching_hint == NULL
+	  && !has_input_just(proof_cl)
+	  && !has_goal_just(proof_cl)
+	  && !proof_cl->initial
+	  && !has_deny_just(proof_cl)
+	  && number_of_literals(proof_cl->literals) != 0) {
+	if (proof_cl->was_given)
+	  fwrite_clause(stdout, p->v, CL_FORM_STD);
+      }
+    }
+    print_separator(stdout, "end of proof", TRUE);
+    fprintf(stdout, "\nProof clauses not given:\n\n");
+    for (p = proof; p; p = p->next) {
+      proof_cl = (Topform) p->v;
+      if (proof_cl->matching_hint == NULL
+	  && !has_input_just(proof_cl)
+	  && !has_goal_just(proof_cl)
+	  && !proof_cl->initial
+	  && !has_deny_just(proof_cl)
+	  && number_of_literals(proof_cl->literals) != 0) {
+	if (!proof_cl->was_given)
+	  fwrite_clause(stdout, p->v, CL_FORM_STD);
+      }
+    }
+    print_separator(stdout, "end of proof", TRUE);
   }
 
   fflush(stdout);
@@ -2395,8 +2475,13 @@ void limbo_process(BOOL pre_search)
 	  continue;
 	}
 	Stats.back_subsumed++;
-	if (flag(Opt->print_kept))
-	  printf("%s    %llu back subsumes %llu.\n", TPTP_PFX, c->id, d->id);
+	if (flag(Opt->print_kept)) {
+	  if (d->matching_hint != NULL)
+	    printf("%s    %llu back subsumes hint matcher %llu.\n",
+		   TPTP_PFX, c->id, d->id);
+	  else
+	    printf("%s    %llu back subsumes %llu.\n", TPTP_PFX, c->id, d->id);
+	}
 	if (To_trace_cl == d) {
 	  printf("\n*** Trace: clause %llu back subsumed by %llu.\n",
 		 d->id, c->id);
@@ -2559,12 +2644,19 @@ void given_infer(Topform given)
     Context cf = get_context();
     Context ci = get_context();
     Clist_pos p;
+    BOOL good_given = (given->id < (unsigned) parm(Opt->para_restr_beg)
+		       || given->id > (unsigned) parm(Opt->para_restr_end));
     for (p = Glob.usable->first; p; p = p->next) {
       if (!restricted_denial(p->c) &&
 	  !over_parm_limit(number_of_literals(p->c->literals),
 			   Opt->para_lit_limit)) {
-	para_from_into(given, cf, p->c, ci, FALSE, cl_process);
-	para_from_into(p->c, cf, given, ci, TRUE, cl_process);
+	BOOL good_pair = (good_given
+			  || p->c->id < (unsigned) parm(Opt->para_restr_beg)
+			  || p->c->id > (unsigned) parm(Opt->para_restr_end));
+	if (good_pair) {
+	  para_from_into(given, cf, p->c, ci, FALSE, cl_process);
+	  para_from_into(p->c, cf, given, ci, TRUE, cl_process);
+	}
       }
     }
     free_context(cf);
@@ -2690,7 +2782,7 @@ void make_inferences(void)
       }
     }
     
-    if (flag(Opt->print_given)) {
+    if (flag(Opt->print_given) || Stats.given % 500 == 0) {
       if (given_clause->weight == round(given_clause->weight))
 	printf("\n%sgiven #%s (%s,wt=%d): ",
 	       TPTP_PFX, comma_num(Stats.given), selection_type, (int) given_clause->weight);

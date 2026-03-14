@@ -52,7 +52,7 @@ static int Min_sn;     /* integer arithmetic */
 static int Depth_sn;   /* depth */
 static int Vars_sn;    /* vars */
 static int Call_sn;    /* vars */
-static int Avar_sn;    /* anonymous variable */
+/* Avar_sn removed -- replaced by anyvar_ctx[] in match_weight calls */
 
 /*************
  *
@@ -171,8 +171,6 @@ void init_weight(Plist rules,
   Vars_sn  = str_to_sn("vars", 1);
   Call_sn  = str_to_sn("call", 2);
   Neg_sn  = str_to_sn("-", 1);
-  Avar_sn = str_to_sn("_", 0);
-
   /* Process the rules. */
 
   Rules = NULL;
@@ -394,7 +392,11 @@ double weight(Term t, Context subst)
       Term alpha = ARG(rule,0);
       Term beta  = ARG(rule,1);
       Trail tr = NULL;
-      if (match_weight(ARG(alpha,0), subst, t, &tr, Avar_sn)) {
+      int anyvar_ctx[MAX_ANYVARS];
+      int av_i;
+      for (av_i = 0; av_i < MAX_ANYVARS; av_i++)
+        anyvar_ctx[av_i] = -1;
+      if (match_weight(ARG(alpha,0), subst, t, &tr, anyvar_ctx)) {
         double wt = weight_calc(beta, subst);
         undo_subst(tr);
         return wt;
@@ -462,7 +464,11 @@ double weight(Term t, Context subst)
           Term alpha = ARG(rule,0);
           Term beta  = ARG(rule,1);
           Trail tr = NULL;
-          if (match_weight(ARG(alpha,0), subst, ch, &tr, Avar_sn)) {
+          int anyvar_ctx[MAX_ANYVARS];
+          int av_i;
+          for (av_i = 0; av_i < MAX_ANYVARS; av_i++)
+            anyvar_ctx[av_i] = -1;
+          if (match_weight(ARG(alpha,0), subst, ch, &tr, anyvar_ctx)) {
             double wt = weight_calc(beta, subst);
             undo_subst(tr);
             stack[top].wt += wt;

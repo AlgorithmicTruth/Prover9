@@ -84,6 +84,7 @@ struct prover_options {
     print_matched_hints,     // print matched/unmatched hints per proof
     print_derivations,       // print derivation for clauses in hitlist file
     derivations_only,        // exit after last hitlist derivation
+    print_new_hints,         // list non-hint-matcher proof clauses
     dont_flip_input,
     eval_rewrite,
 
@@ -174,6 +175,8 @@ struct prover_options {
     demod_increase_limit,
     max_nohints,             // exit after N consecutive givens w/o hint match
     degrade_limit,           // hint matcher only if degradation_count <= N
+    para_restr_beg,          // restricted paramod: skip if both IDs in range
+    para_restr_end,
     backsub_check,
 
     variable_weight,        // weighting parameters

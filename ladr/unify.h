@@ -108,6 +108,9 @@ type defined here.)
 
 /* Public definitions */
 
+/* Match AnyVariable in weighting rules (Veroff/Justermans, 2016) */
+#define MAX_ANYVARS  10
+
 /* Dereference a variable. */
 
 #define DEREFERENCE(t, c) { int i; \
@@ -156,6 +159,9 @@ BOOL occur_check(int vn, Context vc, Term t, Context c);
 
 BOOL match(Term t1, Context c1, Term t2, Trail *trp);
 
+BOOL match_hints(Term t1, Context c1, Term t2, Trail *trp,
+                 int *anyctx, Ilist *anytrp);
+
 Term apply(Term t, Context c);
 
 Term apply_substitute(Term t, Term beta, Context c_from,
@@ -178,7 +184,7 @@ void fprint_trail(FILE *fp, Trail t);
 
 void p_trail(Trail t);
 
-BOOL match_weight(Term t1, Context c1, Term t2, Trail *trp, int var_sn);
+BOOL match_weight(Term t1, Context c1, Term t2, Trail *trp, int *anyvar_ctx);
 
 Ilist vars_in_trail(Trail tr);
 

@@ -165,9 +165,33 @@ labels on C are copied to H, and C is not indexed.
 */
 
 /* PUBLIC */
+/*************
+ *
+ *   hint_contains_anyconst() -- check if a hint has generic _AnyConst
+ *
+ *************/
+
+static BOOL hint_contains_anyconst(Topform c)
+{
+  Literals lit;
+  int sn = any_const_sn(0);  /* symnum for _AnyConst */
+  for (lit = c->literals; lit; lit = lit->next) {
+    if (lit->atom != NULL && symbol_in_term(sn, lit->atom))
+      return TRUE;
+  }
+  return FALSE;
+}  /* hint_contains_anyconst */
+
 void index_hint(Topform c)
 {
-  Topform h = find_equivalent_hint(c, Hints_idx);
+  Topform h;
+
+  /* Disable _AnyConst matching during redundancy check so that
+     hints with _AnyConst are not marked redundant vs concrete hints. */
+  AnyConstsEnabled = FALSE;
+  h = find_equivalent_hint(c, Hints_idx);
+  AnyConstsEnabled = TRUE;
+
   c->weight = 0;  /* this is used in hints degradation to count matches */
   if (h != NULL) {
     /* copy any bsub_hint_wt attrs from rundundant hint to the indexed hint */
@@ -190,8 +214,14 @@ void index_hint(Topform c)
     Hint_id_count++;
     c->id = Hint_id_count;  /* need IDs so that back_subsume() will work */
     lindex_update(Hints_idx, c, INSERT);
-    if (Back_demod_hints)
-      index_clause_back_demod(c, Back_demod_idx, INSERT);
+    if (Back_demod_hints) {
+      /* Do not index hints containing generic _AnyConst for back-demod.
+         Back-demodulating _AnyConst would be unsound. */
+      if (MATCH_HINTS_ANYCONST && hint_contains_anyconst(c))
+        ;  /* skip back-demod indexing */
+      else
+        index_clause_back_demod(c, Back_demod_idx, INSERT);
+    }
   }
 }  /* index_hint */
 

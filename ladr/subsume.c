@@ -60,7 +60,19 @@ BOOL subsume_literals(Literals clit, Context subst, Topform d, Trail *trp)
   Literals cstack[MAX_LITS];  /* clit at each depth */
   Literals dstack[MAX_LITS];  /* current dlit position at each depth */
   Trail    marks[MAX_LITS];   /* trail mark at each depth */
+  Ilist    anymarks[MAX_LITS]; /* _AnyConst trail save points */
   int depth = 0;
+
+  /* _AnyConst context (shared across all match_hints calls) */
+  int anyctx[MAX_ANYCONSTS];
+  Ilist anytrp = NULL;
+  BOOL use_anyconst = (MATCH_HINTS_ANYCONST && AnyConstsEnabled);
+  int ac_i;
+
+  if (use_anyconst) {
+    for (ac_i = 0; ac_i < MAX_ANYCONSTS; ac_i++)
+      anyctx[ac_i] = -1;
+  }
 
   if (clit == NULL)
     return TRUE;
@@ -78,13 +90,19 @@ BOOL subsume_literals(Literals clit, Context subst, Topform d, Trail *trp)
     for (; dl != NULL; dl = dl->next) {
       if (cl->sign == dl->sign) {
         Trail mark = *trp;
-        if (match(cl->atom, subst, dl->atom, trp)) {
+        Ilist anymark = anytrp;  /* save anyconst trail position */
+        if (match_hints(cl->atom, subst, dl->atom, trp,
+                        use_anyconst ? anyctx : NULL,
+                        use_anyconst ? &anytrp : NULL)) {
           /* Check if this was the last clit (base case). */
           if (cl->next == NULL) {
-            return TRUE;  /* success — trail has all bindings */
+            if (use_anyconst)
+              zap_ilist(anytrp);
+            return TRUE;  /* success -- trail has all bindings */
           }
           /* Save state and "recurse" to next clit. */
           marks[depth] = mark;
+          anymarks[depth] = anymark;
           dstack[depth] = dl->next;  /* resume point on backtrack */
           depth++;
           if (depth >= MAX_LITS)
@@ -94,6 +112,7 @@ BOOL subsume_literals(Literals clit, Context subst, Topform d, Trail *trp)
           found = TRUE;
           break;
         }
+        /* match failed -- anyctx was restored in match_hints fail path */
       }
     }
 
@@ -103,9 +122,18 @@ BOOL subsume_literals(Literals clit, Context subst, Topform d, Trail *trp)
       if (depth >= 0) {
         undo_subst_2(*trp, marks[depth]);
         *trp = marks[depth];
+        /* Restore anyconst bindings to this depth */
+        if (use_anyconst) {
+          while (anytrp != anymarks[depth]) {
+            anyctx[anytrp->i] = -1;
+            anytrp = ilist_pop(anytrp);
+          }
+        }
       }
     }
   }
+  if (use_anyconst)
+    zap_ilist(anytrp);
   return FALSE;
 }  /* subsume_literals */
 

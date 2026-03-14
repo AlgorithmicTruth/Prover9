@@ -112,6 +112,13 @@ struct term {
 /* to get the array of arguments */
 #define ARGS(t)    ((t)->args)
 
+/* Match any constant (_AnyConst) in hints (Veroff/Justermans, 2016) */
+#define MATCH_HINTS_ANYCONST TRUE
+#define ANYCONST "_AnyConst"
+#define MAX_ANYCONSTS  10
+
+extern BOOL AnyConstsEnabled;
+
 /* End of public definitions */
 
 /* Public function prototypes from term.c */
@@ -195,6 +202,10 @@ int arg_position(Term parent, Term child);
 BOOL is_term(Term t, char *str, int arity);
 
 BOOL is_constant(Term t, char *str);
+
+int any_const(int sn);
+
+int any_const_sn(int n);
 
 char *term_symbol(Term t);
 
