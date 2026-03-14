@@ -70,7 +70,7 @@ else
     _BMODE = release
   endif
 endif
-CFLAGS = $(XFLAGS) $(OPTFLAGS) -Wall $(PLATFORM_FLAGS)
+CFLAGS = $(XFLAGS) $(OPTFLAGS) -Wall -MMD -MP $(PLATFORM_FLAGS)
 
 # Build mode sentinel -- auto-clean when switching debug/release.
 .build_mode: FORCE
@@ -93,10 +93,10 @@ ladr:
 	cd ../ladr && $(MAKE) libladr.a
 
 clean:
-	/bin/rm -f *.o
+	/bin/rm -f *.o *.d
 
 realclean:
-	/bin/rm -f *.o $(PROGRAMS) .build_mode
+	/bin/rm -f *.o *.d $(PROGRAMS) .build_mode
 
 install:
 	@for f in $(PROGRAMS); do \
@@ -190,8 +190,6 @@ rewriter2: rewriter2.o
 gen_trc_defs: gen_trc_defs.o
 	$(CC) $(CFLAGS) -o gen_trc_defs gen_trc_defs.o ../ladr/libladr.a
 
-
-
-
+-include $(wildcard *.d)
 
 

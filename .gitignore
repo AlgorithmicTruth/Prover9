@@ -1,5 +1,6 @@
 # Build artifacts -- object files, static libraries, compiled binaries
 *.o
+*.d
 *.a
 bin/*
 !bin/.gitkeep

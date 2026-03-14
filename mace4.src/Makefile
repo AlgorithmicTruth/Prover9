@@ -70,7 +70,7 @@ else
     _BMODE = release
   endif
 endif
-CFLAGS = $(XFLAGS) $(OPTFLAGS) -Wall $(PLATFORM_FLAGS)
+CFLAGS = $(XFLAGS) $(OPTFLAGS) -Wall -MMD -MP $(PLATFORM_FLAGS)
 
 # Build mode sentinel -- auto-clean when switching debug/release.
 .build_mode: FORCE
@@ -105,17 +105,17 @@ ladr:
 mace4: libmace4.a mace4.o $(OBJECTS)
 	$(CC) $(CFLAGS) -o mace4 mace4.o libmace4.a ../ladr/libladr.a
 
-$(OBJECTS): estack.h syms.h ground.h propagate.h mstate.h msearch.h
-
 tags:
 	etags *.c ../ladr/*.c
 
 clean:
-	/bin/rm -f *.o
+	/bin/rm -f *.o *.d
 
 realclean:
-	/bin/rm -f *.o *.a mace4 .build_mode
+	/bin/rm -f *.o *.d *.a mace4 .build_mode
 
 install:
 	codesign -s - -f mace4 2>/dev/null || true
 	/bin/cp -p mace4 ../bin
+
+-include $(wildcard *.d)

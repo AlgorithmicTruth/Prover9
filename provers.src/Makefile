@@ -70,7 +70,7 @@ else
     _BMODE = release
   endif
 endif
-CFLAGS = $(XFLAGS) $(OPTFLAGS) -Wall $(PLATFORM_FLAGS)
+CFLAGS = $(XFLAGS) $(OPTFLAGS) -Wall -MMD -MP $(PLATFORM_FLAGS)
 
 # Build mode sentinel -- auto-clean when switching debug/release.
 .build_mode: FORCE
@@ -120,10 +120,10 @@ install:
 	done
 
 clean:
-	/bin/rm -f *.o
+	/bin/rm -f *.o *.d
 
 realclean:
-	/bin/rm -f *.o $(PROGRAMS) .build_mode
+	/bin/rm -f *.o *.d $(PROGRAMS) .build_mode
 
 protos:
 	util/make_protos $(OBJECTS)
@@ -168,32 +168,4 @@ mprover: mprover.o $(OBJECTS)
 iterate4: iterate4.o $(OBJECTS)
 	$(CC) $(CFLAGS) -o iterate4 iterate4.o $(OBJECTS) ../ladr/libladr.a
 
-prover9.o mprover.o iterate4.o autosketches4.o fof-prover9.o: search.h utilities.h  forward_subsume.h giv_select.h white_black.h demodulate.h actions.h index_lits.h pred_elim.h unfold.h provers.h
-
-# The rest of the file is generated automatically by util/make_dep
-
-index_lits.o:   	index_lits.h ../ladr/clock.h ../ladr/subsume.h ../ladr/di_tree.h
-
-forward_subsume.o:   	forward_subsume.h ../ladr/subsume.h ../ladr/clock.h
-
-demodulate.o:   	demodulate.h ../ladr/ladr.h
-
-pred_elim.o:   	pred_elim.h ../ladr/subsume.h ../ladr/resolve.h ../ladr/clauses.h ../ladr/clause_misc.h ../ladr/ioutil.h
-
-unfold.o:   	unfold.h ../ladr/parautil.h ../ladr/clist.h ../ladr/ioutil.h
-
-semantics.o:   	semantics.h ../ladr/interp.h ../ladr/ioutil.h
-
-giv_select.o:   	giv_select.h search-structures.h
-
-white_black.o:   	white_black.h search-structures.h
-
-actions.o:   	actions.h search-structures.h
-
-search.o:   	search.h search-structures.h semantics.h pred_elim.h demodulate.h index_lits.h forward_subsume.h unfold.h actions.h giv_select.h white_black.h utilities.h ../ladr/interp.h ../ladr/ioutil.h ../ladr/subsume.h ../ladr/resolve.h ../ladr/clauses.h ../ladr/clause_misc.h ../ladr/ioutil.h ../ladr/ladr.h ../ladr/clock.h ../ladr/subsume.h ../ladr/di_tree.h ../ladr/subsume.h ../ladr/clock.h ../ladr/parautil.h ../ladr/clist.h ../ladr/ioutil.h
-
-utilities.o:   	utilities.h search-structures.h
-
-provers.o:   	provers.h search.h search-structures.h semantics.h pred_elim.h demodulate.h index_lits.h forward_subsume.h unfold.h actions.h giv_select.h white_black.h utilities.h ../ladr/interp.h ../ladr/ioutil.h ../ladr/subsume.h ../ladr/resolve.h ../ladr/clauses.h ../ladr/clause_misc.h ../ladr/ioutil.h ../ladr/ladr.h ../ladr/clock.h ../ladr/subsume.h ../ladr/di_tree.h ../ladr/subsume.h ../ladr/clock.h ../ladr/parautil.h ../ladr/clist.h ../ladr/ioutil.h
-
-foffer.o:   	foffer.h search.h search-structures.h semantics.h pred_elim.h demodulate.h index_lits.h forward_subsume.h unfold.h actions.h giv_select.h white_black.h utilities.h ../ladr/interp.h ../ladr/ioutil.h ../ladr/subsume.h ../ladr/resolve.h ../ladr/clauses.h ../ladr/clause_misc.h ../ladr/ioutil.h ../ladr/ladr.h ../ladr/clock.h ../ladr/subsume.h ../ladr/di_tree.h ../ladr/subsume.h ../ladr/clock.h ../ladr/parautil.h ../ladr/clist.h ../ladr/ioutil.h
+-include $(wildcard *.d)
