@@ -52,11 +52,13 @@ provides a uniform interface to these and other indexing methods.
 
 typedef struct discrim * Discrim;
 
+#ifdef FAST_INDEX
 struct discrim_ht {    /* hash table for rigid child lookup */
   int cap;             /* always a power of 2 */
   int count;           /* number of entries (rigid children only) */
   Discrim e[];         /* cap entries, NULL = empty */
 };
+#endif
 
 struct discrim {       /* node in a discrimination tree */
   Discrim   next;      /* sibling */
@@ -64,9 +66,13 @@ struct discrim {       /* node in a discrimination tree */
     Discrim kids;      /* for internal nodes */
     Plist data;        /* for leaves */
   } u;
+#ifdef FAST_INDEX
   struct discrim_ht *kid_hash;  /* hash table for rigid child lookup, or NULL */
+#endif
   int symbol;          /* variable number or symbol number */
+#ifdef FAST_INDEX
   int num_kids;        /* total children count */
+#endif
   char type;           /* term type and for ac indexing type */
 };
 
@@ -109,6 +115,7 @@ void destroy_discrim_tree(Discrim d);
 
 BOOL discrim_empty(Discrim d);
 
+#ifdef FAST_INDEX
 /* Hash table helpers for rigid child lookup (used by discrimb.c) */
 
 #define DISCRIM_HASH_THRESHOLD 16
@@ -122,5 +129,6 @@ void discrim_ht_delete(struct discrim_ht *ht, int symbol);
 void discrim_ht_build(Discrim node);
 
 void discrim_ht_resize(Discrim node);
+#endif
 
 #endif  /* conditional compilation of whole file */

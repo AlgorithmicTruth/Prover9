@@ -70,11 +70,11 @@ else
     _BMODE = release
   endif
 endif
-CFLAGS = $(XFLAGS) $(OPTFLAGS) -Wall -MMD -MP $(PLATFORM_FLAGS)
+CFLAGS = $(OPTFLAGS) -Wall -MMD -MP $(PLATFORM_FLAGS) $(XFLAGS)
 
 # Build mode sentinel -- auto-clean when switching debug/release.
 .build_mode: FORCE
-	@echo "$(_BMODE)" > .build_mode.tmp
+	@echo "$(_BMODE) $(XFLAGS)" > .build_mode.tmp
 	@if [ ! -f .build_mode ] || ! cmp -s .build_mode.tmp .build_mode; then \
 	  echo "mace4.src: build mode changed to $(_BMODE), rebuilding..."; \
 	  /bin/rm -f *.o *.a; \

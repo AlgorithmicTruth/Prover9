@@ -59,8 +59,10 @@ Discrim get_discrim(void)
 /* PUBLIC */
 void free_discrim(Discrim p)
 {
+#ifdef FAST_INDEX
   if (p->kid_hash != NULL)
     free(p->kid_hash);
+#endif
   free_mem(p, PTRS_DISCRIM);
   Discrim_frees++;
 }  /* free_discrim */
@@ -284,6 +286,7 @@ BOOL discrim_empty(Discrim d)
   return (d == NULL ? TRUE : (d->u.kids == NULL ? TRUE : FALSE));
 }  /* discrim_empty */
 
+#ifdef FAST_INDEX
 /*
  *  Hash table helpers for rigid child lookup in discrimination trees.
  *  Open-addressing with linear probing, identical pattern to FPA kid_hash.
@@ -433,4 +436,5 @@ void discrim_ht_resize(Discrim node)
   free(old);
   node->kid_hash = ht;
 }  /* discrim_ht_resize */
+#endif
 
