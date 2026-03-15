@@ -212,7 +212,12 @@ void index_hint(Topform c)
   else {
     Active_hints_count++;
     Hint_id_count++;
-    c->id = Hint_id_count;  /* need IDs so that back_subsume() will work */
+    /* Keep the original id on re-index (back-demod).  Reassigning the
+       id would change the hint_age key used by AVL trees in the
+       hint_age given selection rule, making avl_delete unable to find
+       clauses that were inserted under the old id.  (BV 2016-jun-17) */
+    if (c->id == 0)
+      c->id = Hint_id_count;
     lindex_update(Hints_idx, c, INSERT);
     if (Back_demod_hints) {
       /* Do not index hints containing generic _AnyConst for back-demod.

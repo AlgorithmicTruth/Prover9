@@ -138,25 +138,25 @@ prover:
 	/bin/rm -f prover9
 	$(MAKE) prover9
 
-prover9: .build_mode prover9.o $(OBJECTS)
+prover9: .build_mode prover9.o $(OBJECTS) ../ladr/libladr.a
 	$(CC) $(CFLAGS) -o prover9 prover9.o $(OBJECTS) ../ladr/libladr.a -lm
 
-fof-prover9: fof-prover9.o $(OBJECTS)
+fof-prover9: fof-prover9.o $(OBJECTS) ../ladr/libladr.a
 	$(CC) $(CFLAGS) -o fof-prover9 fof-prover9.o $(OBJECTS) ../ladr/libladr.a -lm
 
-ladr_to_tptp: ladr_to_tptp.o $(OBJECTS)
+ladr_to_tptp: ladr_to_tptp.o $(OBJECTS) ../ladr/libladr.a
 	$(CC) $(CFLAGS) -o ladr_to_tptp ladr_to_tptp.o $(OBJECTS) ../ladr/libladr.a -lm
 
-tptp_to_ladr: tptp_to_ladr.o $(OBJECTS)
+tptp_to_ladr: tptp_to_ladr.o $(OBJECTS) ../ladr/libladr.a
 	$(CC) $(CFLAGS) -o tptp_to_ladr tptp_to_ladr.o $(OBJECTS) ../ladr/libladr.a -lm
 
-autosketches4: autosketches4.o $(OBJECTS)
+autosketches4: autosketches4.o $(OBJECTS) ../ladr/libladr.a
 	$(CC) $(CFLAGS) -o autosketches4 autosketches4.o $(OBJECTS) ../ladr/libladr.a -lm
 
-newauto: newauto.o $(OBJECTS)
+newauto: newauto.o $(OBJECTS) ../ladr/libladr.a
 	$(CC) $(CFLAGS) -o newauto newauto.o $(OBJECTS) ../ladr/libladr.a -lm
 
-newsax: newsax.o $(OBJECTS)
+newsax: newsax.o $(OBJECTS) ../ladr/libladr.a
 	$(CC) $(CFLAGS) -o newsax newsax.o $(OBJECTS) ../ladr/libladr.a -lm
 
 cgrep: cgrep.o $(OBJECTS)

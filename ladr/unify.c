@@ -1282,7 +1282,7 @@ BOOL subst_changes_term(Term t, Context c)
     }
     else {
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }

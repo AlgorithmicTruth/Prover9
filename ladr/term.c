@@ -307,7 +307,7 @@ void zap_term(Term t)
   while (top > 0) {
     Term s = stack[--top];
     int i;
-    for (i = 0; i < ARITY(s); i++)
+    for (i = ARITY(s) - 1; i >= 0; i--)
       stack[top++] = ARG(s,i);
     free_term(s);
   }
@@ -428,7 +428,7 @@ BOOL ground_term(Term t)
     Term s = stack[--top];
     if (VARIABLE(s)) return FALSE;
     int i;
-    for (i = 0; i < ARITY(s); i++)
+    for (i = ARITY(s) - 1; i >= 0; i--)
       stack[top++] = ARG(s,i);
   }
   return TRUE;
@@ -460,7 +460,7 @@ int biggest_variable(Term t)
     }
     else {
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -494,7 +494,7 @@ int term_depth(Term t)
     }
     else {
       int i;
-      for (i = 0; i < ARITY(s); i++) {
+      for (i = ARITY(s) - 1; i >= 0; i--) {
         stack[top].t = ARG(s,i); stack[top].depth = d+1; top++;
       }
     }
@@ -524,7 +524,7 @@ int symbol_count(Term t)
     Term s = stack[--top];
     count++;
     int i;
-    for (i = 0; i < ARITY(s); i++)
+    for (i = ARITY(s) - 1; i >= 0; i--)
       stack[top++] = ARG(s,i);
   }
   return count;
@@ -556,7 +556,7 @@ BOOL occurs_in(Term t1, Term t2)
     if (term_ident(t1, s))
       return TRUE;
     int i;
-    for (i = 0; i < ARITY(s); i++)
+    for (i = ARITY(s) - 1; i >= 0; i--)
       stack[top++] = ARG(s,i);
   }
   return FALSE;
@@ -944,7 +944,7 @@ int greatest_variable(Term t)
     }
     else {
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -976,7 +976,7 @@ int greatest_symnum_in_term(Term t)
       int sn = SYMNUM(s);
       if (sn > max) max = sn;
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -1005,7 +1005,7 @@ void upward_term_links(Term t, void *p)
     if (!VARIABLE(s)) {
       s->container = p;
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -1033,7 +1033,7 @@ BOOL check_upward_term_links(Term t, void *p)
     if (!VARIABLE(s)) {
       if (s->container != p) return FALSE;
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -1064,7 +1064,7 @@ int occurrences(Term t, Term target)
       n++;
     else {
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -1509,7 +1509,7 @@ I2list symbols_in_term(Term t, I2list g)
     if (!VARIABLE(s)) {
       g = multiset_add(g, SYMNUM(s));
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -1691,7 +1691,7 @@ I2list multiset_of_vars(Term t, I2list vars)
       vars = multiset_add(vars, VARNUM(s));
     else {
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -1737,7 +1737,7 @@ Plist set_of_vars(Term t, Plist vars)
     }
     else {
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -1803,7 +1803,7 @@ Ilist set_of_ivars(Term t, Ilist ivars)
     }
     else {
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -1992,7 +1992,7 @@ int symbol_occurrences(Term t, int symnum)
     if (!VARIABLE(s)) {
       if (SYMNUM(s) == symnum) n++;
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -2140,7 +2140,7 @@ BOOL contains_skolem_term(Term t)
     if (!VARIABLE(s)) {
       if (skolem_term(s)) return TRUE;
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -2167,7 +2167,7 @@ BOOL contains_skolem_function(Term t)
     if (!VARIABLE(s)) {
       if (COMPLEX(s) && skolem_term(s)) return TRUE;
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -2247,7 +2247,7 @@ BOOL symbol_in_term(int symnum, Term t)
     if (!VARIABLE(s)) {
       if (SYMNUM(s) == symnum) return TRUE;
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }
@@ -2485,7 +2485,7 @@ Plist free_vars_term(Term t, Plist vars)
     }
     else {
       int i;
-      for (i = 0; i < ARITY(s); i++)
+      for (i = ARITY(s) - 1; i >= 0; i--)
         stack[top++] = ARG(s,i);
     }
   }

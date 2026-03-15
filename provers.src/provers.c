@@ -1156,7 +1156,8 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
     }
 
     /* Enable SZS status Error output in fatal_error() for TPTP mode */
-    set_fatal_tptp_mode(TRUE, pi->problem_name);
+    if (flag(pi->options->tptp_output))
+      set_fatal_tptp_mode(TRUE, pi->problem_name);
 
     if (flag(pi->options->expand_relational_defs)) {
       Plist defs, nondefs, p;
@@ -1948,7 +1949,8 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
     }
 
     /* Enable SZS status Error output in fatal_error() for TPTP mode */
-    set_fatal_tptp_mode(TRUE, pi->problem_name);
+    if (flag(pi->options->tptp_output))
+      set_fatal_tptp_mode(TRUE, pi->problem_name);
 
     if (echo)
       print_separator(stdout, "PROCESS NON-CLAUSAL FORMULAS", TRUE);

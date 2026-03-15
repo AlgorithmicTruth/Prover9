@@ -2366,6 +2366,19 @@ void disable_to_be_disabled(void)
 
 /*************
  *
+ *   degradation_count() -- BV(2016-feb-02)
+ *
+ *   Degraded weight of c is weight(c) + degradation_count * 1000.
+ *
+ *************/
+
+static int degradation_count(Topform c)
+{
+  return (int)(c->weight) / 1000;
+}  /* degradation_count */
+
+/*************
+ *
  *   limbo_process()
  *
  *   Apply back subsumption and back demodulation to the Limbo
@@ -2448,6 +2461,11 @@ void limbo_process(BOOL pre_search)
 
     if (flag(Opt->back_subsume)) {
       Plist subsumees;
+      /* BV(2016-feb-02): degradation count tracking for weight reset */
+      int Dcount_c = degradation_count(c);
+      int Dcount_min_sos = Dcount_c;
+      int Dcount_min_not_sos = Dcount_c;
+
       clock_start(Clocks.back_subsume);
       subsumees = back_subsumption(c);
       if (subsumees != NULL)
@@ -2475,6 +2493,23 @@ void limbo_process(BOOL pre_search)
 	  continue;
 	}
 	Stats.back_subsumed++;
+
+	/* BV(2016-feb-02): when degraded hint matcher c subsumes
+	   hint matcher d, track the minimum degradation counts. */
+	if (c->matching_hint != NULL
+	    && d->matching_hint != NULL
+	    && Dcount_c > 0) {
+	  int Dcount_d = degradation_count(d);
+	  if (clist_member(d, Glob.sos)) {
+	    if (Dcount_d < Dcount_min_sos)
+	      Dcount_min_sos = Dcount_d;
+	  }
+	  else {
+	    if (Dcount_d < Dcount_min_not_sos)
+	      Dcount_min_not_sos = Dcount_d;
+	  }
+	}
+
 	if (flag(Opt->print_kept)) {
 	  if (d->matching_hint != NULL)
 	    printf("%s    %llu back subsumes hint matcher %llu.\n",
@@ -2490,6 +2525,25 @@ void limbo_process(BOOL pre_search)
 	disable_clause(d);
 	subsumees = plist_pop(subsumees);
       }
+
+      /* BV(2016-feb-02): adjust degradation of c if a subsumed hint
+	 matcher has a lower degradation count. */
+      if (Dcount_min_sos < Dcount_c || Dcount_min_not_sos < Dcount_c) {
+	c->weight = (int)(c->weight) % 1000;  /* original computed weight */
+	if (Dcount_min_sos <= Dcount_min_not_sos) {
+	  c->weight = c->weight + Dcount_min_sos * 1000;
+	  if (flag(Opt->print_given))
+	    printf("%s => %llu back subsumes a hint matcher on Sos."
+		   "  Reset weight to %.3f.\n", TPTP_PFX, c->id, c->weight);
+	}
+	else {
+	  c->weight = c->weight + Dcount_min_not_sos * 1000 + 500;
+	  if (flag(Opt->print_given))
+	    printf("%s => %llu back subsumes hint matchers not on Sos."
+		   "  Reset weight to %.3f.\n", TPTP_PFX, c->id, c->weight);
+	}
+      }
+
       clock_stop(Clocks.back_subsume);
     }
 
