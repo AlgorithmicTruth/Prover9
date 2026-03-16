@@ -73,5 +73,6 @@ void clear_checkpoint_request(void);
 void setup_timeout_signal(int seconds);
 void set_no_kill(void);
 void clear_no_kill_and_check(void);
+void set_tptp_mode_for_sig(void);
 
 #endif  /* conditional compilation of whole file */

@@ -152,6 +152,7 @@ enum {
 
   MACE_SIGINT_EXIT       = 101,
   MACE_SIGSEGV_EXIT      = 102,
+  MACE_SIGTERM_EXIT      = 103,
   MACE_CHECKPOINT_EXIT   = 107
 };
 

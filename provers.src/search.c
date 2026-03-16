@@ -767,6 +767,7 @@ char *exit_string(int code)
   case MAX_NOHINTS_EXIT: message = "max_nohints"; break;
   case SIGSEGV_EXIT:     message = "SIGSEGV";     break;
   case SIGINT_EXIT:      message = "SIGINT";      break;
+  case SIGTERM_EXIT:     message = "SIGTERM";     break;
   case CHECKPOINT_EXIT:  message = "checkpoint";  break;
   default: message = "???";
   }
@@ -802,6 +803,7 @@ char *szs_status_string(int code)
   case FATAL_EXIT:
     return "Error";
   case SIGINT_EXIT:
+  case SIGTERM_EXIT:
     return "User";
   case CHECKPOINT_EXIT:
     return "Unknown";

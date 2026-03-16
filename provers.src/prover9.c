@@ -698,6 +698,9 @@ void cores_emit_no_proof(int saved_stdout, int best_code,
     szs = "Timeout"; break;
   case MAX_MEGS_EXIT:
     szs = "MemoryOut"; break;
+  case SIGINT_EXIT:
+  case SIGTERM_EXIT:
+    szs = "User"; break;
   default:
     szs = "Error"; break;
   }
@@ -1464,6 +1467,9 @@ int main(int argc, char **argv)
     if (cmd_timeout > 0)
       setup_timeout_signal(cmd_timeout);
   }
+
+  if (tptp_mode)
+    set_tptp_mode_for_sig();  /* SZS status in signal handler */
 
   /***************** Initialize and read the input ***************************/
 

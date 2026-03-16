@@ -44,7 +44,8 @@
 
 static volatile sig_atomic_t Checkpoint_requested = 0;
 static volatile sig_atomic_t No_kill = 0;
-static volatile sig_atomic_t Pending_kill = 0;
+static volatile sig_atomic_t Pending_kill = 0;  /* 1 = SIGALRM, 2 = SIGTERM */
+static volatile sig_atomic_t Tptp_mode_for_sig = 0;
 
 /*************
  *
@@ -56,17 +57,24 @@ static volatile sig_atomic_t Pending_kill = 0;
  *   Pending_kill.  Only write() and _exit() are used (both are
  *   async-signal-safe per POSIX).
  *
+ *   SIGALRM -> "Timeout" (exit MAX_SECONDS_EXIT)
+ *   SIGTERM -> "User"    (exit SIGTERM_EXIT)
+ *
  *************/
 
 static
 void timeout_handler(int sig)
 {
   ssize_t wr;
-  (void) sig;
-  if (No_kill) { Pending_kill = 1; return; }
-  wr = write(STDOUT_FILENO, "\n% SZS status Timeout\n", 22);
-  (void) wr;
-  _exit(MAX_SECONDS_EXIT);
+  if (No_kill) { Pending_kill = (sig == SIGTERM ? 2 : 1); return; }
+  if (Tptp_mode_for_sig) {
+    if (sig == SIGTERM)
+      wr = write(STDOUT_FILENO, "\n% SZS status User\n", 19);
+    else
+      wr = write(STDOUT_FILENO, "\n% SZS status Timeout\n", 22);
+    (void) wr;
+  }
+  _exit(sig == SIGTERM ? SIGTERM_EXIT : MAX_SECONDS_EXIT);
 }  /* timeout_handler */
 
 /*************
@@ -132,13 +140,38 @@ void set_no_kill(void)
 /* PUBLIC */
 void clear_no_kill_and_check(void)
 {
+  int pk = Pending_kill;
   No_kill = 0;
-  if (Pending_kill) {
-    ssize_t wr = write(STDOUT_FILENO, "\n% SZS status Timeout\n", 22);
-    (void) wr;
+  if (pk == 2) {
+    if (Tptp_mode_for_sig) {
+      ssize_t wr = write(STDOUT_FILENO, "\n% SZS status User\n", 19);
+      (void) wr;
+    }
+    _exit(SIGTERM_EXIT);
+  }
+  else if (pk) {
+    if (Tptp_mode_for_sig) {
+      ssize_t wr = write(STDOUT_FILENO, "\n% SZS status Timeout\n", 22);
+      (void) wr;
+    }
     _exit(MAX_SECONDS_EXIT);
   }
 }  /* clear_no_kill_and_check */
+
+/*************
+ *
+ *   set_tptp_mode_for_sig()
+ *
+ *   Tell the signal handler that TPTP output mode is active,
+ *   so it can emit SZS status lines on timeout/kill.
+ *
+ *************/
+
+/* PUBLIC */
+void set_tptp_mode_for_sig(void)
+{
+  Tptp_mode_for_sig = 1;
+}  /* set_tptp_mode_for_sig */
 
 static char Help_string[] =
 "\nUsage: prover9 [-h] [-x] [-p] [-t <n>] [-m] [-r <dir>] [-f <files>]\n"
@@ -353,6 +386,7 @@ void process_command_line_args_1(struct arg_options command_opt,
 
   if (command_opt.tptp_out) {
     set_flag(prover_opt->tptp_output, FALSE);  // FALSE = no echo
+    set_tptp_mode_for_sig();
   }
 
   if (command_opt.fast_pred_elim) {
@@ -576,8 +610,10 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
     // This is done before processing magic comments so that
     // "% prover9: clear(tptp_output)." can override it.
     // -ladr_out overrides: keep native Prover9 output on TPTP input.
-    if (!opts.ladr_out)
+    if (!opts.ladr_out) {
       set_flag(pi->options->tptp_output, FALSE);  // FALSE = no echo
+      set_tptp_mode_for_sig();
+    }
     set_flag(pi->options->multi_order_trial, FALSE);  // auto-enable for TPTP
 
     // tptp_output dependencies suppress echo_input; update local echo.
@@ -1155,9 +1191,11 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
       }
     }
 
-    /* Enable SZS status Error output in fatal_error() for TPTP mode */
-    if (flag(pi->options->tptp_output))
+    /* Enable SZS status output in fatal_error() and signal handlers */
+    if (flag(pi->options->tptp_output)) {
       set_fatal_tptp_mode(TRUE, pi->problem_name);
+      set_tptp_mode_for_sig();
+    }
 
     if (flag(pi->options->expand_relational_defs)) {
       Plist defs, nondefs, p;
@@ -1948,9 +1986,11 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
       }
     }
 
-    /* Enable SZS status Error output in fatal_error() for TPTP mode */
-    if (flag(pi->options->tptp_output))
+    /* Enable SZS status output in fatal_error() and signal handlers */
+    if (flag(pi->options->tptp_output)) {
       set_fatal_tptp_mode(TRUE, pi->problem_name);
+      set_tptp_mode_for_sig();
+    }
 
     if (echo)
       print_separator(stdout, "PROCESS NON-CLAUSAL FORMULAS", TRUE);

@@ -252,6 +252,7 @@ char *exit_string(int code)
   case MAX_SEC_YES_EXIT:  message = "max_sec_yes";   break;
   case MAX_SEC_NO_EXIT:   message = "max_sec_no";    break;
   case MACE_SIGINT_EXIT:  message = "mace_sigint";   break;
+  case MACE_SIGTERM_EXIT:      message = "mace_sigterm";      break;
   case MACE_SIGSEGV_EXIT:      message = "mace_sigsegv";      break;
   case MACE_CHECKPOINT_EXIT:   message = "mace_checkpoint";   break;
   default: message = "???";
@@ -281,6 +282,7 @@ char *mace4_szs_status(int exit_code)
   case MAX_SEC_NO_EXIT:      return "Timeout";
   case MAX_MEGS_NO_EXIT:     return "MemoryOut";
   case MACE_SIGINT_EXIT:     return "User";
+  case MACE_SIGTERM_EXIT:    return "User";
   case MACE_SIGSEGV_EXIT:    return "Error";
   case MACE_CHECKPOINT_EXIT: return "User";  /* checkpoint is user-initiated */
   default:                   return "Error";

@@ -331,6 +331,7 @@ enum {
 
   SIGINT_EXIT       = 101,
   SIGSEGV_EXIT      = 102,
+  SIGTERM_EXIT      = 103,
 
   CHECKPOINT_EXIT   = 107
 };

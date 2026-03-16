@@ -77,6 +77,9 @@ void mace4_sig_handler(int condition)
     p_stats();
     mace4_exit(MACE_SIGINT_EXIT);
     break;
+  case SIGTERM:
+    mace4_exit(MACE_SIGTERM_EXIT);
+    break;
   case SIGUSR1:
     p_stats();
     fflush(stdout);
@@ -327,6 +330,7 @@ int main(int argc, char **argv)
   set_program_name(PROGRAM_NAME);   /* for conditional input */
 
   signal(SIGINT,  mace4_sig_handler);
+  signal(SIGTERM, mace4_sig_handler);
   signal(SIGUSR1, mace4_sig_handler);
   signal(SIGSEGV, mace4_sig_handler);
   signal(SIGUSR2, SIG_IGN);  /* ignore until search is ready */
