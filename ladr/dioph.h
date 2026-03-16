@@ -36,7 +36,7 @@ by itself for testing.  The command for doing so is "gcc -DSOLO dioph.c".
 /* Public definitions */
 
 #define MAX_COEF   250  /* total # of coef. from both sides */
-#define MAX_BASIS  200  /* must be <= MAX_VARS, because rows are indexed */
+#define MAX_BASIS  100  /* must be <= MAX_VARS, because rows are indexed */
 #define MAX_COMBOS 200  /* for superset-restricted AC unif. */
 
 /* End of public definitions */

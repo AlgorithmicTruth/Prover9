@@ -69,7 +69,9 @@ int symbol_count(Term t)
 
 /* Public definitions */
 
-#define MAX_VARS  500   /* max number of (distinct) variables per term */
+#ifndef MAX_VARS
+#define MAX_VARS  100   /* max number of (distinct) variables per term */
+#endif
 #define MAX_VNUM  5000  /* maximum variable ID, for array of vars */
 
 #define MAX_VAR   INT_MAX     /* max var ID that fits in sym field of term */

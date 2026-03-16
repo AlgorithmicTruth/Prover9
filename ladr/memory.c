@@ -23,7 +23,9 @@
 
 #define MALLOC_MEGS        20  /* size of blocks malloced by palloc */
 #define DEFAULT_MAX_MEGS  49152  /* 48 GB; change with set_max_megs(n) */
-#define MAX_MEM_LISTS     2500 /* number of lists of available nodes */
+#ifndef MAX_MEM_LISTS
+#define MAX_MEM_LISTS     500  /* number of lists of available nodes */
+#endif
 
 static void ** M[MAX_MEM_LISTS];
 

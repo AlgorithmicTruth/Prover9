@@ -64,8 +64,8 @@ typedef enum {
 typedef struct parajust * Parajust;
 
 struct parajust {
-  unsigned long long from_id;
-  unsigned long long into_id;
+  int from_id;
+  int into_id;
   Ilist from_pos;
   Ilist into_pos;
 };
@@ -73,7 +73,7 @@ struct parajust {
 typedef struct instancejust * Instancejust;
 
 struct instancejust {
-  unsigned long long parent_id;
+  int parent_id;
   Plist pairs;
 };
 
@@ -81,8 +81,8 @@ typedef struct ivyjust * Ivyjust;
 
 struct ivyjust {
   Just_type type;  /* input,resolve,paramod,instantiate,flip,propositional */
-  unsigned long long parent1;
-  unsigned long long parent2;
+  int parent1;
+  int parent2;
   Ilist pos1;
   Ilist pos2;
   Plist pairs;  /* for instantiate */
@@ -94,7 +94,7 @@ struct just {
   Just_type type;
   Just next;
   union {
-    unsigned long long id;
+    int id;
     Ilist lst;
     Parajust para;
     I3list demod;
