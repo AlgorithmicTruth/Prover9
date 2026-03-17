@@ -327,6 +327,8 @@ Prover_options init_prover_options(void)
   p->cl_to_trace =        init_parm("cl_to_trace",            0,      0,INT_MAX);
   p->hint_derivations =   init_parm("hint_derivations",       0,      0,INT_MAX);
   p->cores =              init_parm("cores",                  0,      0,     64);
+  p->hint_expiry =        init_parm("hint_expiry",           -1,     -1,INT_MAX);
+  p->hint_sweep_interval = init_parm("hint_sweep_interval", 1000,     1,INT_MAX);
 
   // FLOATPARMS:
   //  internal name      external name           default    min      max )
@@ -2808,6 +2810,7 @@ void make_inferences(void)
 
     Stats.given++;
     given_clause->was_given = TRUE;
+    set_hints_given_count(Stats.given);
 
     /* max_nohints: exit after N consecutive givens w/o hint match (Veroff) */
     {
@@ -5279,6 +5282,17 @@ Prover_results search(Prover_input p)
           done_with_search(CHECKPOINT_EXIT);
       }
 #endif /* !__EMSCRIPTEN__ */
+
+      /* Periodic hint expiry sweep */
+      if (parm(Opt->hint_expiry) > 0 &&
+	  Stats.given % (unsigned long long) parm(Opt->hint_sweep_interval) == 0) {
+	int expired = expire_old_hints(Stats.given,
+				       (unsigned long long) parm(Opt->hint_expiry),
+				       Glob.hints);
+	if (expired > 0)
+	  fprintf(stderr, "%% Expired %d hints at given #%llu (%d active).\n",
+		  expired, Stats.given, active_hints());
+      }
 
       // limbo_process: this applies back subsumption, back demodulation,
       // and other operations that can disable clauses.  Limbo clauses

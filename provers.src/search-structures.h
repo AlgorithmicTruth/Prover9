@@ -212,7 +212,9 @@ struct prover_options {
     sine_max_axioms,       // SInE max selected axioms (0=unlimited)
     cl_to_trace,           // trace lifecycle of clause with this ID (0 = off)
     hint_derivations,      // print derivation of matchers for hints with ID < N (0=off)
-    cores;                 // sliding-window scheduler: N concurrent children (0=off)
+    cores,                 // sliding-window scheduler: N concurrent children (0=off)
+    hint_expiry,           // expire hints not matched in N given clauses (-1=off)
+    hint_sweep_interval;   // sweep for expired hints every N given clauses
 
   // Stringparms (string options)
 

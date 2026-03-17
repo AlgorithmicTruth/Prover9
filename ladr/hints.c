@@ -37,6 +37,10 @@ static int Hint_id_count = 0;
 static int Active_hints_count = 0;
 static int Redundant_hints_count = 0;
 
+/* given-clause counter for hint expiry */
+
+static unsigned long long Current_given_for_hints = 0;
+
 /*************
  *
  *   init_hints()
@@ -336,6 +340,7 @@ void keep_hint_matcher(Topform c)
 {
   Topform hint = c->matching_hint;
   hint->weight++;
+  hint->last_matched_given = Current_given_for_hints;
 }  /* keep_hint_matcher */
 
 /*************
@@ -371,3 +376,69 @@ void back_demod_hints(Topform demod, int type, BOOL lex_order_vars)
     }
   }
 }  /* back_demod_hints */
+
+/*************
+ *
+ *   set_hints_given_count()
+ *
+ *************/
+
+/* PUBLIC */
+void set_hints_given_count(unsigned long long n)
+{
+  Current_given_for_hints = n;
+}  /* set_hints_given_count */
+
+/*************
+ *
+ *   expire_old_hints()
+ *
+ *   Remove hints that were matched but not recently.
+ *   Never-matched hints (weight == 0) are kept.
+ *   Returns the number of expired hints.
+ *
+ *************/
+
+/* PUBLIC */
+int expire_old_hints(unsigned long long current_given,
+		     unsigned long long expiry_distance,
+		     Clist hint_list)
+{
+  Plist to_expire = NULL;
+  Clist_pos p;
+  int expired_count = 0;
+  Plist q;
+
+  /* Pass 1: collect expired hints */
+  for (p = hint_list->first; p; p = p->next) {
+    Topform c = p->c;
+    if (c->weight > 0 &&
+	current_given - c->last_matched_given > expiry_distance)
+      to_expire = plist_prepend(to_expire, c);
+  }
+
+  /* Pass 2: unindex and remove from clist.
+     Do NOT zap the topform -- kept clauses hold matching_hint pointers
+     to these hints, and the hint_age AVL tree uses matching_hint->id
+     as a comparison key.  Freeing the hint would create dangling pointers. */
+  for (q = to_expire; q; q = q->next) {
+    Topform c = q->v;
+    unindex_hint(c);
+    clist_remove(c, hint_list);
+    expired_count++;
+  }
+  zap_plist(to_expire);
+  return expired_count;
+}  /* expire_old_hints */
+
+/*************
+ *
+ *   active_hints()
+ *
+ *************/
+
+/* PUBLIC */
+int active_hints(void)
+{
+  return Active_hints_count;
+}  /* active_hints */

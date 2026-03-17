@@ -61,6 +61,7 @@ struct topform {
   double           weight;
   char             *compressed;     /* if nonNULL, a compressed form */
   Topform          matching_hint;   /* hint that matches clause, if any */
+  unsigned long long last_matched_given;  /* given count at last hint match */
 
   /* for clauses only */
 

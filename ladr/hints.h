@@ -55,4 +55,12 @@ void keep_hint_matcher(Topform c);
 
 void back_demod_hints(Topform demod, int type, BOOL lex_order_vars);
 
+void set_hints_given_count(unsigned long long n);
+
+int expire_old_hints(unsigned long long current_given,
+		     unsigned long long expiry_distance,
+		     Clist hint_list);
+
+int active_hints(void);
+
 #endif  /* conditional compilation of whole file */
