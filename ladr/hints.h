@@ -59,6 +59,7 @@ void set_hints_given_count(unsigned long long n);
 
 int expire_old_hints(unsigned long long current_given,
 		     unsigned long long expiry_distance,
+		     int min_matches,
 		     Clist hint_list);
 
 int active_hints(void);

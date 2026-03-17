@@ -402,6 +402,7 @@ void set_hints_given_count(unsigned long long n)
 /* PUBLIC */
 int expire_old_hints(unsigned long long current_given,
 		     unsigned long long expiry_distance,
+		     int min_matches,
 		     Clist hint_list)
 {
   Plist to_expire = NULL;
@@ -412,7 +413,7 @@ int expire_old_hints(unsigned long long current_given,
   /* Pass 1: collect expired hints */
   for (p = hint_list->first; p; p = p->next) {
     Topform c = p->c;
-    if (c->weight > 0 &&
+    if (c->weight >= min_matches &&
 	current_given - c->last_matched_given > expiry_distance)
       to_expire = plist_prepend(to_expire, c);
   }

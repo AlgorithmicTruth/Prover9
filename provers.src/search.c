@@ -329,6 +329,7 @@ Prover_options init_prover_options(void)
   p->cores =              init_parm("cores",                  0,      0,     64);
   p->hint_expiry =        init_parm("hint_expiry",           -1,     -1,INT_MAX);
   p->hint_sweep_interval = init_parm("hint_sweep_interval", 1000,     1,INT_MAX);
+  p->hint_expiry_min =    init_parm("hint_expiry_min",       1,      1,INT_MAX);
 
   // FLOATPARMS:
   //  internal name      external name           default    min      max )
@@ -5288,6 +5289,7 @@ Prover_results search(Prover_input p)
 	  Stats.given % (unsigned long long) parm(Opt->hint_sweep_interval) == 0) {
 	int expired = expire_old_hints(Stats.given,
 				       (unsigned long long) parm(Opt->hint_expiry),
+				       parm(Opt->hint_expiry_min),
 				       Glob.hints);
 	if (expired > 0)
 	  fprintf(stderr, "%% Expired %d hints at given #%llu (%d active).\n",

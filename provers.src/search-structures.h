@@ -214,7 +214,8 @@ struct prover_options {
     hint_derivations,      // print derivation of matchers for hints with ID < N (0=off)
     cores,                 // sliding-window scheduler: N concurrent children (0=off)
     hint_expiry,           // expire hints not matched in N given clauses (-1=off)
-    hint_sweep_interval;   // sweep for expired hints every N given clauses
+    hint_sweep_interval,   // sweep for expired hints every N given clauses
+    hint_expiry_min;       // min match count before hint is eligible for expiry
 
   // Stringparms (string options)
 
