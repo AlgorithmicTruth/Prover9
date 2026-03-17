@@ -443,8 +443,11 @@ void process_command_line_args_2(struct arg_options command_opt,
 static
 void prover_sig_handler(int condition)
 {
-  printf("\nProver catching signal %d.\n", condition);
-  fflush(stdout);
+  if (condition == SIGUSR2)
+    fprintf(stderr, "\nCheckpoint requested.\n");
+  else
+    printf("\nProver catching signal %d.\n", condition);
+  fflush(condition == SIGUSR2 ? stderr : stdout);
   if (condition == SIGSEGV || condition == SIGBUS) {
 #ifdef HAVE_BACKTRACE
     /* Print backtrace for crash debugging */

@@ -5224,6 +5224,8 @@ Prover_results search(Prover_input p)
                   Stats.given);
           fflush(stderr);
           write_checkpoint();
+          fprintf(stderr, "\nCheckpoint saved at given #%llu.\n", Stats.given);
+          fflush(stderr);
           Last_auto_ckpt_time = now;
           // Reconstruct the directory name (same format as write_checkpoint)
           snprintf(auto_dir, sizeof(auto_dir),
@@ -5238,6 +5240,8 @@ Prover_results search(Prover_input p)
                 Stats.given);
         fflush(stderr);
         write_checkpoint();
+        fprintf(stderr, "\nCheckpoint saved at given #%llu.\n", Stats.given);
+        fflush(stderr);
         clear_checkpoint_request();
         if (flag(Opt->checkpoint_exit))
           done_with_search(CHECKPOINT_EXIT);
