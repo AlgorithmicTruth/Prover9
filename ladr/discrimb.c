@@ -363,7 +363,9 @@ Discrim discrim_bind_insert_rec(Term t, Discrim d)
 	  d1->u.kids = d2;
 	else
 	  prev->next = d2;
+#ifdef FAST_INDEX
 	d1->num_kids++;
+#endif
 	d1 = d2;
       }
       else {
@@ -373,6 +375,7 @@ Discrim discrim_bind_insert_rec(Term t, Discrim d)
     else {  /* constant || complex */
       symbol = SYMNUM(t);
 
+#ifdef FAST_INDEX
       if (d1->kid_hash != NULL) {
 	/* Hash table path: O(1) lookup for rigid child */
 	Discrim dk = discrim_ht_lookup(d1->kid_hash, symbol);
@@ -401,6 +404,7 @@ Discrim discrim_bind_insert_rec(Term t, Discrim d)
 	}
       }
       else
+#endif
       {
 	/* Linear scan path */
 	Discrim dk = d1->u.kids;
@@ -429,9 +433,11 @@ Discrim discrim_bind_insert_rec(Term t, Discrim d)
 	    d1->u.kids = d2;
 	  else
 	    prev->next = d2;
+#ifdef FAST_INDEX
 	  d1->num_kids++;
 	  if (d1->num_kids >= DISCRIM_HASH_THRESHOLD)
 	    discrim_ht_build(d1);
+#endif
 	}
 
 	d1 = dk;
@@ -548,6 +554,7 @@ Discrim discrim_bind_end(Term t, Discrim d, Plist *path_p)
       Discrim dk;
       sym = SYMNUM(t);
 
+#ifdef FAST_INDEX
       if (d1->kid_hash != NULL) {
 	/* Hash table path: O(1) lookup */
 	dk = discrim_ht_lookup(d1->kid_hash, sym);
@@ -563,6 +570,7 @@ Discrim discrim_bind_end(Term t, Discrim d, Plist *path_p)
 	d1 = dk;
       }
       else
+#endif
       {
 	/* Linear scan path */
 	dk = d1->u.kids;
@@ -658,6 +666,7 @@ void discrim_bind_delete(Term t, Discrim root, void *object)
 	parent->u.kids = d2->next;
       else
 	d3->next = d2->next;
+#ifdef FAST_INDEX
       /* Maintain hash table and child count.
        * Do NOT free the hash table when count drops low: once built,
        * inserts prepend rigids (unsorted), so the linked list is no
@@ -669,6 +678,7 @@ void discrim_bind_delete(Term t, Discrim root, void *object)
 	parent->kid_hash->count--;
       }
       parent->num_kids--;
+#endif
       free_discrim(d2);
       end = parent;
     }
@@ -775,7 +785,9 @@ Plist discrim_bind_retrieve_leaf(Term t_in, Discrim root,
   Flat2 f, f1, f2, f_save;
   Term t = NULL;
   Discrim d = NULL;
+#ifdef FAST_INDEX
   Discrim d_parent = NULL;  /* parent of current d (for kid_hash access) */
+#endif
   int symbol = 0;
   int match = 0;
   int bound = 0;
@@ -787,7 +799,9 @@ Plist discrim_bind_retrieve_leaf(Term t_in, Discrim root,
 
   if (t != NULL) {  /* if first call */
     d = root->u.kids;
+#ifdef FAST_INDEX
     d_parent = root;
+#endif
     if (d != NULL) {
       f = get_flat2();
       f->t = t;
@@ -819,7 +833,9 @@ Plist discrim_bind_retrieve_leaf(Term t_in, Discrim root,
 	}
 	d = f->alternatives;
 	f->alternatives = NULL;
+#ifdef FAST_INDEX
 	d_parent = NULL;  /* parent unknown during backtracking */
+#endif
 	status = GO;
       }
       else
@@ -853,6 +869,7 @@ Plist discrim_bind_retrieve_leaf(Term t_in, Discrim root,
 	status = BACKTRACK;
       else {
 	symbol = SYMNUM(f->t);
+#ifdef FAST_INDEX
 	if (d_parent != NULL && d_parent->kid_hash != NULL) {
 	  /* Hash table path: O(1) lookup for rigid child */
 	  d = discrim_ht_lookup(d_parent->kid_hash, symbol);
@@ -860,6 +877,7 @@ Plist discrim_bind_retrieve_leaf(Term t_in, Discrim root,
 	    status = BACKTRACK;
 	}
 	else
+#endif
 	{
 	  /* Linear scan path */
 	  while (d && d->symbol < symbol)
@@ -897,7 +915,9 @@ Plist discrim_bind_retrieve_leaf(Term t_in, Discrim root,
       if (status == GO) {
 	if (f->next) {
 	  f = f->next;
+#ifdef FAST_INDEX
 	  d_parent = d;
+#endif
 	  d = d->u.kids;
 	}
 	else

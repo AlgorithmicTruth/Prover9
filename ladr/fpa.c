@@ -34,6 +34,7 @@ static unsigned long long Intersect_merge_ops = 0;
 
 typedef struct fpa_trie * Fpa_trie;
 
+#ifdef FAST_INDEX
 /*
  * Hash table for fast child lookup.  Stored as a struct with a flexible
  * array of Fpa_trie pointers (open addressing, linear probing).
@@ -45,13 +46,18 @@ struct kid_ht {
 };
 
 #define KID_HASH_THRESHOLD 16  /* build hash table when num_kids reaches this */
+#endif
 
 struct fpa_trie {
   Fpa_trie   parent, next, kids;
   int        label;
+#ifdef FAST_INDEX
   int        num_kids;          /* number of children in kids list */
+#endif
   Fpa_list   terms;
+#ifdef FAST_INDEX
   struct kid_ht *kid_hash;      /* hash table for child lookup, or NULL */
+#endif
 #ifdef FPA_DEBUG
   Ilist      path;
 #endif
@@ -127,12 +133,15 @@ Fpa_trie get_fpa_trie(void)
 static
 void free_fpa_trie(Fpa_trie p)
 {
+#ifdef FAST_INDEX
   if (p->kid_hash != NULL)
     free(p->kid_hash);
+#endif
   free_mem(p, PTRS_FPA_TRIE);
   Fpa_trie_frees++;
 }  /* free_fpa_trie */
 
+#ifdef FAST_INDEX
 /*
  * Hash table helpers for child lookup (open addressing, linear probing).
  * Capacity is always a power of 2.  NULL entry = empty.
@@ -244,6 +253,7 @@ void kid_hash_resize(Fpa_trie node)
   free(old);
   node->kid_hash = ht;
 }  /* kid_hash_resize */
+#endif
 
 /*************
  *
@@ -543,6 +553,7 @@ Fpa_trie fpa_trie_member_insert(Fpa_trie node, Ilist path)
     int val = path->i;
     Fpa_trie found = NULL;
 
+#ifdef FAST_INDEX
     if (node->kid_hash != NULL) {
       /* Fast path: hash table lookup O(1) */
       found = kid_hash_lookup(node->kid_hash, val);
@@ -562,6 +573,7 @@ Fpa_trie fpa_trie_member_insert(Fpa_trie node, Ilist path)
       }
     }
     else
+#endif
     {
       /* Linear scan */
       Fpa_trie curr = node->kids;
@@ -579,10 +591,12 @@ Fpa_trie fpa_trie_member_insert(Fpa_trie node, Ilist path)
 	new->label = val;
 	new->next = node->kids;
 	node->kids = new;
+#ifdef FAST_INDEX
 	node->num_kids++;
 	/* Build hash table if threshold reached */
 	if (node->num_kids >= KID_HASH_THRESHOLD)
 	  kid_hash_build(node);
+#endif
 	found = new;
       }
     }
@@ -607,10 +621,12 @@ Fpa_trie fpa_trie_member(Fpa_trie node, Ilist path)
     int val = path->i;
     Fpa_trie found;
 
+#ifdef FAST_INDEX
     if (node->kid_hash != NULL) {
       found = kid_hash_lookup(node->kid_hash, val);
     }
     else
+#endif
     {
       Fpa_trie curr;
       found = NULL;
@@ -664,6 +680,7 @@ void fpa_trie_possible_delete(Fpa_trie node)
 	p = p->next;
       p->next = node->next;
     }
+#ifdef FAST_INDEX
     /* Remove from parent's hash table if present */
     if (parent->kid_hash != NULL)
       kid_hash_delete(parent->kid_hash, node->label);
@@ -673,6 +690,7 @@ void fpa_trie_possible_delete(Fpa_trie node)
       free(parent->kid_hash);
       parent->kid_hash = NULL;
     }
+#endif
     if (nfree >= 1000)
       fatal_error("fpa_trie_possible_delete: stack overflow");
     to_free[nfree++] = node;
