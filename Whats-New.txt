@@ -1,9 +1,9 @@
 =============================================
-What's New in LADR-2026-3E
+What's New in LADR-2026-3J
 =============================================
 
 Summary of changes from LADR-2009-11A (November 2009) to
-LADR-2026-3E (March 2026).
+LADR-2026-3J (March 2026).
 
 Development by Jeffrey Machado and Larry Lesyna, 2026.
 
@@ -187,21 +187,23 @@ in seconds.
 Performance Improvements
 ========================
 
-Hash-Indexed Discrimination Trees
-...................................
+Hash-Indexed Discrimination Trees (optional)
+..............................................
 
-Discrimination tree child lookup changed from O(N) sorted linked
-list to O(1) hash table for nodes with 16+ children. Eliminates
-the O(N^2) bottleneck with 40,000+ Skolem constants. Affects
-forward demodulation, forward subsumption, and unit deletion.
+Optional hash table child lookup for discrimination tree nodes with
+16+ children. Changes O(N) sorted linked list to O(1) hash table.
+Eliminates the O(N^2) bottleneck with 40,000+ Skolem constants.
+Affects forward demodulation, forward subsumption, and unit deletion.
+Opt in with: make all XFLAGS="-DFAST_INDEX"
 
 
-Hash-Indexed FPA Tries
-........................
+Hash-Indexed FPA Tries (optional)
+..................................
 
-FPA (Filtering/Path-indexing for Atoms) trie child insertion changed
-from O(N) sorted linked list to O(1) hash table. Eliminates the
-O(N^2) bottleneck in literal indexing with large symbol counts.
+Optional hash table child insertion for FPA (Filtering/Path-indexing
+for Atoms) trie nodes. Changes O(N) sorted linked list to O(1) hash
+table. Eliminates the O(N^2) bottleneck in literal indexing with
+large symbol counts. Opt in with: make all XFLAGS="-DFAST_INDEX"
 
 
 Iterative Algorithms
