@@ -28,8 +28,13 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#ifndef __EMSCRIPTEN__
 #include <sys/wait.h>
+#endif
 #include <unistd.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 #include <float.h>
 #include <math.h>
 #include <setjmp.h>  /* Yikes! */
@@ -48,6 +53,10 @@ static struct prover_clocks Clocks;      // Prover9 clocks
 
 /* Progress callback for shared-memory IPC (set by -cores scheduler) */
 static Search_progress_fn Progress_callback = NULL;
+
+#ifdef __EMSCRIPTEN__
+static double Wasm_deadline_ms = 0;
+#endif
 
 /* "% " prefix for diagnostic output in TPTP mode (makes it a TPTP comment) */
 #define TPTP_PFX  (Opt && flag(Opt->tptp_output) ? "% " : "")
@@ -243,7 +252,11 @@ Prover_options init_prover_options(void)
   p->max_given =        init_parm("max_given",            -1,     -1,INT_MAX);
   p->max_kept =         init_parm("max_kept",             -1,     -1,INT_MAX);
   p->max_proofs =       init_parm("max_proofs",            1,     -1,INT_MAX);
+#ifdef __EMSCRIPTEN__
+  p->max_megs =         init_parm("max_megs",           2048,     -1,   4096);
+#else
   p->max_megs =         init_parm("max_megs",          49152,     -1,INT_MAX);
+#endif
   p->cnf_clause_limit = init_parm("cnf_clause_limit",      0,      0,INT_MAX);
   p->definitional_cnf = init_parm("definitional_cnf",      0,      0,INT_MAX);
   p->max_seconds =      init_parm("max_seconds",          -1,     -1,INT_MAX);
@@ -5049,6 +5062,15 @@ Prover_results search(Prover_input p)
     // Arm wall-clock timeout via SIGALRM (replaces polling in hot loop)
     setup_timeout_signal(parm(Opt->max_seconds));
 
+#ifdef __EMSCRIPTEN__
+    {
+      int wasm_max_sec = parm(Opt->max_seconds);
+      Wasm_deadline_ms = (wasm_max_sec > 0)
+        ? emscripten_get_now() + wasm_max_sec * 1000.0
+        : 0;
+    }
+#endif
+
     // Enable comma formatting for statistics if requested
     if (flag(Opt->comma_stats))
       set_comma_formatting(TRUE);
@@ -5209,11 +5231,17 @@ Prover_results search(Prover_input p)
 
       make_inferences();
 
+#ifdef __EMSCRIPTEN__
+      if (Wasm_deadline_ms > 0 && emscripten_get_now() > Wasm_deadline_ms)
+        done_with_search(MAX_SECONDS_EXIT);
+#endif
+
       if (Progress_callback && Stats.given % 100 == 0)
         Progress_callback(STAGE_SEARCHING, (int) Stats.given, (int) Stats.kept,
                           (int) Stats.sos_size, (int) Stats.usable_size,
                           (int) megs_malloced());
 
+#ifndef __EMSCRIPTEN__
       // Check for periodic automatic checkpoint
       if (parm(Opt->checkpoint_minutes) > 0) {
         time_t now = time(NULL);
@@ -5246,6 +5274,7 @@ Prover_results search(Prover_input p)
         if (flag(Opt->checkpoint_exit))
           done_with_search(CHECKPOINT_EXIT);
       }
+#endif /* !__EMSCRIPTEN__ */
 
       // limbo_process: this applies back subsumption, back demodulation,
       // and other operations that can disable clauses.  Limbo clauses
@@ -5268,6 +5297,8 @@ Prover_results search(Prover_input p)
     return collect_prover_results(p->xproofs);
   }
 }  /* search */
+
+#ifndef __EMSCRIPTEN__
 
 /*************
  *
@@ -5518,3 +5549,5 @@ Prover_results forking_search(Prover_input input)
     return results;
   }  /* end of parent code */
 }  /* forking_search */
+
+#endif /* !__EMSCRIPTEN__ */

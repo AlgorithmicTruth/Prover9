@@ -1,0 +1,55 @@
+# Makefile.wasm -- Compile Prover9 to WebAssembly via Emscripten
+#
+# Usage:
+#   make -f Makefile.wasm          # build web/prover9.js + web/prover9.wasm
+#   make -f Makefile.wasm clean    # remove WASM build artifacts
+#
+# Requires: emcc (Emscripten) on PATH.
+
+EMCC = emcc
+
+CFLAGS = -O2 -Wall -DPRIMITIVE_ENVIRONMENT
+
+LDFLAGS = -sALLOW_MEMORY_GROWTH=1 \
+          -sMAXIMUM_MEMORY=4GB \
+          -sSTACK_SIZE=1048576 \
+          -sMODULARIZE=1 \
+          -sEXPORT_NAME="Prover9Module" \
+          -sINVOKE_RUN=0 \
+          -sEXIT_RUNTIME=1 \
+          -sEXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
+          -sEXPORTED_FUNCTIONS='["_main"]'
+
+# LADR library sources (exclude test.c which has its own main)
+LADR_SRC = $(filter-out ladr/test.c, $(wildcard ladr/*.c))
+
+# Prover9 sources (only the ones needed for the prover9 binary)
+PROVER_SRC = provers.src/prover9.c \
+             provers.src/search.c \
+             provers.src/provers.c \
+             provers.src/index_lits.c \
+             provers.src/forward_subsume.c \
+             provers.src/demodulate.c \
+             provers.src/pred_elim.c \
+             provers.src/unfold.c \
+             provers.src/semantics.c \
+             provers.src/giv_select.c \
+             provers.src/white_black.c \
+             provers.src/actions.c \
+             provers.src/utilities.c \
+             provers.src/foffer.c \
+             provers.src/features.c \
+             provers.src/dtree.c
+
+ALL_SRC = $(LADR_SRC) $(PROVER_SRC)
+
+.PHONY: wasm clean
+
+wasm: web/prover9.js
+
+web/prover9.js: $(ALL_SRC)
+	@mkdir -p web
+	$(EMCC) $(CFLAGS) $(LDFLAGS) -o web/prover9.js $(ALL_SRC) -lm
+
+clean:
+	rm -f web/prover9.js web/prover9.wasm

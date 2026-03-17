@@ -23,6 +23,7 @@
 #include "../ladr/sine.h"
 
 #include <unistd.h>  /* for getopt */
+#ifndef __EMSCRIPTEN__
 #include <signal.h>
 #include <sys/time.h>  /* for setitimer */
 
@@ -39,13 +40,29 @@
 #  include <execinfo.h>
 #  define HAVE_BACKTRACE 1
 #endif
+#endif /* !__EMSCRIPTEN__ */
 
 /* Private definitions and types */
 
+#ifndef __EMSCRIPTEN__
 static volatile sig_atomic_t Checkpoint_requested = 0;
 static volatile sig_atomic_t No_kill = 0;
 static volatile sig_atomic_t Pending_kill = 0;  /* 1 = SIGALRM, 2 = SIGTERM */
 static volatile sig_atomic_t Tptp_mode_for_sig = 0;
+#endif
+
+#ifdef __EMSCRIPTEN__
+/* WASM stubs: no signals, no process control */
+void setup_timeout_signal(int seconds) { (void)seconds; }
+void set_no_kill(void) { }
+void clear_no_kill_and_check(void) { }
+void set_tptp_mode_for_sig(void) { }
+void enable_sigusr1_report(void) { }
+void enable_sigusr2_checkpoint(void) { }
+BOOL checkpoint_requested(void) { return FALSE; }
+void clear_checkpoint_request(void) { }
+
+#else /* native signal-based code */
 
 /*************
  *
@@ -172,6 +189,8 @@ void set_tptp_mode_for_sig(void)
 {
   Tptp_mode_for_sig = 1;
 }  /* set_tptp_mode_for_sig */
+
+#endif /* __EMSCRIPTEN__ stubs vs native signal code */
 
 static char Help_string[] =
 "\nUsage: prover9 [-h] [-x] [-p] [-t <n>] [-m] [-r <dir>] [-f <files>]\n"
@@ -434,6 +453,8 @@ void process_command_line_args_2(struct arg_options command_opt,
 
 }  /* process_command_line_args_2 */
 
+#ifndef __EMSCRIPTEN__
+
 /*************
  *
  *   prover_sig_handler()
@@ -538,6 +559,8 @@ void clear_checkpoint_request(void)
   Checkpoint_requested = 0;
 }  /* clear_checkpoint_request */
 
+#endif /* !__EMSCRIPTEN__ */
+
 /*************
  *
  *   std_prover_init_and_input()
@@ -567,6 +590,7 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
 
   init_prover_attributes();
 
+#ifndef __EMSCRIPTEN__
   /* Set up alternate signal stack so SIGSEGV/SIGBUS from stack overflow
      can still run the signal handler. */
   {
@@ -594,6 +618,7 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
   /* Register SIGTERM handler early so fork children inherit it.
      No timer armed yet -- just the handler for graceful shutdown. */
   setup_timeout_signal(0);
+#endif /* !__EMSCRIPTEN__ */
 
   if (opts.tptp_mode) {
     /*=========================================================================
@@ -1355,6 +1380,7 @@ Prover_scan_result std_prover_init_and_scan(int argc, char **argv)
 
   init_prover_attributes();
 
+#ifndef __EMSCRIPTEN__
   /* Set up alternate signal stack */
   {
     static char alt_stack_mem[SIGSTKSZ];
@@ -1379,6 +1405,7 @@ Prover_scan_result std_prover_init_and_scan(int argc, char **argv)
 
   /* Register SIGTERM handler early so fork children inherit it. */
   setup_timeout_signal(0);
+#endif /* !__EMSCRIPTEN__ */
 
   process_command_line_args_1(opts, options);
 

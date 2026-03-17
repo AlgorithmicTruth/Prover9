@@ -30,6 +30,7 @@
 #include "dtree.h"
 #include "strategy_config.h"
 
+#ifndef __EMSCRIPTEN__
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/time.h>
@@ -40,6 +41,11 @@
 #endif
 #include <signal.h>
 #include <fcntl.h>
+#endif /* !__EMSCRIPTEN__ */
+
+#ifndef __EMSCRIPTEN__
+/* Everything from here to cores_from_scan() uses fork/mmap/signals
+   which are unavailable in WebAssembly.  WASM mode runs single-strategy. */
 
 /*************
  *
@@ -1338,6 +1344,8 @@ void cores_from_scan(Prover_scan_result psr, const short *ml_ranking,
   /* Does not return */
 }  /* cores_from_scan */
 
+#endif /* !__EMSCRIPTEN__ */
+
 /*************
  *
  *    main -- basic prover
@@ -1352,13 +1360,16 @@ int main(int argc, char **argv)
   BOOL tptp_mode = FALSE;
   BOOL nosine = FALSE;
   BOOL nomem = FALSE;
+#ifndef __EMSCRIPTEN__
   int force_strategy = -1;  /* -strategy N: force portfolio index */
   int max_strategies = -1;  /* -strategies N: cap Phase 1 breadth */
   int slice_sec = -1;       /* -slice N: per-child time slice override */
+#endif
 
   /* Save original command line before any argv mutation. */
   saved_command = build_command_string(argc, argv);
 
+#ifndef __EMSCRIPTEN__
   /* Pre-scan for -strategy/-strategies N (neutralizes argv entries) */
   {
     int i;
@@ -1391,6 +1402,7 @@ int main(int argc, char **argv)
       }
     }
   }
+#endif
 
   /* Quick pre-scan for TPTP indicators to decide banner format.
      -ladr_out overrides: use native banner even with TPTP input. */
@@ -1472,6 +1484,20 @@ int main(int argc, char **argv)
     set_tptp_mode_for_sig();  /* SZS status in signal handler */
 
   /***************** Initialize and read the input ***************************/
+
+#ifdef __EMSCRIPTEN__
+  /* WASM mode: no fork/cores/strategy scheduling.
+     Use std_prover_init_and_input for both TPTP and LADR. */
+  input = std_prover_init_and_input(argc, argv, TRUE, TRUE, KILL_UNKNOWN);
+
+  if (nosine) {
+    assign_parm(input->options->sine, 0, FALSE);
+    clear_flag(input->options->multi_order_trial, FALSE);
+  }
+  if (nomem)
+    disable_max_megs();
+
+#else /* native */
 
   if (tptp_mode) {
     /*=======================================================================
@@ -1580,6 +1606,8 @@ int main(int argc, char **argv)
       cores_search(input, NULL, 0, max_strategies, slice_sec);
     }
   }
+
+#endif /* __EMSCRIPTEN__ */
 
   /***************** Echo effective options to stderr (DEBUG only) ************/
 

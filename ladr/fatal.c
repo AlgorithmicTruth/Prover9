@@ -38,7 +38,9 @@ Send the bell character '\007' to a file.
 /* PUBLIC */
 void bell(FILE *fp)
 {
+#ifndef __EMSCRIPTEN__
   fprintf(fp, "%c", '\007');
+#endif
 }  /* bell */
 
 /*************
