@@ -3934,6 +3934,8 @@ static void remove_checkpoint_dir(const char *path)
   rmdir(path);
 }  /* remove_checkpoint_dir */
 
+#ifndef PRIMITIVE_ENVIRONMENT
+
 /*************
  *
  *   record_auto_checkpoint()
@@ -4470,6 +4472,8 @@ void write_checkpoint(void)
     fflush(stdout);
   }
 }  /* write_checkpoint */
+
+#endif /* !PRIMITIVE_ENVIRONMENT */
 
 /*************
  *
