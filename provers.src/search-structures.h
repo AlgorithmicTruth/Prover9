@@ -215,7 +215,8 @@ struct prover_options {
     cores,                 // sliding-window scheduler: N concurrent children (0=off)
     hint_expiry,           // expire hints not matched in N given clauses (-1=off)
     hint_sweep_interval,   // sweep for expired hints every N given clauses
-    hint_expiry_min;       // min match count before hint is eligible for expiry
+    hint_expiry_min,       // min match count before hint is eligible for expiry
+    hints_fpa_depth;       // FPA index depth for hints (default 10)
 
   // Stringparms (string options)
 

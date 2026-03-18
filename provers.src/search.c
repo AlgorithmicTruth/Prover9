@@ -330,6 +330,7 @@ Prover_options init_prover_options(void)
   p->hint_expiry =        init_parm("hint_expiry",           -1,     -1,INT_MAX);
   p->hint_sweep_interval = init_parm("hint_sweep_interval", 1000,     1,INT_MAX);
   p->hint_expiry_min =    init_parm("hint_expiry_min",       1,      1,INT_MAX);
+  p->hints_fpa_depth =    init_parm("hints_fpa_depth",      10,      1,    100);
 
   // FLOATPARMS:
   //  internal name      external name           default    min      max )
@@ -751,6 +752,9 @@ void fprint_all_stats(FILE *fp, char *stats_level)
   fprint_prover_stats(fp, Stats, stats_level);
 
   fprint_prover_clocks(fp, Clocks);
+
+  if (!clist_empty(Glob.hints))
+    print_hint_match_stats(fp, Glob.hints);
 
   if (str_ident(stats_level, "all")) {
     print_memory_stats(fp);
@@ -3355,6 +3359,7 @@ void index_and_process_initial_clauses(void)
   init_hints(ORDINARY_UNIF, Att.bsub_hint_wt,
 	     flag(Opt->collect_hint_labels),
 	     flag(Opt->back_demod_hints),
+	     parm(Opt->hints_fpa_depth),
 	     demodulate_clause);
   init_semantics(Glob.interps, Clocks.semantics,
 		 stringparm1(Opt->multiple_interps),
@@ -4905,6 +4910,7 @@ void resume_index_clauses(void)
   init_hints(ORDINARY_UNIF, Att.bsub_hint_wt,
              flag(Opt->collect_hint_labels),
              flag(Opt->back_demod_hints),
+             parm(Opt->hints_fpa_depth),
              demodulate_clause);
   init_semantics(Glob.interps, Clocks.semantics,
                  stringparm1(Opt->multiple_interps),

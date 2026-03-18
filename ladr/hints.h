@@ -37,6 +37,7 @@ void init_hints(Uniftype utype,
 		int bsub_wt_attr,
 		BOOL collect_labels,
 		BOOL back_demod_hints,
+		int fpa_depth,
 		void (*demod_proc) (Topform, int, int, BOOL, BOOL));
 
 void done_with_hints(void);
@@ -63,5 +64,7 @@ int expire_old_hints(unsigned long long current_given,
 		     Clist hint_list);
 
 int active_hints(void);
+
+void print_hint_match_stats(FILE *fp, Clist hint_list);
 
 #endif  /* conditional compilation of whole file */

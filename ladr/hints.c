@@ -41,6 +41,16 @@ static int Redundant_hints_count = 0;
 
 static unsigned long long Current_given_for_hints = 0;
 
+/* Re-match delta histogram: delta = current_given - last_matched_given.
+   Only recorded on 2nd+ match (weight > 0 before increment). */
+
+#define DELTA_BUCKETS 16
+static int Delta_bucket[DELTA_BUCKETS];  /* initialized to 0 */
+static int Delta_total = 0;
+static unsigned long long Delta_min = 0;
+static unsigned long long Delta_max = 0;
+static double Delta_sum = 0;
+
 /*************
  *
  *   init_hints()
@@ -55,15 +65,16 @@ void init_hints(Uniftype utype,
 		int bsub_wt_attr,
 		BOOL collect_labels,
 		BOOL back_demod_hints,
+		int fpa_depth,
 		void (*demod_proc) (Topform, int, int, BOOL, BOOL))
 {
   Bsub_wt_attr = bsub_wt_attr;
   Collect_labels = collect_labels;
   Back_demod_hints = back_demod_hints;
   Demod_proc = demod_proc;
-  Hints_idx = lindex_init(FPA, utype, 10, FPA, utype, 10);
+  Hints_idx = lindex_init(FPA, utype, fpa_depth, FPA, utype, fpa_depth);
   if (Back_demod_hints)
-    Back_demod_idx = mindex_init(FPA, utype, 10);
+    Back_demod_idx = mindex_init(FPA, utype, fpa_depth);
   Redundant_hints = clist_init("redundant_hints");
 }  /* init_hints */
 
@@ -339,6 +350,36 @@ void adjust_weight_with_hints(Topform c,
 void keep_hint_matcher(Topform c)
 {
   Topform hint = c->matching_hint;
+
+  /* Record re-match delta (only when hint was previously matched) */
+  if (hint->weight > 0 && hint->last_matched_given > 0) {
+    unsigned long long delta = Current_given_for_hints - hint->last_matched_given;
+    int bucket;
+
+    if (delta <= 500)       bucket = 0;
+    else if (delta <= 1000) bucket = 1;
+    else if (delta <= 1500) bucket = 2;
+    else if (delta <= 2000) bucket = 3;
+    else if (delta <= 2500) bucket = 4;
+    else if (delta <= 3000) bucket = 5;
+    else if (delta <= 3500) bucket = 6;
+    else if (delta <= 4000) bucket = 7;
+    else if (delta <= 4500) bucket = 8;
+    else if (delta <= 5000) bucket = 9;
+    else if (delta <= 5500) bucket = 10;
+    else if (delta <= 6000) bucket = 11;
+    else if (delta <= 6500) bucket = 12;
+    else if (delta <= 7000) bucket = 13;
+    else if (delta <= 7500) bucket = 14;
+    else                    bucket = 15;
+
+    Delta_bucket[bucket]++;
+    Delta_total++;
+    Delta_sum += (double) delta;
+    if (Delta_total == 1 || delta < Delta_min) Delta_min = delta;
+    if (delta > Delta_max) Delta_max = delta;
+  }
+
   hint->weight++;
   hint->last_matched_given = Current_given_for_hints;
 }  /* keep_hint_matcher */
@@ -443,3 +484,106 @@ int active_hints(void)
 {
   return Active_hints_count;
 }  /* active_hints */
+
+/*************
+ *
+ *   compare_doubles() -- qsort comparator
+ *
+ *************/
+
+static int compare_doubles(const void *a, const void *b)
+{
+  double da = *(const double *)a;
+  double db = *(const double *)b;
+  if (da < db) return -1;
+  if (da > db) return 1;
+  return 0;
+}  /* compare_doubles */
+
+/*************
+ *
+ *   print_hint_match_stats()
+ *
+ *   Print min/mean/median/max of match counts for hints
+ *   that were matched at least once (weight > 0).
+ *
+ *************/
+
+/* PUBLIC */
+void print_hint_match_stats(FILE *fp, Clist hint_list)
+{
+  int total, n, i;
+  double *counts;
+  double min_v, max_v, sum, mean, median;
+  Clist_pos p;
+
+  if (hint_list == NULL)
+    return;
+
+  /* Count hints with at least one match */
+  total = 0;
+  for (p = hint_list->first; p; p = p->next) {
+    if (p->c->weight > 0)
+      total++;
+  }
+
+  if (total == 0) {
+    fprintf(fp, "\n%% Hint match stats: no hints were matched.\n");
+    return;
+  }
+
+  /* Collect match counts */
+  counts = malloc(total * sizeof(double));
+  i = 0;
+  for (p = hint_list->first; p; p = p->next) {
+    if (p->c->weight > 0)
+      counts[i++] = p->c->weight;
+  }
+
+  qsort(counts, total, sizeof(double), compare_doubles);
+
+  min_v = counts[0];
+  max_v = counts[total - 1];
+  sum = 0;
+  for (i = 0; i < total; i++)
+    sum += counts[i];
+  mean = sum / total;
+
+  if (total % 2 == 1)
+    median = counts[total / 2];
+  else
+    median = (counts[total / 2 - 1] + counts[total / 2]) / 2.0;
+
+  /* Count never-matched */
+  n = 0;
+  for (p = hint_list->first; p; p = p->next) {
+    if (p->c->weight == 0)
+      n++;
+  }
+
+  fprintf(fp,
+    "\n%% Hint match stats (matched hints only):\n"
+    "%%   matched=%d, unmatched=%d, total=%d\n"
+    "%%   match counts: min=%.0f, mean=%.1f, median=%.0f, max=%.0f\n",
+    total, n, total + n, min_v, mean, median, max_v);
+
+  /* Re-match delta histogram */
+  if (Delta_total > 0) {
+    static const char *labels[DELTA_BUCKETS] = {
+      "0-500", "501-1000", "1001-1500", "1501-2000", "2001-2500",
+      "2501-3000", "3001-3500", "3501-4000", "4001-4500", "4501-5000",
+      "5001-5500", "5501-6000", "6001-6500", "6501-7000", "7001-7500",
+      "7501+"
+    };
+    fprintf(fp,
+      "%%   re-match deltas: n=%d, min=%llu, mean=%.1f, max=%llu\n"
+      "%%   delta histogram:\n",
+      Delta_total, Delta_min, Delta_sum / Delta_total, Delta_max);
+    for (i = 0; i < DELTA_BUCKETS; i++) {
+      if (Delta_bucket[i] > 0)
+        fprintf(fp, "%%     %10s: %d\n", labels[i], Delta_bucket[i]);
+    }
+  }
+
+  free(counts);
+}  /* print_hint_match_stats */
