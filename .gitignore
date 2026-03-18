@@ -82,3 +82,7 @@ web-prover9/prover9.js
 web-prover9/prover9.wasm
 web-mace4/mace4.js
 web-mace4/mace4.wasm
+web-combo/prover9.js
+web-combo/prover9.wasm
+web-combo/mace4.js
+web-combo/mace4.wasm

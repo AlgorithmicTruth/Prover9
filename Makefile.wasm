@@ -1,9 +1,10 @@
 # Makefile.wasm -- Compile Prover9 and Mace4 to WebAssembly via Emscripten
 #
 # Usage:
-#   make -f Makefile.wasm              # build both prover9 and mace4 WASM
+#   make -f Makefile.wasm              # build all WASM targets
 #   make -f Makefile.wasm wasm-prover9 # build web-prover9/prover9.js only
 #   make -f Makefile.wasm wasm-mace4   # build web-mace4/mace4.js only
+#   make -f Makefile.wasm wasm-combo   # build web-combo/ (both WASM modules)
 #   make -f Makefile.wasm clean        # remove all WASM build artifacts
 #
 # Requires: emcc (Emscripten) on PATH.
@@ -65,9 +66,9 @@ MACE_SRC = mace4.src/mace4.c \
            mace4.src/mstate.c \
            mace4.src/util.c
 
-.PHONY: wasm wasm-prover9 wasm-mace4 clean
+.PHONY: wasm wasm-prover9 wasm-mace4 wasm-combo clean
 
-wasm: wasm-prover9 wasm-mace4
+wasm: wasm-prover9 wasm-mace4 wasm-combo
 
 wasm-prover9: web-prover9/prover9.js
 
@@ -83,6 +84,20 @@ web-mace4/mace4.js: $(LADR_SRC_MACE4) $(MACE_SRC)
 	$(EMCC) $(CFLAGS) $(LDFLAGS_MACE4) -o web-mace4/mace4.js \
 	    $(LADR_SRC_MACE4) $(MACE_SRC) -lm
 
+wasm-combo: web-combo/prover9.js web-combo/mace4.js
+
+web-combo/prover9.js: $(LADR_SRC) $(PROVER_SRC)
+	@mkdir -p web-combo
+	$(EMCC) $(CFLAGS) $(LDFLAGS_PROVER9) -o web-combo/prover9.js \
+	    $(LADR_SRC) $(PROVER_SRC) -lm
+
+web-combo/mace4.js: $(LADR_SRC_MACE4) $(MACE_SRC)
+	@mkdir -p web-combo
+	$(EMCC) $(CFLAGS) $(LDFLAGS_MACE4) -o web-combo/mace4.js \
+	    $(LADR_SRC_MACE4) $(MACE_SRC) -lm
+
 clean:
 	rm -f web-prover9/prover9.js web-prover9/prover9.wasm
 	rm -f web-mace4/mace4.js web-mace4/mace4.wasm
+	rm -f web-combo/prover9.js web-combo/prover9.wasm
+	rm -f web-combo/mace4.js web-combo/mace4.wasm
