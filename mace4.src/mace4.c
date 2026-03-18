@@ -24,14 +24,26 @@
 #include "../ladr/tptp_trans.h"
 #include "../ladr/fatal.h"
 
+#ifndef __EMSCRIPTEN__
 #include <signal.h>
+#endif
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
+#ifndef __EMSCRIPTEN__
 #include <sys/time.h>
+#endif
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 /* Checkpoint signal flag -- accessed by msearch.c via extern */
+#ifndef __EMSCRIPTEN__
 volatile sig_atomic_t Mace4_checkpoint_requested_flag = 0;
+#else
+int Mace4_checkpoint_requested_flag = 0;
+#endif
 
 /*************
  *
@@ -60,6 +72,7 @@ void init_attrs(void)
 /* DOCUMENTATION
 */
 
+#ifndef __EMSCRIPTEN__
 /* PUBLIC */
 void mace4_sig_handler(int condition)
 {
@@ -91,6 +104,7 @@ void mace4_sig_handler(int condition)
   default: fatal_error("mace4_sig_handler, unknown signal");
   }
 }  /* mace4_sig_handler */
+#endif /* !__EMSCRIPTEN__ */
 
 /*************
  *
@@ -230,6 +244,7 @@ int main(int argc, char **argv)
   BOOL resume_from_tptp = FALSE; /* original run was TPTP mode */
   char *saved_command;
   int prescan_timeout = -1;   /* -t value from pre-scan, for early SIGALRM */
+  (void) prescan_timeout;     /* used only in signal setup (non-WASM) */
 
   /* Save original command line before any argv mutation. */
   saved_command = build_command_string(argc, argv);
@@ -329,6 +344,7 @@ int main(int argc, char **argv)
                tptp_mode);
   set_program_name(PROGRAM_NAME);   /* for conditional input */
 
+#ifndef __EMSCRIPTEN__
   signal(SIGINT,  mace4_sig_handler);
   signal(SIGTERM, mace4_sig_handler);
   signal(SIGUSR1, mace4_sig_handler);
@@ -346,6 +362,7 @@ int main(int argc, char **argv)
     itv.it_value.tv_sec = prescan_timeout;
     setitimer(ITIMER_REAL, &itv, NULL);
   }
+#endif /* !__EMSCRIPTEN__ */
 
   /* If resuming from checkpoint, check if original was TPTP mode
      and redirect stdin to saved_input.txt */
@@ -453,6 +470,7 @@ int main(int argc, char **argv)
     print_separator(stdout, "end of clauses for search", TRUE);
   }
 
+#ifndef __EMSCRIPTEN__
   /* Enable SIGUSR2 checkpoint handler now that structures are ready */
   signal(SIGUSR2, mace4_sig_handler);
 
@@ -468,6 +486,7 @@ int main(int argc, char **argv)
       setitimer(ITIMER_REAL, &itv, NULL);
     }
   }
+#endif /* !__EMSCRIPTEN__ */
 
   /* Handle resume: read trail and modify mace4 behavior */
   if (resume_dir != NULL) {

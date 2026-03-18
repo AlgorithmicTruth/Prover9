@@ -1,8 +1,10 @@
-# Makefile.wasm -- Compile Prover9 to WebAssembly via Emscripten
+# Makefile.wasm -- Compile Prover9 and Mace4 to WebAssembly via Emscripten
 #
 # Usage:
-#   make -f Makefile.wasm          # build web/prover9.js + web/prover9.wasm
-#   make -f Makefile.wasm clean    # remove WASM build artifacts
+#   make -f Makefile.wasm              # build both prover9 and mace4 WASM
+#   make -f Makefile.wasm wasm-prover9 # build web-prover9/prover9.js only
+#   make -f Makefile.wasm wasm-mace4   # build web-mace4/mace4.js only
+#   make -f Makefile.wasm clean        # remove all WASM build artifacts
 #
 # Requires: emcc (Emscripten) on PATH.
 
@@ -10,18 +12,23 @@ EMCC = emcc
 
 CFLAGS = -O2 -Wall -DPRIMITIVE_ENVIRONMENT
 
-LDFLAGS = -sALLOW_MEMORY_GROWTH=1 \
-          -sMAXIMUM_MEMORY=4GB \
-          -sSTACK_SIZE=1048576 \
-          -sMODULARIZE=1 \
-          -sEXPORT_NAME="Prover9Module" \
-          -sINVOKE_RUN=0 \
-          -sEXIT_RUNTIME=1 \
-          -sEXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
-          -sEXPORTED_FUNCTIONS='["_main"]'
+LDFLAGS_COMMON = -sALLOW_MEMORY_GROWTH=1 \
+                 -sMAXIMUM_MEMORY=4GB \
+                 -sSTACK_SIZE=1048576 \
+                 -sMODULARIZE=1 \
+                 -sINVOKE_RUN=0 \
+                 -sEXIT_RUNTIME=1 \
+                 -sEXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
+                 -sEXPORTED_FUNCTIONS='["_main"]'
+
+LDFLAGS_PROVER9 = $(LDFLAGS_COMMON) -sEXPORT_NAME="Prover9Module"
+LDFLAGS_MACE4   = $(LDFLAGS_COMMON) -sEXPORT_NAME="Mace4Module"
 
 # LADR library sources (exclude test.c which has its own main)
 LADR_SRC = $(filter-out ladr/test.c, $(wildcard ladr/*.c))
+
+# LADR sources for mace4 (also exclude random.c -- mace4.src/util.c has its own)
+LADR_SRC_MACE4 = $(filter-out ladr/test.c ladr/random.c, $(wildcard ladr/*.c))
 
 # Prover9 sources (only the ones needed for the prover9 binary)
 PROVER_SRC = provers.src/prover9.c \
@@ -41,15 +48,41 @@ PROVER_SRC = provers.src/prover9.c \
              provers.src/features.c \
              provers.src/dtree.c
 
-ALL_SRC = $(LADR_SRC) $(PROVER_SRC)
+# Mace4 sources
+MACE_SRC = mace4.src/mace4.c \
+           mace4.src/msearch.c \
+           mace4.src/commandline.c \
+           mace4.src/ground.c \
+           mace4.src/propagate.c \
+           mace4.src/negprop.c \
+           mace4.src/negpropindex.c \
+           mace4.src/ordercells.c \
+           mace4.src/select.c \
+           mace4.src/estack.c \
+           mace4.src/syms.c \
+           mace4.src/print.c \
+           mace4.src/arithmetic.c \
+           mace4.src/mstate.c \
+           mace4.src/util.c
 
-.PHONY: wasm clean
+.PHONY: wasm wasm-prover9 wasm-mace4 clean
 
-wasm: web/prover9.js
+wasm: wasm-prover9 wasm-mace4
 
-web/prover9.js: $(ALL_SRC)
-	@mkdir -p web
-	$(EMCC) $(CFLAGS) $(LDFLAGS) -o web/prover9.js $(ALL_SRC) -lm
+wasm-prover9: web-prover9/prover9.js
+
+wasm-mace4: web-mace4/mace4.js
+
+web-prover9/prover9.js: $(LADR_SRC) $(PROVER_SRC)
+	@mkdir -p web-prover9
+	$(EMCC) $(CFLAGS) $(LDFLAGS_PROVER9) -o web-prover9/prover9.js \
+	    $(LADR_SRC) $(PROVER_SRC) -lm
+
+web-mace4/mace4.js: $(LADR_SRC_MACE4) $(MACE_SRC)
+	@mkdir -p web-mace4
+	$(EMCC) $(CFLAGS) $(LDFLAGS_MACE4) -o web-mace4/mace4.js \
+	    $(LADR_SRC_MACE4) $(MACE_SRC) -lm
 
 clean:
-	rm -f web/prover9.js web/prover9.wasm
+	rm -f web-prover9/prover9.js web-prover9/prover9.wasm
+	rm -f web-mace4/mace4.js web-mace4/mace4.wasm

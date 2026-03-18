@@ -25,7 +25,11 @@
 #include <sys/stat.h>
 #include <stdio.h>
 #include <errno.h>
+#ifndef __EMSCRIPTEN__
 #include <signal.h>
+#else
+#include <emscripten.h>
+#endif
 
 /* #define DEBUG */
 
@@ -91,9 +95,11 @@ static int Current_depth = -1;  /* current search depth, for reporting */
 
 static Plist Saved_clauses = NULL;  /* for checkpoint saved_input.txt */
 static time_t Last_auto_ckpt_time = 0;
+#ifndef __EMSCRIPTEN__
 static char *Auto_ckpt_dirs[100];   /* circular buffer */
 static int Auto_ckpt_head = 0;
 static int Auto_ckpt_count = 0;
+#endif
 BOOL Resuming = FALSE;       /* TRUE during resume */
 int Saved_domain_size = 0;
 unsigned Saved_total_models = 0;
@@ -109,6 +115,11 @@ unsigned Total_models;
 static double Start_seconds;
 static double Start_domain_seconds;
 static long long Start_megs;
+
+#ifdef __EMSCRIPTEN__
+static double Wasm_deadline_ms = 0;        /* total timeout deadline */
+static double Wasm_domain_deadline_ms = 0; /* per-domain timeout deadline */
+#endif
 
 /* end of variables */
 /*****************************************************************************/
@@ -177,7 +188,11 @@ void init_mace_options(Mace_options opt)
   opt->selection_order   = init_parm("selection_order",  2,       0, 2);
   opt->selection_measure = init_parm("selection_measure",4,       0, 4);
   opt->increment         = init_parm("increment",        1,       1, INT_MAX);
+#ifdef __EMSCRIPTEN__
+  opt->max_megs          = init_parm("max_megs",      2048,      -1, 4096);
+#else
   opt->max_megs          = init_parm("max_megs",     49152,      -1, INT_MAX);
+#endif
   opt->report_stderr     = init_parm("report_stderr",    60,      -1, INT_MAX);
          
   opt->print_models           = init_flag("print_models",           TRUE);
@@ -656,11 +671,27 @@ int check_time_memory(void)
 {
   static int Next_report;
 
-  double seconds = user_seconds();
-  int max_seconds = parm(Opt->max_seconds);
-  int max_seconds_per = parm(Opt->max_seconds_per);
-  int max_megs = parm(Opt->max_megs);
-  int report = parm(Opt->report_stderr);
+  double seconds;
+  int max_seconds;
+  int max_seconds_per;
+  int max_megs;
+  int report;
+
+#ifdef __EMSCRIPTEN__
+  {
+    double now_ms = emscripten_get_now();
+    if (Wasm_deadline_ms > 0 && now_ms > Wasm_deadline_ms)
+      return SEARCH_MAX_TOTAL_SECONDS;
+    if (Wasm_domain_deadline_ms > 0 && now_ms > Wasm_domain_deadline_ms)
+      return SEARCH_MAX_DOMAIN_SECONDS;
+  }
+#endif
+
+  seconds = user_seconds();
+  max_seconds = parm(Opt->max_seconds);
+  max_seconds_per = parm(Opt->max_seconds_per);
+  max_megs = parm(Opt->max_megs);
+  report = parm(Opt->report_stderr);
 
   if (max_seconds != -1 && seconds - Start_seconds > max_seconds)
     return SEARCH_MAX_TOTAL_SECONDS;
@@ -1353,6 +1384,17 @@ Mace_results mace4(Plist clauses, Mace_options opt)
   Start_seconds = user_seconds();
   Start_megs = megs_malloced();
 
+#ifdef __EMSCRIPTEN__
+  /* Set WASM total timeout deadline */
+  {
+    int max_sec = parm(opt->max_seconds);
+    if (max_sec > 0)
+      Wasm_deadline_ms = emscripten_get_now() + max_sec * 1000.0;
+    else
+      Wasm_deadline_ms = 0;
+  }
+#endif
+
   Opt = opt;  /* put options into a global variable */
   Saved_clauses = clauses;  /* save for checkpoint */
   initialize_for_search(clauses);
@@ -1380,6 +1422,15 @@ Mace_results mace4(Plist clauses, Mace_options opt)
       fprintf(stderr,"\n=== Mace4 starting on domain size %d. ===\n",n);
 
     Start_domain_seconds = user_seconds();
+#ifdef __EMSCRIPTEN__
+    {
+      int max_sec_per = parm(opt->max_seconds_per);
+      if (max_sec_per > 0)
+        Wasm_domain_deadline_ms = emscripten_get_now() + max_sec_per * 1000.0;
+      else
+        Wasm_domain_deadline_ms = 0;
+    }
+#endif
     clock_start(Mace4_clock);
 
     if (Resuming) {
@@ -1499,7 +1550,11 @@ Mace_results mace4(Plist clauses, Mace_options opt)
 BOOL mace4_checkpoint_requested(void)
 {
   /* Set from signal handler in mace4.c */
+#ifndef __EMSCRIPTEN__
   extern volatile sig_atomic_t Mace4_checkpoint_requested_flag;
+#else
+  extern int Mace4_checkpoint_requested_flag;
+#endif
   return Mace4_checkpoint_requested_flag != 0;
 }  /* mace4_checkpoint_requested */
 
@@ -1511,7 +1566,11 @@ BOOL mace4_checkpoint_requested(void)
 
 void mace4_clear_checkpoint_request(void)
 {
+#ifndef __EMSCRIPTEN__
   extern volatile sig_atomic_t Mace4_checkpoint_requested_flag;
+#else
+  extern int Mace4_checkpoint_requested_flag;
+#endif
   Mace4_checkpoint_requested_flag = 0;
 }  /* mace4_clear_checkpoint_request */
 
@@ -1521,6 +1580,7 @@ void mace4_clear_checkpoint_request(void)
  *
  *************/
 
+#ifndef __EMSCRIPTEN__
 static
 void remove_checkpoint_dir(const char *dir)
 {
@@ -1530,6 +1590,7 @@ void remove_checkpoint_dir(const char *dir)
   rc = system(cmd);
   (void) rc;
 }  /* remove_checkpoint_dir */
+#endif
 
 /*************
  *
@@ -1537,6 +1598,7 @@ void remove_checkpoint_dir(const char *dir)
  *
  *************/
 
+#ifndef __EMSCRIPTEN__
 static
 void record_auto_checkpoint(const char *dir)
 {
@@ -1560,6 +1622,7 @@ void record_auto_checkpoint(const char *dir)
     Auto_ckpt_head = (Auto_ckpt_head + 1) % keep;
   }
 }  /* record_auto_checkpoint */
+#endif
 
 /*************
  *
@@ -1567,6 +1630,12 @@ void record_auto_checkpoint(const char *dir)
  *
  *************/
 
+#ifdef __EMSCRIPTEN__
+void write_mace4_checkpoint(Plist clauses)
+{
+  (void) clauses;
+}
+#else
 void write_mace4_checkpoint(Plist clauses)
 {
   char dir_name[256];
@@ -1718,6 +1787,7 @@ void write_mace4_checkpoint(Plist clauses)
     record_auto_checkpoint(dir_name);
   }
 }  /* write_mace4_checkpoint */
+#endif /* !__EMSCRIPTEN__ */
 
 /*************
  *
