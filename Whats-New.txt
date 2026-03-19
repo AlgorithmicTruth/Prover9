@@ -1,9 +1,9 @@
 =============================================
-What's New in LADR-2026-3J
+What's New in LADR-2026-3K
 =============================================
 
 Summary of changes from LADR-2009-11A (November 2009) to
-LADR-2026-3J (March 2026).
+LADR-2026-3K (March 2026).
 
 Development by Jeffrey Machado and Larry Lesyna, 2026.
 
@@ -187,23 +187,28 @@ in seconds.
 Performance Improvements
 ========================
 
-Hash-Indexed Discrimination Trees (optional)
-..............................................
+Hash-Indexed FPA Tries (3K)
+............................
 
-Optional hash table child lookup for discrimination tree nodes with
-16+ children. Changes O(N) sorted linked list to O(1) hash table.
-Eliminates the O(N^2) bottleneck with 40,000+ Skolem constants.
-Affects forward demodulation, forward subsumption, and unit deletion.
-Opt in with: make all XFLAGS="-DFAST_INDEX"
+FPA (Fingerprint/Path-indexing for Atoms) trie nodes with 4+ children
+automatically use hash table lookup instead of linear linked list scan.
+Enabled by default. Runtime tunable: assign(fpa_hash_threshold, N).
+Benchmarks show 7-13% speedup on search-intensive problems.
+Disable with: assign(fpa_hash_threshold, 0).
+
+Discrimination tree hash tables are available but compiled out by
+default (overhead exceeds benefit on typical problem sizes). Opt in
+with: make all XFLAGS="-DDISCRIM_HASH" and
+assign(discrim_hash_threshold, N).
 
 
-Hash-Indexed FPA Tries (optional)
-..................................
+Hint Match Statistics (3K)
+...........................
 
-Optional hash table child insertion for FPA (Filtering/Path-indexing
-for Atoms) trie nodes. Changes O(N) sorted linked list to O(1) hash
-table. Eliminates the O(N^2) bottleneck in literal indexing with
-large symbol counts. Opt in with: make all XFLAGS="-DFAST_INDEX"
+When hints are used, basic match count statistics (matched/unmatched
+counts, min/mean/median/max of match counts) are printed automatically
+at the end of search. For detailed re-match delta histograms, enable
+with: set(hint_match_stats).
 
 
 Iterative Algorithms
