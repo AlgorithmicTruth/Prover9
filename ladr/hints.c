@@ -41,6 +41,11 @@ static int Redundant_hints_count = 0;
 
 static unsigned long long Current_given_for_hints = 0;
 
+/* Hint match stats: optional delta histogram + end-of-search summary.
+   Controlled by set_hint_match_stats(TRUE). */
+
+static BOOL Hint_match_stats = FALSE;
+
 /* Re-match delta histogram: delta = current_given - last_matched_given.
    Only recorded on 2nd+ match (weight > 0 before increment). */
 
@@ -352,7 +357,7 @@ void keep_hint_matcher(Topform c)
   Topform hint = c->matching_hint;
 
   /* Record re-match delta (only when hint was previously matched) */
-  if (hint->weight > 0 && hint->last_matched_given > 0) {
+  if (Hint_match_stats && hint->weight > 0 && hint->last_matched_given > 0) {
     unsigned long long delta = Current_given_for_hints - hint->last_matched_given;
     int bucket;
 
@@ -429,6 +434,18 @@ void set_hints_given_count(unsigned long long n)
 {
   Current_given_for_hints = n;
 }  /* set_hints_given_count */
+
+/*************
+ *
+ *   set_hint_match_stats()
+ *
+ *************/
+
+/* PUBLIC */
+void set_hint_match_stats(BOOL on)
+{
+  Hint_match_stats = on;
+}  /* set_hint_match_stats */
 
 /*************
  *
@@ -567,8 +584,8 @@ void print_hint_match_stats(FILE *fp, Clist hint_list)
     "%%   match counts: min=%.0f, mean=%.1f, median=%.0f, max=%.0f\n",
     total, n, total + n, min_v, mean, median, max_v);
 
-  /* Re-match delta histogram */
-  if (Delta_total > 0) {
+  /* Re-match delta histogram (only when hint_match_stats enabled) */
+  if (Hint_match_stats && Delta_total > 0) {
     static const char *labels[DELTA_BUCKETS] = {
       "0-500", "501-1000", "1001-1500", "1501-2000", "2001-2500",
       "2501-3000", "3001-3500", "3501-4000", "4001-4500", "4501-5000",

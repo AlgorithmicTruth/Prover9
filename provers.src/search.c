@@ -194,6 +194,7 @@ Prover_options init_prover_options(void)
   p->limit_hint_matchers    = init_flag("limit_hint_matchers",    FALSE);
   p->back_demod_hints       = init_flag("back_demod_hints",        TRUE);
   p->collect_hint_labels    = init_flag("collect_hint_labels",    FALSE);
+  p->hint_match_stats       = init_flag("hint_match_stats",       FALSE);
   p->print_matched_hints    = init_flag("print_matched_hints",    FALSE);
   p->print_derivations      = init_flag("print_derivations",      FALSE);
   p->derivations_only       = init_flag("derivations_only",        TRUE);
@@ -3366,6 +3367,7 @@ void index_and_process_initial_clauses(void)
 	     flag(Opt->back_demod_hints),
 	     parm(Opt->hints_fpa_depth),
 	     demodulate_clause);
+  set_hint_match_stats(flag(Opt->hint_match_stats));
   init_semantics(Glob.interps, Clocks.semantics,
 		 stringparm1(Opt->multiple_interps),
 		 parm(Opt->eval_limit),
@@ -4920,6 +4922,7 @@ void resume_index_clauses(void)
              flag(Opt->back_demod_hints),
              parm(Opt->hints_fpa_depth),
              demodulate_clause);
+  set_hint_match_stats(flag(Opt->hint_match_stats));
   init_semantics(Glob.interps, Clocks.semantics,
                  stringparm1(Opt->multiple_interps),
                  parm(Opt->eval_limit),

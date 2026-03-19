@@ -58,6 +58,8 @@ void back_demod_hints(Topform demod, int type, BOOL lex_order_vars);
 
 void set_hints_given_count(unsigned long long n);
 
+void set_hint_match_stats(BOOL on);
+
 int expire_old_hints(unsigned long long current_given,
 		     unsigned long long expiry_distance,
 		     int min_matches,
