@@ -22,6 +22,23 @@
 #include "unify.h"
 #include "index.h"
 
+/* Discrim hash tables disabled by default (overhead > benefit).
+ * Opt in: -DDISCRIM_HASH.  FPA hash tables enabled by default.
+ * NO_INDEX_HASH disables both. */
+#ifdef NO_INDEX_HASH
+#ifndef NO_FPA_HASH
+#define NO_FPA_HASH
+#endif
+#ifdef DISCRIM_HASH
+#undef DISCRIM_HASH
+#endif
+#endif
+#ifndef DISCRIM_HASH
+#ifndef NO_DISCRIM_HASH
+#define NO_DISCRIM_HASH
+#endif
+#endif
+
 /* INTRODUCTION
 This package implements two kinds of discrimination indexing
 for first-order terms.  Both kinds support GENERALIZATION retrieval
@@ -52,7 +69,7 @@ provides a uniform interface to these and other indexing methods.
 
 typedef struct discrim * Discrim;
 
-#ifndef NO_FAST_INDEX
+#ifndef NO_DISCRIM_HASH
 struct discrim_ht {    /* hash table for rigid child lookup */
   int cap;             /* always a power of 2 */
   int count;           /* number of entries (rigid children only) */
@@ -66,11 +83,11 @@ struct discrim {       /* node in a discrimination tree */
     Discrim kids;      /* for internal nodes */
     Plist data;        /* for leaves */
   } u;
-#ifndef NO_FAST_INDEX
+#ifndef NO_DISCRIM_HASH
   struct discrim_ht *kid_hash;  /* hash table for rigid child lookup, or NULL */
 #endif
   int symbol;          /* variable number or symbol number */
-#ifndef NO_FAST_INDEX
+#ifndef NO_DISCRIM_HASH
   int num_kids;        /* total children count */
 #endif
   char type;           /* term type and for ac indexing type */
@@ -115,10 +132,8 @@ void destroy_discrim_tree(Discrim d);
 
 BOOL discrim_empty(Discrim d);
 
-#ifndef NO_FAST_INDEX
+#ifndef NO_DISCRIM_HASH
 /* Hash table helpers for rigid child lookup (used by discrimb.c) */
-
-#define DISCRIM_HASH_THRESHOLD 16
 
 Discrim discrim_ht_lookup(struct discrim_ht *ht, int symbol);
 
@@ -130,5 +145,9 @@ void discrim_ht_build(Discrim node);
 
 void discrim_ht_resize(Discrim node);
 #endif
+
+void set_discrim_hash_threshold(int n);
+
+int get_discrim_hash_threshold(void);
 
 #endif  /* conditional compilation of whole file */

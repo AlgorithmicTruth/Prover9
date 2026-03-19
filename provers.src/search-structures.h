@@ -216,7 +216,9 @@ struct prover_options {
     hint_expiry,           // expire hints not matched in N given clauses (-1=off)
     hint_sweep_interval,   // sweep for expired hints every N given clauses
     hint_expiry_min,       // min match count before hint is eligible for expiry
-    hints_fpa_depth;       // FPA index depth for hints (default 10)
+    hints_fpa_depth,       // FPA index depth for hints (default 10)
+    fpa_hash_threshold,    // FPA trie hash table threshold (default 16, 0=off)
+    discrim_hash_threshold; // discrim tree hash table threshold (default 16, 0=off)
 
   // Stringparms (string options)
 

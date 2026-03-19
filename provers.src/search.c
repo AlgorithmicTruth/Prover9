@@ -331,6 +331,8 @@ Prover_options init_prover_options(void)
   p->hint_sweep_interval = init_parm("hint_sweep_interval", 1000,     1,INT_MAX);
   p->hint_expiry_min =    init_parm("hint_expiry_min",       1,      1,INT_MAX);
   p->hints_fpa_depth =    init_parm("hints_fpa_depth",      10,      1,    100);
+  p->fpa_hash_threshold = init_parm("fpa_hash_threshold",   4,      0,   1000);
+  p->discrim_hash_threshold = init_parm("discrim_hash_threshold", -1,  -1,  1000);
 
   // FLOATPARMS:
   //  internal name      external name           default    min      max )
@@ -3346,6 +3348,9 @@ void index_and_process_initial_clauses(void)
 
   // Allocate and initialize indexes (even if they won't be used).
 
+  set_fpa_hash_threshold(parm(Opt->fpa_hash_threshold));
+  set_discrim_hash_threshold(parm(Opt->discrim_hash_threshold));
+
   int fpa_depth = parm(Opt->fpa_depth);
   init_literals_index(fpa_depth);  // fsub, bsub, fudel, budel, ucon
 
@@ -4900,6 +4905,9 @@ void resume_index_clauses(void)
                         flag(Opt->neg_hyper_resolution) ||
                         flag(Opt->pos_ur_resolution) ||
                         flag(Opt->neg_ur_resolution));
+
+  set_fpa_hash_threshold(parm(Opt->fpa_hash_threshold));
+  set_discrim_hash_threshold(parm(Opt->discrim_hash_threshold));
 
   fpa_depth = parm(Opt->fpa_depth);
   init_literals_index(fpa_depth);

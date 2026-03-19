@@ -59,7 +59,7 @@ Discrim get_discrim(void)
 /* PUBLIC */
 void free_discrim(Discrim p)
 {
-#ifndef NO_FAST_INDEX
+#ifndef NO_DISCRIM_HASH
   if (p->kid_hash != NULL)
     free(p->kid_hash);
 #endif
@@ -286,7 +286,10 @@ BOOL discrim_empty(Discrim d)
   return (d == NULL ? TRUE : (d->u.kids == NULL ? TRUE : FALSE));
 }  /* discrim_empty */
 
-#ifndef NO_FAST_INDEX
+#ifndef NO_DISCRIM_HASH
+
+static int Discrim_hash_threshold = 999999;  /* disabled by default */
+
 /*
  *  Hash table helpers for rigid child lookup in discrimination trees.
  *  Open-addressing with linear probing, identical pattern to FPA kid_hash.
@@ -371,14 +374,14 @@ void discrim_ht_delete(struct discrim_ht *ht, int symbol)
  *   discrim_ht_build()
  *
  *   Build hash table from existing kids list (rigid children only).
- *   Called when num_kids reaches DISCRIM_HASH_THRESHOLD.
+ *   Called when num_kids reaches Discrim_hash_threshold.
  *
  *************/
 
 /* PUBLIC */
 void discrim_ht_build(Discrim node)
 {
-  int cap = DISCRIM_HASH_THRESHOLD * 2;
+  int cap = Discrim_hash_threshold * 2;
   struct discrim_ht *ht;
   Discrim k;
   int rigid_count = 0;
@@ -436,5 +439,27 @@ void discrim_ht_resize(Discrim node)
   free(old);
   node->kid_hash = ht;
 }  /* discrim_ht_resize */
+
+/* PUBLIC */
+int get_discrim_hash_threshold(void)
+{
+  return Discrim_hash_threshold;
+}  /* get_discrim_hash_threshold */
+#endif
+
+/* PUBLIC */
+void set_discrim_hash_threshold(int n)
+{
+#ifndef NO_DISCRIM_HASH
+  Discrim_hash_threshold = (n < 0) ? 999999 : n;
+#endif
+}  /* set_discrim_hash_threshold */
+
+/* PUBLIC */
+#ifdef NO_DISCRIM_HASH
+int get_discrim_hash_threshold(void)
+{
+  return 0;
+}  /* get_discrim_hash_threshold */
 #endif
 

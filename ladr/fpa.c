@@ -20,6 +20,13 @@
 
 #include <stdlib.h>
 
+/* NO_INDEX_HASH disables both discrim and FPA hash tables */
+#ifdef NO_INDEX_HASH
+#ifndef NO_FPA_HASH
+#define NO_FPA_HASH
+#endif
+#endif
+
 /* Private definitions and types */
 
 static unsigned Fpa_id_count = 0;
@@ -34,7 +41,7 @@ static unsigned long long Intersect_merge_ops = 0;
 
 typedef struct fpa_trie * Fpa_trie;
 
-#ifndef NO_FAST_INDEX
+#ifndef NO_FPA_HASH
 /*
  * Hash table for fast child lookup.  Stored as a struct with a flexible
  * array of Fpa_trie pointers (open addressing, linear probing).
@@ -45,17 +52,17 @@ struct kid_ht {
   Fpa_trie e[];   /* cap entries */
 };
 
-#define KID_HASH_THRESHOLD 16  /* build hash table when num_kids reaches this */
+static int Kid_hash_threshold = 4;
 #endif
 
 struct fpa_trie {
   Fpa_trie   parent, next, kids;
   int        label;
-#ifndef NO_FAST_INDEX
+#ifndef NO_FPA_HASH
   int        num_kids;          /* number of children in kids list */
 #endif
   Fpa_list   terms;
-#ifndef NO_FAST_INDEX
+#ifndef NO_FPA_HASH
   struct kid_ht *kid_hash;      /* hash table for child lookup, or NULL */
 #endif
 #ifdef FPA_DEBUG
@@ -133,7 +140,7 @@ Fpa_trie get_fpa_trie(void)
 static
 void free_fpa_trie(Fpa_trie p)
 {
-#ifndef NO_FAST_INDEX
+#ifndef NO_FPA_HASH
   if (p->kid_hash != NULL)
     free(p->kid_hash);
 #endif
@@ -141,7 +148,7 @@ void free_fpa_trie(Fpa_trie p)
   Fpa_trie_frees++;
 }  /* free_fpa_trie */
 
-#ifndef NO_FAST_INDEX
+#ifndef NO_FPA_HASH
 /*
  * Hash table helpers for child lookup (open addressing, linear probing).
  * Capacity is always a power of 2.  NULL entry = empty.
@@ -207,12 +214,12 @@ void kid_hash_delete(struct kid_ht *ht, int label)
 
 /*
  * Build a hash table from the existing kids linked list.
- * Called when num_kids reaches KID_HASH_THRESHOLD.
+ * Called when num_kids reaches Kid_hash_threshold.
  */
 static
 void kid_hash_build(Fpa_trie node)
 {
-  int cap = KID_HASH_THRESHOLD * 2;  /* start at 2x for good load factor */
+  int cap = Kid_hash_threshold * 2;  /* start at 2x for good load factor */
   struct kid_ht *ht;
   Fpa_trie k;
 
@@ -553,7 +560,7 @@ Fpa_trie fpa_trie_member_insert(Fpa_trie node, Ilist path)
     int val = path->i;
     Fpa_trie found = NULL;
 
-#ifndef NO_FAST_INDEX
+#ifndef NO_FPA_HASH
     if (node->kid_hash != NULL) {
       /* Fast path: hash table lookup O(1) */
       found = kid_hash_lookup(node->kid_hash, val);
@@ -591,10 +598,10 @@ Fpa_trie fpa_trie_member_insert(Fpa_trie node, Ilist path)
 	new->label = val;
 	new->next = node->kids;
 	node->kids = new;
-#ifndef NO_FAST_INDEX
+#ifndef NO_FPA_HASH
 	node->num_kids++;
 	/* Build hash table if threshold reached */
-	if (node->num_kids >= KID_HASH_THRESHOLD)
+	if (node->num_kids >= Kid_hash_threshold)
 	  kid_hash_build(node);
 #endif
 	found = new;
@@ -621,7 +628,7 @@ Fpa_trie fpa_trie_member(Fpa_trie node, Ilist path)
     int val = path->i;
     Fpa_trie found;
 
-#ifndef NO_FAST_INDEX
+#ifndef NO_FPA_HASH
     if (node->kid_hash != NULL) {
       found = kid_hash_lookup(node->kid_hash, val);
     }
@@ -680,13 +687,13 @@ void fpa_trie_possible_delete(Fpa_trie node)
 	p = p->next;
       p->next = node->next;
     }
-#ifndef NO_FAST_INDEX
+#ifndef NO_FPA_HASH
     /* Remove from parent's hash table if present */
     if (parent->kid_hash != NULL)
       kid_hash_delete(parent->kid_hash, node->label);
     parent->num_kids--;
     /* Free hash table if we drop below threshold */
-    if (parent->kid_hash != NULL && parent->num_kids < KID_HASH_THRESHOLD / 2) {
+    if (parent->kid_hash != NULL && parent->num_kids < Kid_hash_threshold / 2) {
       free(parent->kid_hash);
       parent->kid_hash = NULL;
     }
@@ -1878,3 +1885,33 @@ void set_fpa_id_count(unsigned n)
 {
   Fpa_id_count = n;
 }  /* set_fpa_id_count */
+
+/*************
+ *
+ *   set_fpa_hash_threshold()
+ *
+ *************/
+
+/* PUBLIC */
+void set_fpa_hash_threshold(int n)
+{
+#ifndef NO_FPA_HASH
+  Kid_hash_threshold = n;
+#endif
+}  /* set_fpa_hash_threshold */
+
+/*************
+ *
+ *   get_fpa_hash_threshold()
+ *
+ *************/
+
+/* PUBLIC */
+int get_fpa_hash_threshold(void)
+{
+#ifndef NO_FPA_HASH
+  return Kid_hash_threshold;
+#else
+  return 0;
+#endif
+}  /* get_fpa_hash_threshold */

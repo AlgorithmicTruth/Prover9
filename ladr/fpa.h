@@ -101,4 +101,8 @@ unsigned get_fpa_id_count(void);
 
 void set_fpa_id_count(unsigned n);
 
+void set_fpa_hash_threshold(int n);
+
+int get_fpa_hash_threshold(void);
+
 #endif  /* conditional compilation of whole file */
