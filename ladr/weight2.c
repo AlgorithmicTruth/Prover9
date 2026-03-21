@@ -146,7 +146,7 @@ double test1(Term t)
    
   double c = complexity_1(s);
   /* printf("s=%s, complexity=%d:  ", s, c); p_term(t); */
-  free(s);
+  safe_free(s);
   return c;
 }  /* test1 */
 

@@ -104,24 +104,22 @@ void p_model(BOOL print_head)
 	char *s2 = n <= 10 ? "--"  : "---";
 	char *s3 = n <= 10 ? " -"  : "  -";
 	int i;
+	printf("\n %s :\n", name);
+	printf("       ");
+	for (i = 0; i < n; i++)
+	  printf(s1, i);
+	printf("\n    ---");
+	for (i = 0; i < n; i++)
+	  printf("%s", s2);
+	printf("\n       ");
 	for (i = 0; i < n; i++) {
-	  printf("\n %s :\n", name);
-	  printf("       ");
-	  for (i = 0; i < n; i++)
-	    printf(s1, i);
-	  printf("\n    ---");
-	  for (i = 0; i < n; i++)
-	    printf("%s", s2);
-	  printf("\n       ");
-	  for (i = 0; i < n; i++) {
-	    int v = f1_val(p->base, i);
-	    if (v < 0)
-	      printf("%s", s3);
-	    else
-	      printf(s1, v);
-	  }
-	  printf("\n");	  
+	  int v = f1_val(p->base, i);
+	  if (v < 0)
+	    printf("%s", s3);
+	  else
+	    printf(s1, v);
 	}
+	printf("\n");
       }
       else if (p->arity == 2) {
 	char *s1 = n <= 10 ? "%2d" : "%3d";

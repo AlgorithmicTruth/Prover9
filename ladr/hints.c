@@ -268,8 +268,10 @@ void unindex_hint(Topform c)
   }
   else {
     lindex_update(Hints_idx, c, DELETE);
-    if (Back_demod_hints)
-      index_clause_back_demod(c, Back_demod_idx, DELETE);
+    if (Back_demod_hints) {
+      if (!(MATCH_HINTS_ANYCONST && hint_contains_anyconst(c)))
+        index_clause_back_demod(c, Back_demod_idx, DELETE);
+    }
     Active_hints_count--;
   }
 }  /* unindex_hint */
@@ -404,9 +406,10 @@ void back_demod_hints(Topform demod, int type, BOOL lex_order_vars)
   if (Back_demod_hints) {
     Plist rewritables = back_demod_indexed(demod, type, Back_demod_idx,
 					   lex_order_vars);
-    Plist p;
-    for (p = rewritables; p; p = p->next) {
+    Plist p, prev;
+    for (prev = NULL, p = rewritables; p; p = p->next) {
       Topform hint = p->v;
+      if (prev) free_plist(prev);
       /* printf("\nBEFORE: "); f_clause(hint); */
       unindex_hint(hint);
       (*Demod_proc)(hint, 1000, 1000, FALSE, lex_order_vars);
@@ -419,7 +422,9 @@ void back_demod_hints(Topform demod, int type, BOOL lex_order_vars)
       /* printf("AFTER : "); f_clause(hint); */
       index_hint(hint);
       hint->weight = 0;  /* reset count of number of matches */
+      prev = p;
     }
+    if (prev) free_plist(prev);
   }
 }  /* back_demod_hints */
 

@@ -555,12 +555,12 @@ Term qsimp(Term t)
 	return t;
     }
     else {
-      if (SYMNUM(t) != Prod_sn && VARIABLE(ARG(t,0)) && VARNUM(ARG(t,0)) == 0) {
+      if (SYMNUM(t) == Prod_sn && VARIABLE(ARG(t,0)) && VARNUM(ARG(t,0)) == 0) {
 	/* 0*x to 0 */
 	zap_term(t);
 	return get_variable_term(0);
       }
-      else if (SYMNUM(t) != Sum_sn &&
+      else if (SYMNUM(t) == Sum_sn &&
 	       SYMNUM(ARG(t,1)) == Neg_sn &&
 	       term_ident(ARG(t,0),ARG(ARG(t,1),0))) {
 	/* x + -x to 0 */

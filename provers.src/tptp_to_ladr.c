@@ -29,7 +29,7 @@
 
 static
 void read_tptp_input(FILE *fin, FILE *fout, FILE *ferr,
-		     Plist *assumps, Plist *goals)
+		     Plist *assumps, Plist *goals, int depth)
 {
   Term t = read_term(fin, fout);
 
@@ -40,6 +40,9 @@ void read_tptp_input(FILE *fin, FILE *fout, FILE *ferr,
       char *fname2 = fname;
       FILE *fin2;
 
+      if (depth >= 20)
+	fatal_error("read_tptp_input: include depth limit (20) exceeded");
+
       if (*fname2 == '\'' || *fname2 == '"') {
 	fname2[strlen(fname2)-1] = '\0';
 	fname2++;
@@ -47,12 +50,12 @@ void read_tptp_input(FILE *fin, FILE *fout, FILE *ferr,
       fin2 = fopen(fname2, "r");
       if (fin2 == NULL) {
 	char s[100];
-	sprintf(s, "read_tptp_input, file %s not found", fname2);
+	snprintf(s, sizeof(s), "read_tptp_input, file %.60s not found", fname2);
 	fatal_error(s);
       }
       fprintf(fout, "\n%% Including file %s\n\n", fname2);
-      read_tptp_input(fin2, fout, ferr, assumps, goals);
-      free(fname);
+      read_tptp_input(fin2, fout, ferr, assumps, goals, depth + 1);
+      safe_free(fname);
     }
     else if (is_term(t, "cnf", 3) || is_term(t, "cnf", 4) ||
 	     is_term(t, "fof", 3) || is_term(t, "fof", 4) ||
@@ -91,7 +94,7 @@ int main(int argc, char **argv)
   declare_tptp_input_types();
   set_quote_char('\'');  /* TPTP uses single quotes for strings. */
 
-  read_tptp_input(stdin, stdout, stderr, &assumps, &goals);
+  read_tptp_input(stdin, stdout, stderr, &assumps, &goals, 0);
 
   assumps = reverse_plist(assumps);
   goals = reverse_plist(goals);

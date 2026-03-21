@@ -581,6 +581,9 @@ void generate_ground_clauses(Topform c, Mstate state)
 
   biggest_var = greatest_variable_in_clause(c->literals);
 
+  if (biggest_var >= MAX_MACE_VARS)
+    fatal_error("generate_ground_clauses: clause has too many variables");
+
   for (i = 0; i <= biggest_var; i++)
     domains[i] = Domain_size;
 	

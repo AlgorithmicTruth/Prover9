@@ -59,9 +59,9 @@ BOOL prime(int n)
     for (i = 2; i <= MAX_PRIME; i++)
       a[i] = TRUE;
     p = 2;
-    while (p*p < MAX_PRIME) {
+    while (p*p <= MAX_PRIME) {
       int j = p*p;
-      while (j  < MAX_PRIME) {
+      while (j <= MAX_PRIME) {
 	a[j] = FALSE;
 	j = j + p;
       }

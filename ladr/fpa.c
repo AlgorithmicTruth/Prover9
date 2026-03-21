@@ -219,7 +219,7 @@ void kid_hash_delete(struct kid_ht *ht, int label)
 static
 void kid_hash_build(Fpa_trie node)
 {
-  int cap = Kid_hash_threshold * 2;  /* start at 2x for good load factor */
+  int cap = Kid_hash_threshold < 2 ? 4 : Kid_hash_threshold * 2;
   struct kid_ht *ht;
   Fpa_trie k;
 

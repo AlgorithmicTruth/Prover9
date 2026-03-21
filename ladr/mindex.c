@@ -690,7 +690,7 @@ Term mindex_retrieve_next(Mindex_pos pos)
       if (Candidate_hard_limit > 0 &&
           pos->candidate_count > Candidate_hard_limit) {
         Queries_skipped++;
-        free_mindex_pos(pos);
+        mindex_retrieve_cancel(pos);
         return NULL;  /* Skip this inference */
       }
 

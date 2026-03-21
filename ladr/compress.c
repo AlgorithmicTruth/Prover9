@@ -185,7 +185,7 @@ void uncompress_clause(Topform c)
     upward_clause_links(c);
     zap_term(t);
     /* printf("UNcompressed clause %d\n", c->id); */
-    free(c->compressed);
+    safe_free(c->compressed);
     c->compressed = NULL;
     c->neg_compressed = FALSE;
     if (!c->used) {

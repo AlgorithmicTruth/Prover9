@@ -542,17 +542,21 @@ static void read_token(Lexer *lex, Token *tok)
     return;
   }
 
-  /* Integer (possibly negative via parser, but + or digit starts) */
+  /* Integer: digit, or sign followed by digit(s) */
   if (isdigit(lex->ch) || lex->ch == '+' || lex->ch == '-') {
     int ti = 0;
+    int has_sign = 0;
     if (lex->ch == '+' || lex->ch == '-') {
       if (ti < MAX_TOKEN_LEN - 1) tok->text[ti++] = (char) lex->ch;
       lexer_advance(lex);
+      has_sign = 1;
     }
     while (lex->ch != -1 && isdigit(lex->ch)) {
       if (ti < MAX_TOKEN_LEN - 1) tok->text[ti++] = (char) lex->ch;
       lexer_advance(lex);
     }
+    if (has_sign && ti == 1)
+      tptp_parse_error(lex, "sign without digits in integer literal");
     tok->text[ti] = '\0';
     tok->type = TOK_INTEGER;
     return;

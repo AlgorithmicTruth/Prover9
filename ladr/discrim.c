@@ -381,7 +381,7 @@ void discrim_ht_delete(struct discrim_ht *ht, int symbol)
 /* PUBLIC */
 void discrim_ht_build(Discrim node)
 {
-  int cap = Discrim_hash_threshold * 2;
+  int cap = Discrim_hash_threshold < 2 ? 4 : Discrim_hash_threshold * 2;
   struct discrim_ht *ht;
   Discrim k;
   int rigid_count = 0;
