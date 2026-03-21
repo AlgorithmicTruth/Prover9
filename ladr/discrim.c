@@ -61,7 +61,7 @@ void free_discrim(Discrim p)
 {
 #ifndef NO_DISCRIM_HASH
   if (p->kid_hash != NULL)
-    free(p->kid_hash);
+    safe_free(p->kid_hash);
 #endif
   free_mem(p, PTRS_DISCRIM);
   Discrim_frees++;
@@ -205,9 +205,7 @@ void zap_discrim_tree(Discrim d, int n)
   struct zap_frame { Discrim node; int n; };
   int cap = 256;
   int top = 0;
-  struct zap_frame *stack = malloc(cap * sizeof(struct zap_frame));
-  if (stack == NULL)
-    fatal_error("zap_discrim_tree: malloc failed");
+  struct zap_frame *stack = safe_malloc(cap * sizeof(struct zap_frame));
 
   stack[top].node = d;
   stack[top].n = n;
@@ -237,9 +235,7 @@ void zap_discrim_tree(Discrim d, int n)
 	  arity = sn_to_arity(k->symbol);
 	if (top >= cap) {
 	  cap *= 2;
-	  stack = realloc(stack, cap * sizeof(struct zap_frame));
-	  if (stack == NULL)
-	    fatal_error("zap_discrim_tree: realloc failed");
+	  stack = safe_realloc(stack, cap * sizeof(struct zap_frame));
 	}
 	stack[top].node = k;
 	stack[top].n = cur_n + arity - 1;
@@ -249,7 +245,7 @@ void zap_discrim_tree(Discrim d, int n)
     }
     free_discrim(cur);
   }
-  free(stack);
+  safe_free(stack);
 }  /* zap_discrim_tree */
 
 /*************
@@ -396,9 +392,7 @@ void discrim_ht_build(Discrim node)
   while (cap < rigid_count * 2)
     cap *= 2;
 
-  ht = calloc(1, sizeof(struct discrim_ht) + cap * sizeof(Discrim));
-  if (ht == NULL)
-    fatal_error("discrim_ht_build: malloc failed");
+  ht = safe_calloc(1, sizeof(struct discrim_ht) + cap * sizeof(Discrim));
   ht->cap = cap;
   ht->count = 0;
   for (k = node->u.kids; k != NULL; k = k->next) {
@@ -427,16 +421,14 @@ void discrim_ht_resize(Discrim node)
   struct discrim_ht *ht;
   int i;
 
-  ht = calloc(1, sizeof(struct discrim_ht) + new_cap * sizeof(Discrim));
-  if (ht == NULL)
-    fatal_error("discrim_ht_resize: malloc failed");
+  ht = safe_calloc(1, sizeof(struct discrim_ht) + new_cap * sizeof(Discrim));
   ht->cap = new_cap;
   ht->count = old->count;
   for (i = 0; i < old_cap; i++) {
     if (old->e[i] != NULL)
       discrim_ht_insert(ht, old->e[i]);
   }
-  free(old);
+  safe_free(old);
   node->kid_hash = ht;
 }  /* discrim_ht_resize */
 

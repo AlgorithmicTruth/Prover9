@@ -69,7 +69,7 @@ Formula share_formula(Formula f, Hashtab h)
    */
   typedef struct { Formula node; int child; } Sfframe;
   int cap = 1000;
-  Sfframe *stack = malloc(cap * sizeof(Sfframe));
+  Sfframe *stack = safe_malloc(cap * sizeof(Sfframe));
   int top = 0;
   Formula result = NULL;
   Formula cur;
@@ -86,7 +86,7 @@ restart:
       stack[top].node = cur;
       stack[top].child = 1;
       top++;
-      if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Sfframe)); }
+      if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Sfframe)); }
       cur = cur->kids[0];
       goto restart;
     }
@@ -96,7 +96,7 @@ restart:
     stack[top].node = cur;
     stack[top].child = 1;
     top++;
-    if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Sfframe)); }
+    if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Sfframe)); }
     cur = cur->kids[0];
     goto restart;
   }
@@ -152,7 +152,7 @@ restart:
     }
   }
 
-  free(stack);
+  safe_free(stack);
   return result;
 }  /* share_formula */
 
@@ -193,7 +193,7 @@ BOOL formula_ident_share(Formula f, Formula g)
   /* Iterative: pair-stack with Fid_calls counter + longjmp on limit. */
   typedef struct { Formula a; Formula b; } Fis_entry;
   int stack_cap = 1000;
-  Fis_entry *stack = malloc(stack_cap * sizeof(*stack));
+  Fis_entry *stack = safe_malloc(stack_cap * sizeof(*stack));
   int top = 0;
 
   stack[0].a = f;
@@ -205,43 +205,43 @@ BOOL formula_ident_share(Formula f, Formula g)
     top--;
 
     if (Fid_call_limit != 0 && ++Fid_calls > Fid_call_limit) {
-      free(stack);
+      safe_free(stack);
       printf("\n%% Fid_call limit; jumping home.\n");
       longjmp(Jump_env, 1);
     }
 
     if (a->type != b->type || a->arity != b->arity) {
-      free(stack);
+      safe_free(stack);
       return FALSE;
     }
     else if (a->type == AND_FORM || a->type == OR_FORM) {
       int i;
       for (i = 0; i < a->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top].a = a->kids[i];
         stack[top].b = b->kids[i];
       }
     }
     else if (a->type == ALL_FORM || a->type == EXISTS_FORM) {
       if (!str_ident(a->qvar, b->qvar)) {
-        free(stack);
+        safe_free(stack);
         return FALSE;
       }
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].a = a->kids[0];
       stack[top].b = b->kids[0];
     }
     else {
       /* Shared ATOM/NOT: pointer compare. */
       if (a != b) {
-        free(stack);
+        safe_free(stack);
         return FALSE;
       }
     }
   }
-  free(stack);
+  safe_free(stack);
   return TRUE;
 }  /* formula_ident_share */
 
@@ -264,7 +264,7 @@ Formula formula_copy_share(Formula f)
    */
   typedef struct { Formula orig; Formula copy; int child; } Fcsframe;
   int cap = 1000;
-  Fcsframe *stack = malloc(cap * sizeof(Fcsframe));
+  Fcsframe *stack = safe_malloc(cap * sizeof(Fcsframe));
   int top = 0;
   Formula result = NULL;
   Formula cur;
@@ -282,7 +282,7 @@ restart:
       stack[top].copy = g;
       stack[top].child = 1;
       top++;
-      if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Fcsframe)); }
+      if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Fcsframe)); }
       cur = cur->kids[0];
       goto restart;
     }
@@ -294,7 +294,7 @@ restart:
     stack[top].copy = g;
     stack[top].child = 1;
     top++;
-    if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Fcsframe)); }
+    if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Fcsframe)); }
     cur = cur->kids[0];
     goto restart;
   }
@@ -323,7 +323,7 @@ restart:
     result = fr->copy;
   }
 
-  free(stack);
+  safe_free(stack);
   return result;
 }  /* formula_copy_share */
 
@@ -671,7 +671,7 @@ Formula distribute(Formula f)
    */
   typedef struct { Formula node; int child; } Dframe;
   int cap = 1000;
-  Dframe *stack = malloc(cap * sizeof(Dframe));
+  Dframe *stack = safe_malloc(cap * sizeof(Dframe));
   int top = 0;
   Formula result = NULL;
   Formula cur;
@@ -688,7 +688,7 @@ restart:
     stack[top].node = cur;
     stack[top].child = 1;
     top++;
-    if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Dframe)); }
+    if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Dframe)); }
     cur = cur->kids[0];
     goto restart;
   }
@@ -712,7 +712,7 @@ restart:
     result = distribute_top(fr->node);
   }
 
-  free(stack);
+  safe_free(stack);
   return result;
 }  /* distribute */
 
@@ -739,7 +739,7 @@ Formula cnf(Formula f)
    */
   typedef struct { Formula node; int child; } Cframe;
   int cap = 1000;
-  Cframe *stack = malloc(cap * sizeof(Cframe));
+  Cframe *stack = safe_malloc(cap * sizeof(Cframe));
   int top = 0;
   Formula result = NULL;
   Formula cur;
@@ -757,7 +757,7 @@ restart:
     stack[top].node = cur;
     stack[top].child = 1;
     top++;
-    if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Cframe)); }
+    if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Cframe)); }
     cur = cur->kids[0];
     goto restart;
   }
@@ -793,7 +793,7 @@ restart:
     }
   }
 
-  free(stack);
+  safe_free(stack);
   return result;
 }  /* cnf */
 
@@ -839,7 +839,7 @@ Formula skolem(Formula f, Ilist uvars)
     Term var_term;   /* Term to free (for CLEANUP) */
   } Skframe;
   int cap = 1000;
-  Skframe *stack = malloc(cap * sizeof(Skframe));
+  Skframe *stack = safe_malloc(cap * sizeof(Skframe));
   int top = 0;
   Formula result = NULL;
   Formula cur;
@@ -866,7 +866,7 @@ restart:
     uvars_plus = ilist_prepend(cur_uvars, SYMNUM(var));
 
     /* Push cleanup frame (processed on pop). */
-    if (top + 2 >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Skframe)); }
+    if (top + 2 >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Skframe)); }
     stack[top].phase = 1;  /* CLEANUP */
     stack[top].uv_node = uvars_plus;
     stack[top].var_term = var;
@@ -919,7 +919,7 @@ restart:
       stack[top].uv_node = NULL;
       stack[top].var_term = NULL;
       top++;
-      if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Skframe)); }
+      if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Skframe)); }
       cur = cur->kids[0];
       goto restart;
     }
@@ -957,7 +957,7 @@ restart:
     }
   }
 
-  free(stack);
+  safe_free(stack);
   return result;
 }  /* skolem */
 
@@ -993,7 +993,7 @@ Ilist unique_qvars(Formula f, Ilist vars)
 {
   /* Iterative: flat stack with threaded Ilist vars (grows monotonically). */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
 
   stack[0] = f;
@@ -1018,19 +1018,19 @@ Ilist unique_qvars(Formula f, Ilist vars)
       vars = ilist_prepend(vars, SYMNUM(var));
       /* Push single child. */
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top] = cur->kids[0];
     }
     else {
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
   return vars;
 }  /* unique_qvars */
 
@@ -1075,7 +1075,7 @@ void mark_free_vars_formula(Formula f, char *varname, int varnum)
 {
   /* Iterative: flat stack. Modify ATOMs in-place, skip binding quantifiers. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int sn_val = str_to_sn(varname, 0);
   int top = 0;
 
@@ -1095,12 +1095,12 @@ void mark_free_vars_formula(Formula f, char *varname, int varnum)
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
 }  /* mark_free_vars_formula */
 
 /*************
@@ -1117,7 +1117,7 @@ Formula remove_uni_quant(Formula f, int *varnum_ptr)
    */
   typedef struct { Formula node; int child; } Rframe;
   int cap = 1000;
-  Rframe *stack = malloc(cap * sizeof(Rframe));
+  Rframe *stack = safe_malloc(cap * sizeof(Rframe));
   int top = 0;
   Formula result = NULL;
   Formula cur;
@@ -1142,7 +1142,7 @@ restart:
       stack[top].node = cur;
       stack[top].child = 1;
       top++;
-      if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Rframe)); }
+      if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Rframe)); }
       cur = cur->kids[0];
       goto restart;
     }
@@ -1170,7 +1170,7 @@ restart:
     result = fr->node;
   }
 
-  free(stack);
+  safe_free(stack);
   return result;
 }  /* remove_uni_quant */
 
@@ -1205,7 +1205,7 @@ void collect_vars_in_formula(Formula f, BOOL *seen)
 {
   /* Iterative: flat formula stack + iterative term walk for ATOMs. */
   int fstack_cap = 1000;
-  Formula *fstack = malloc(fstack_cap * sizeof(Formula));
+  Formula *fstack = safe_malloc(fstack_cap * sizeof(Formula));
   int ftop = 0;
 
   fstack[0] = f;
@@ -1248,12 +1248,12 @@ void collect_vars_in_formula(Formula f, BOOL *seen)
       int i;
       for (i = 0; i < cur->arity; i++) {
         ftop++;
-        if (ftop >= fstack_cap) { fstack_cap *= 2; fstack = realloc(fstack, fstack_cap * sizeof(*fstack)); }
+        if (ftop >= fstack_cap) { fstack_cap *= 2; fstack = safe_realloc(fstack, fstack_cap * sizeof(*fstack)); }
         fstack[ftop] = cur->kids[i];
       }
     }
   }
-  free(fstack);
+  safe_free(fstack);
 }  /* collect_vars_in_formula */
 
 /*************
@@ -1388,7 +1388,7 @@ Formula cnf_def(Formula f, Plist *defs)
   /* Iterative: like cnf() but with definitional renaming before distribution. */
   typedef struct { Formula node; int child; } Cdframe;
   int cap = 1000;
-  Cdframe *stack = malloc(cap * sizeof(Cdframe));
+  Cdframe *stack = safe_malloc(cap * sizeof(Cdframe));
   int top = 0;
   Formula result = NULL;
   Formula cur;
@@ -1406,7 +1406,7 @@ restart:
     stack[top].node = cur;
     stack[top].child = 1;
     top++;
-    if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Cdframe)); }
+    if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Cdframe)); }
     cur = cur->kids[0];
     goto restart;
   }
@@ -1474,7 +1474,7 @@ restart:
     }
   }
 
-  free(stack);
+  safe_free(stack);
   return result;
 }  /* cnf_def */
 
@@ -1651,7 +1651,7 @@ Formula miniscope(Formula f)
     char *saved_qvar;
   } Msframe;
   int cap = 1000;
-  Msframe *stack = malloc(cap * sizeof(Msframe));
+  Msframe *stack = safe_malloc(cap * sizeof(Msframe));
   int top = 0;
   Formula result = NULL;
   Formula cur;
@@ -1671,7 +1671,7 @@ restart:
     stack[top].is_dual_exists = TRUE;
     stack[top].saved_qvar = NULL;
     top++;
-    if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Msframe)); }
+    if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Msframe)); }
     goto restart;  /* cur is now ALL_FORM */
   }
   else if (cur->type == ALL_FORM) {
@@ -1681,7 +1681,7 @@ restart:
     stack[top].is_dual_exists = FALSE;
     stack[top].saved_qvar = cur->qvar;
     top++;
-    if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Msframe)); }
+    if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Msframe)); }
     cur = cur->kids[0];
     goto restart;
   }
@@ -1695,13 +1695,13 @@ restart:
       stack[top].is_dual_exists = FALSE;
       stack[top].saved_qvar = NULL;
       top++;
-      if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Msframe)); }
+      if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Msframe)); }
       cur = cur->kids[0];
       goto restart;
     }
   }
   else {
-    free(stack);
+    safe_free(stack);
     fatal_error("miniscope: formula not in nnf");
     return NULL;
   }
@@ -1767,7 +1767,7 @@ restart:
     }
   }
 
-  free(stack);
+  safe_free(stack);
   return result;
 }  /* miniscope */
 
@@ -1894,7 +1894,7 @@ int cnf_max_clauses(Formula f)
   /* Iterative: frame stack with sum/product accumulation. */
   typedef struct { Formula node; int child; int accum; } Cmframe;
   int cap = 1000;
-  Cmframe *stack = malloc(cap * sizeof(Cmframe));
+  Cmframe *stack = safe_malloc(cap * sizeof(Cmframe));
   int top = 0;
   int result = 0;
   Formula cur;
@@ -1919,13 +1919,13 @@ restart:
       stack[top].child = 1;
       stack[top].accum = (cur->type == AND_FORM) ? 0 : 1;
       top++;
-      if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Cmframe)); }
+      if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Cmframe)); }
       cur = cur->kids[0];
       goto restart;
     }
   }
   else {
-    free(stack);
+    safe_free(stack);
     fatal_error("cnf_max_clauses, formula not NNF");
     return -1;
   }
@@ -1951,7 +1951,7 @@ restart:
     result = fr->accum;
   }
 
-  free(stack);
+  safe_free(stack);
   return result;
 }  /* cnf_max_clauses */
 

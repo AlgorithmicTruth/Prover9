@@ -233,12 +233,9 @@ int num_ac_args(struct term *t, int symbol)
 {
   /* Iterative version using heap-allocated dynamically-grown stack */
   int cap = 64;
-  Term *stack = malloc(cap * sizeof(Term));
+  Term *stack = safe_malloc(cap * sizeof(Term));
   int top = 0;
   int count = 0;
-
-  if (stack == NULL)
-    fatal_error("num_ac_args: malloc failed");
 
   stack[top++] = t;
   while (top > 0) {
@@ -249,15 +246,13 @@ int num_ac_args(struct term *t, int symbol)
       /* Push both children; order doesn't matter for counting */
       if (top + 2 > cap) {
 	cap *= 2;
-	stack = realloc(stack, cap * sizeof(Term));
-	if (stack == NULL)
-	  fatal_error("num_ac_args: realloc failed");
+	stack = safe_realloc(stack, cap * sizeof(Term));
       }
       stack[top++] = ARG(cur, 0);
       stack[top++] = ARG(cur, 1);
     }
   }
-  free(stack);
+  safe_free(stack);
   return count;
 }  /* num_ac_args */
 
@@ -272,12 +267,9 @@ int num_ac_nv_args(struct term *t, int symbol)
 {
   /* Iterative version using heap-allocated dynamically-grown stack */
   int cap = 64;
-  Term *stack = malloc(cap * sizeof(Term));
+  Term *stack = safe_malloc(cap * sizeof(Term));
   int top = 0;
   int count = 0;
-
-  if (stack == NULL)
-    fatal_error("num_ac_nv_args: malloc failed");
 
   stack[top++] = t;
   while (top > 0) {
@@ -287,15 +279,13 @@ int num_ac_nv_args(struct term *t, int symbol)
     else {
       if (top + 2 > cap) {
 	cap *= 2;
-	stack = realloc(stack, cap * sizeof(Term));
-	if (stack == NULL)
-	  fatal_error("num_ac_nv_args: realloc failed");
+	stack = safe_realloc(stack, cap * sizeof(Term));
       }
       stack[top++] = ARG(cur, 0);
       stack[top++] = ARG(cur, 1);
     }
   }
-  free(stack);
+  safe_free(stack);
   return count;
 }  /* num_ac_nv_args */
 
@@ -312,12 +302,10 @@ void print_discrim_wild_tree(FILE *fp, Discrim d, int n, int depth)
   struct print_frame { Discrim node; int n; int depth; };
   int cap = 256;
   int top = 0;
-  struct print_frame *stack = malloc(cap * sizeof(struct print_frame));
+  struct print_frame *stack = safe_malloc(cap * sizeof(struct print_frame));
   int child_cap = 256;
-  Discrim *children = malloc(child_cap * sizeof(Discrim));
-  int *child_n = malloc(child_cap * sizeof(int));
-  if (stack == NULL || children == NULL || child_n == NULL)
-    fatal_error("print_discrim_wild_tree: malloc failed");
+  Discrim *children = safe_malloc(child_cap * sizeof(Discrim));
+  int *child_n = safe_malloc(child_cap * sizeof(int));
 
   stack[top].node = d;
   stack[top].n = n;
@@ -369,10 +357,8 @@ void print_discrim_wild_tree(FILE *fp, Discrim d, int n, int depth)
 	  arity = sn_to_arity(d1->symbol);
 	if (count >= child_cap) {
 	  child_cap *= 2;
-	  children = realloc(children, child_cap * sizeof(Discrim));
-	  child_n = realloc(child_n, child_cap * sizeof(int));
-	  if (children == NULL || child_n == NULL)
-	    fatal_error("print_discrim_wild_tree: realloc failed");
+	  children = safe_realloc(children, child_cap * sizeof(Discrim));
+	  child_n = safe_realloc(child_n, child_cap * sizeof(int));
 	}
 	children[count] = d1;
 	child_n[count] = cur_n + arity - 1;
@@ -382,9 +368,7 @@ void print_discrim_wild_tree(FILE *fp, Discrim d, int n, int depth)
       for (j = count - 1; j >= 0; j--) {
 	if (top >= cap) {
 	  cap *= 2;
-	  stack = realloc(stack, cap * sizeof(struct print_frame));
-	  if (stack == NULL)
-	    fatal_error("print_discrim_wild_tree: realloc failed");
+	  stack = safe_realloc(stack, cap * sizeof(struct print_frame));
 	}
 	stack[top].node = children[j];
 	stack[top].n = child_n[j];
@@ -393,9 +377,9 @@ void print_discrim_wild_tree(FILE *fp, Discrim d, int n, int depth)
       }
     }
   }
-  free(stack);
-  free(children);
-  free(child_n);
+  safe_free(stack);
+  safe_free(children);
+  safe_free(child_n);
 }  /* print_discrim_wild_tree */
 
 /*************
@@ -495,12 +479,9 @@ Discrim discrim_wild_insert_rec(Term t, Discrim d)
    * AC terms are handled by discrim_wild_insert_ac (not recursive itself).
    */
   int tcap = 256;
-  Term *tstack = malloc(tcap * sizeof(Term));
+  Term *tstack = safe_malloc(tcap * sizeof(Term));
   int ttop = 0;
   Discrim d1;
-
-  if (tstack == NULL)
-    fatal_error("discrim_wild_insert_rec: malloc failed");
 
   tstack[ttop++] = t;
   d1 = d;
@@ -606,16 +587,14 @@ Discrim discrim_wild_insert_rec(Term t, Discrim d)
 	for (i = ARITY(t) - 1; i >= 0; i--) {
 	  if (ttop >= tcap) {
 	    tcap *= 2;
-	    tstack = realloc(tstack, tcap * sizeof(Term));
-	    if (tstack == NULL)
-	      fatal_error("discrim_wild_insert_rec: realloc failed");
+	    tstack = safe_realloc(tstack, tcap * sizeof(Term));
 	  }
 	  tstack[ttop++] = ARG(t, i);
 	}
       }
     }
   }
-  free(tstack);
+  safe_free(tstack);
   return d1;
 }  /* discrim_wild_insert_rec */
 
@@ -669,13 +648,10 @@ Discrim discrim_wild_end(Term t, Discrim d,
    * Builds path list for deletion support.
    */
   int tcap = 256;
-  Term *tstack = malloc(tcap * sizeof(Term));
+  Term *tstack = safe_malloc(tcap * sizeof(Term));
   int ttop = 0;
   Discrim d1;
   Plist p;
-
-  if (tstack == NULL)
-    fatal_error("discrim_wild_end: malloc failed");
 
   tstack[ttop++] = t;
   d1 = d;
@@ -696,7 +672,7 @@ Discrim discrim_wild_end(Term t, Discrim d,
       if (dk && DVAR(dk))
 	d1 = dk;
       else {
-	free(tstack);
+	safe_free(tstack);
 	return NULL;
       }
     }
@@ -709,7 +685,7 @@ Discrim discrim_wild_end(Term t, Discrim d,
 	/* Hash table path: O(1) lookup */
 	dk = discrim_ht_lookup(d1->kid_hash, sym);
 	if (dk == NULL) {
-	  free(tstack);
+	  safe_free(tstack);
 	  return NULL;
 	}
       }
@@ -724,7 +700,7 @@ Discrim discrim_wild_end(Term t, Discrim d,
 	  dk = dk->next;
 
 	if (dk == NULL || dk->symbol != sym) {
-	  free(tstack);
+	  safe_free(tstack);
 	  return NULL;
 	}
       }
@@ -738,13 +714,13 @@ Discrim discrim_wild_end(Term t, Discrim d,
 
 	for (d2 = dk->u.kids; d2 && d2->symbol != na; d2 = d2->next);
 	if (d2 == NULL) {
-	  free(tstack);
+	  safe_free(tstack);
 	  return NULL;
 	}
 	else {
 	  for (d3 = d2->u.kids; d3 && d3->symbol != nnv; d3 = d3->next);
 	  if (d3 == NULL) {
-	    free(tstack);
+	    safe_free(tstack);
 	    return NULL;
 	  }
 	  else {
@@ -767,16 +743,14 @@ Discrim discrim_wild_end(Term t, Discrim d,
 	for (i = ARITY(t) - 1; i >= 0; i--) {
 	  if (ttop >= tcap) {
 	    tcap *= 2;
-	    tstack = realloc(tstack, tcap * sizeof(Term));
-	    if (tstack == NULL)
-	      fatal_error("discrim_wild_end: realloc failed");
+	    tstack = safe_realloc(tstack, tcap * sizeof(Term));
 	  }
 	  tstack[ttop++] = ARG(t, i);
 	}
       }
     }
   }
-  free(tstack);
+  safe_free(tstack);
   return d1;
 }  /* discrim_wild_end */
 

@@ -70,6 +70,8 @@ void *safe_calloc(size_t nmemb, size_t size);
 
 void safe_free(void *p);
 
+void *safe_realloc(void *p, size_t n);
+
 void enable_memory_logging(void);
 
 void disable_memory_logging(void);

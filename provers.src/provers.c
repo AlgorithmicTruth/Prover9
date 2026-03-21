@@ -794,8 +794,8 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
           eff_depth = 3;        /* depth 1-2 tight->SOS, depth 3->usable */
         }
 
-        sel_depth = calloc(scan->n_entries, sizeof(int));
-        loose_depth = calloc(scan->n_entries, sizeof(int));
+        sel_depth = safe_calloc(scan->n_entries, sizeof(int));
+        loose_depth = safe_calloc(scan->n_entries, sizeof(int));
 
         sine_filter_scan(scan->entries, scan->n_entries, scan->n_symbols,
                          eff_tolerance, wide_tol, eff_depth,
@@ -803,7 +803,7 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
                          sel_depth, loose_depth);
 
         /* Build keep[] array: parse tight + loose selected + goals */
-        keep = calloc(scan->n_entries, sizeof(BOOL));
+        keep = safe_calloc(scan->n_entries, sizeof(BOOL));
         for (i = 0; i < scan->n_entries; i++) {
           if (scan->entries[i].role == SCAN_ROLE_GOAL) {
             keep[i] = TRUE;  /* always parse goals */
@@ -902,16 +902,16 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
         }
 
         sine_done = TRUE;
-        free(sel_depth);
-        free(loose_depth);
-        free(keep);
+        safe_free(sel_depth);
+        safe_free(loose_depth);
+        safe_free(keep);
 
         /* Free scan but not magic_commands (transferred to tptp) */
         tptp->assumptions = NULL;
         tptp->goals = NULL;
         free_scan_result(scan);
         scan = NULL;
-        free(tptp);
+        safe_free(tptp);
         tptp = NULL;
       }
       else {
@@ -970,16 +970,16 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
     // Gather symbols and declare functions/relations
     {
       int sn = greatest_symnum() + 1;
-      int *rcounts = calloc(sn, sizeof(int));
-      int *fcounts = calloc(sn, sizeof(int));
+      int *rcounts = safe_calloc(sn, sizeof(int));
+      int *fcounts = safe_calloc(sn, sizeof(int));
       Ilist rsyms, fsyms;
       gather_symbols_in_formulas(pi->sos, rcounts, fcounts);
       gather_symbols_in_formulas(pi->usable, rcounts, fcounts);
       gather_symbols_in_formulas(pi->goals, rcounts, fcounts);
       rsyms = counts_to_set(rcounts, sn);
       fsyms = counts_to_set(fcounts, sn);
-      free(rcounts);
-      free(fcounts);
+      safe_free(rcounts);
+      safe_free(fcounts);
       declare_functions_and_relations(fsyms, rsyms);
       zap_ilist(fsyms);
       zap_ilist(rsyms);
@@ -1211,7 +1211,7 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
 	if (len >= 2 && strcmp(base + len - 2, ".p") == 0)
 	  len -= 2;
 	if (len > 0) {
-	  char *name = malloc(len + 1);
+	  char *name = safe_malloc(len + 1);
 	  memcpy(name, base, len);
 	  name[len] = '\0';
 	  pi->problem_name = name;
@@ -1709,15 +1709,15 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
         eff_depth = 3;
       }
 
-      sel_depth = calloc(scan->n_entries, sizeof(int));
-      loose_depth = calloc(scan->n_entries, sizeof(int));
+      sel_depth = safe_calloc(scan->n_entries, sizeof(int));
+      loose_depth = safe_calloc(scan->n_entries, sizeof(int));
 
       sine_filter_scan(scan->entries, scan->n_entries, scan->n_symbols,
                        eff_tolerance, wide_tol, eff_depth, eff_max,
                        sel_depth, loose_depth);
 
       /* Build keep[] array */
-      keep = calloc(scan->n_entries, sizeof(BOOL));
+      keep = safe_calloc(scan->n_entries, sizeof(BOOL));
       for (i = 0; i < scan->n_entries; i++) {
         if (scan->entries[i].role == SCAN_ROLE_GOAL) {
           keep[i] = TRUE;
@@ -1812,15 +1812,15 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
       }
 
       sine_done = TRUE;
-      free(sel_depth);
-      free(loose_depth);
-      free(keep);
+      safe_free(sel_depth);
+      safe_free(loose_depth);
+      safe_free(keep);
 
       tptp->assumptions = NULL;
       tptp->goals = NULL;
       free_scan_result(scan);
       psr->scan = NULL;
-      free(tptp);
+      safe_free(tptp);
       tptp = NULL;
     }
     else {
@@ -1878,16 +1878,16 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
   /* Gather symbols and declare functions/relations */
   {
     int sn = greatest_symnum() + 1;
-    int *rcounts = calloc(sn, sizeof(int));
-    int *fcounts = calloc(sn, sizeof(int));
+    int *rcounts = safe_calloc(sn, sizeof(int));
+    int *fcounts = safe_calloc(sn, sizeof(int));
     Ilist rsyms, fsyms;
     gather_symbols_in_formulas(pi->sos, rcounts, fcounts);
     gather_symbols_in_formulas(pi->usable, rcounts, fcounts);
     gather_symbols_in_formulas(pi->goals, rcounts, fcounts);
     rsyms = counts_to_set(rcounts, sn);
     fsyms = counts_to_set(fcounts, sn);
-    free(rcounts);
-    free(fcounts);
+    safe_free(rcounts);
+    safe_free(fcounts);
     declare_functions_and_relations(fsyms, rsyms);
     zap_ilist(fsyms);
     zap_ilist(rsyms);
@@ -2008,7 +2008,7 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
         if (len >= 2 && strcmp(base + len - 2, ".p") == 0)
           len -= 2;
         if (len > 0) {
-          char *name = malloc(len + 1);
+          char *name = safe_malloc(len + 1);
           memcpy(name, base, len);
           name[len] = '\0';
           pi->problem_name = name;

@@ -555,7 +555,7 @@ void print_hint_match_stats(FILE *fp, Clist hint_list)
   }
 
   /* Collect match counts */
-  counts = malloc(total * sizeof(double));
+  counts = safe_malloc(total * sizeof(double));
   i = 0;
   for (p = hint_list->first; p; p = p->next) {
     if (p->c->weight > 0)
@@ -607,5 +607,5 @@ void print_hint_match_stats(FILE *fp, Clist hint_list)
     }
   }
 
-  free(counts);
+  safe_free(counts);
 }  /* print_hint_match_stats */

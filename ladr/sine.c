@@ -54,7 +54,7 @@ static void collect_formula_symbols(Formula f, BOOL *seen, int *buf, int *buf_le
 {
   /* Phase 1: walk the formula tree (AND/OR/NOT/QUANT nodes) to find atoms */
   int fstack_cap = 256;
-  Formula *fstack = malloc(fstack_cap * sizeof(Formula));
+  Formula *fstack = safe_malloc(fstack_cap * sizeof(Formula));
   int ftop = 0;
   int i, sn;
   fstack[0] = f;
@@ -65,7 +65,7 @@ static void collect_formula_symbols(Formula f, BOOL *seen, int *buf, int *buf_le
     if (cur->type == ATOM_FORM) {
       /* Phase 2: walk the term tree rooted at cur->atom */
       int tstack_cap = 256;
-      Term *tstack = malloc(tstack_cap * sizeof(Term));
+      Term *tstack = safe_malloc(tstack_cap * sizeof(Term));
       int ttop = 0;
       tstack[0] = cur->atom;
 
@@ -88,24 +88,24 @@ static void collect_formula_symbols(Formula f, BOOL *seen, int *buf, int *buf_le
         for (i = ARITY(t) - 1; i >= 0; i--) {
           if (++ttop >= tstack_cap) {
             tstack_cap *= 2;
-            tstack = realloc(tstack, tstack_cap * sizeof(*tstack));
+            tstack = safe_realloc(tstack, tstack_cap * sizeof(*tstack));
           }
           tstack[ttop] = ARG(t, i);
         }
       }
-      free(tstack);
+      safe_free(tstack);
     }
     else {
       for (i = cur->arity - 1; i >= 0; i--) {
         if (++ftop >= fstack_cap) {
           fstack_cap *= 2;
-          fstack = realloc(fstack, fstack_cap * sizeof(*fstack));
+          fstack = safe_realloc(fstack, fstack_cap * sizeof(*fstack));
         }
         fstack[ftop] = cur->kids[i];
       }
     }
   }
-  free(fstack);
+  safe_free(fstack);
 }  /* collect_formula_symbols */
 
 /*************
@@ -167,17 +167,17 @@ void sine_filter(Plist axioms, Plist goals,
 
   /* Per-axiom symbol lists: axiom_syms[i] is an array of symnums,
      axiom_nsyms[i] is the count. */
-  axiom_syms = calloc(n_axioms, sizeof(int *));
-  axiom_nsyms = calloc(n_axioms, sizeof(int));
+  axiom_syms = safe_calloc(n_axioms, sizeof(int *));
+  axiom_nsyms = safe_calloc(n_axioms, sizeof(int));
 
   /* occ[s] = number of axioms containing symbol s */
-  occ = calloc(sn_size, sizeof(int));
+  occ = safe_calloc(sn_size, sizeof(int));
 
   /* seen[] for dedup in collect_formula_symbols */
-  seen = calloc(sn_size, sizeof(BOOL));
+  seen = safe_calloc(sn_size, sizeof(BOOL));
 
   /* Temporary buffer for collecting symbols from one formula */
-  sym_buf = malloc(sn_size * sizeof(int));
+  sym_buf = safe_malloc(sn_size * sizeof(int));
 
   /* Phase 1: collect symbols per axiom and compute occ[] */
   {
@@ -188,7 +188,7 @@ void sine_filter(Plist axioms, Plist goals,
       collect_formula_symbols((Formula) p->v, seen, sym_buf, &buf_len);
 
       /* Copy symbols for this axiom */
-      axiom_syms[idx] = malloc(buf_len * sizeof(int));
+      axiom_syms[idx] = safe_malloc(buf_len * sizeof(int));
       memcpy(axiom_syms[idx], sym_buf, buf_len * sizeof(int));
       axiom_nsyms[idx] = buf_len;
 
@@ -203,7 +203,7 @@ void sine_filter(Plist axioms, Plist goals,
   }
 
   /* Phase 2: compute min_occ[i] for each axiom */
-  min_occ = malloc(n_axioms * sizeof(int));
+  min_occ = safe_malloc(n_axioms * sizeof(int));
   for (i = 0; i < n_axioms; i++) {
     int mo = INT_MAX;
     for (j = 0; j < axiom_nsyms[i]; j++) {
@@ -215,8 +215,8 @@ void sine_filter(Plist axioms, Plist goals,
   }
 
   /* Phase 3: seed active symbols from goals */
-  active = calloc(sn_size, sizeof(BOOL));
-  next_active = calloc(sn_size, sizeof(BOOL));
+  active = safe_calloc(sn_size, sizeof(BOOL));
+  next_active = safe_calloc(sn_size, sizeof(BOOL));
   memset(seen, 0, sn_size * sizeof(BOOL));  /* reuse seen for goal symbols */
 
   {
@@ -237,8 +237,8 @@ void sine_filter(Plist axioms, Plist goals,
      An axiom can be tight (passes both), loose-only (passes wide but not
      tight), or unselected.  Both tight and loose axioms propagate their
      symbols to next_active (wide tolerance drives BFS expansion). */
-  sel_depth = calloc(n_axioms, sizeof(int));
-  loose_depth = calloc(n_axioms, sizeof(int));
+  sel_depth = safe_calloc(n_axioms, sizeof(int));
+  loose_depth = safe_calloc(n_axioms, sizeof(int));
   depth = 0;
 
   for (;;) {
@@ -297,8 +297,8 @@ void sine_filter(Plist axioms, Plist goals,
 #ifdef DEBUG
   /* Diagnostic: per-depth counts to stderr */
   if (depth > 0) {
-    int *dcnt_tight = calloc(depth + 1, sizeof(int));
-    int *dcnt_loose = calloc(depth + 1, sizeof(int));
+    int *dcnt_tight = safe_calloc(depth + 1, sizeof(int));
+    int *dcnt_loose = safe_calloc(depth + 1, sizeof(int));
     int total_tight = 0, total_loose = 0;
     for (i = 0; i < n_axioms; i++) {
       if (sel_depth[i] > 0) {
@@ -315,8 +315,8 @@ void sine_filter(Plist axioms, Plist goals,
     for (i = 1; i <= depth; i++)
       fprintf(stderr, " d%d=%d+%d", i, dcnt_tight[i], dcnt_loose[i]);
     fprintf(stderr, "\n");
-    free(dcnt_tight);
-    free(dcnt_loose);
+    safe_free(dcnt_tight);
+    safe_free(dcnt_loose);
   }
 #endif
 
@@ -373,17 +373,17 @@ void sine_filter(Plist axioms, Plist goals,
 
   /* Cleanup */
   for (i = 0; i < n_axioms; i++)
-    free(axiom_syms[i]);
-  free(axiom_syms);
-  free(axiom_nsyms);
-  free(occ);
-  free(seen);
-  free(sym_buf);
-  free(min_occ);
-  free(active);
-  free(next_active);
-  free(sel_depth);
-  free(loose_depth);
+    safe_free(axiom_syms[i]);
+  safe_free(axiom_syms);
+  safe_free(axiom_nsyms);
+  safe_free(occ);
+  safe_free(seen);
+  safe_free(sym_buf);
+  safe_free(min_occ);
+  safe_free(active);
+  safe_free(next_active);
+  safe_free(sel_depth);
+  safe_free(loose_depth);
 }  /* sine_filter */
 
 /*************
@@ -427,7 +427,7 @@ void sine_filter_scan(struct scan_entry *entries, int n_entries,
     eff_tol2 = tolerance_pct;
 
   /* Compute occ[] -- goals and hypotheses don't contribute (they seed BFS) */
-  occ = calloc(n_symbols, sizeof(int));
+  occ = safe_calloc(n_symbols, sizeof(int));
   for (i = 0; i < n_entries; i++) {
     if (entries[i].role == SCAN_ROLE_GOAL ||
         entries[i].role == SCAN_ROLE_HYPOTHESIS)
@@ -439,7 +439,7 @@ void sine_filter_scan(struct scan_entry *entries, int n_entries,
   }
 
   /* Compute min_occ[] for axiom-role entries */
-  min_occ = malloc(n_entries * sizeof(int));
+  min_occ = safe_malloc(n_entries * sizeof(int));
   for (i = 0; i < n_entries; i++) {
     if (entries[i].role == SCAN_ROLE_GOAL ||
         entries[i].role == SCAN_ROLE_HYPOTHESIS) {
@@ -458,8 +458,8 @@ void sine_filter_scan(struct scan_entry *entries, int n_entries,
   }
 
   /* Seed active symbols from goals, cnf negated_conjecture, and hypotheses */
-  active = calloc(n_symbols, sizeof(BOOL));
-  next_active = calloc(n_symbols, sizeof(BOOL));
+  active = safe_calloc(n_symbols, sizeof(BOOL));
+  next_active = safe_calloc(n_symbols, sizeof(BOOL));
   n_selected = 0;
   for (i = 0; i < n_entries; i++) {
     if (entries[i].role == SCAN_ROLE_GOAL ||
@@ -543,8 +543,8 @@ void sine_filter_scan(struct scan_entry *entries, int n_entries,
 #ifdef DEBUG
   /* Diagnostic: per-depth counts to stderr */
   if (depth > 0) {
-    int *dcnt_tight = calloc(depth + 1, sizeof(int));
-    int *dcnt_loose = calloc(depth + 1, sizeof(int));
+    int *dcnt_tight = safe_calloc(depth + 1, sizeof(int));
+    int *dcnt_loose = safe_calloc(depth + 1, sizeof(int));
     int total_tight = 0, total_loose = 0;
     for (i = 0; i < n_entries; i++) {
       if (sel_depth[i] > 0) {
@@ -561,13 +561,13 @@ void sine_filter_scan(struct scan_entry *entries, int n_entries,
     for (i = 1; i <= depth; i++)
       fprintf(stderr, " d%d=%d+%d", i, dcnt_tight[i], dcnt_loose[i]);
     fprintf(stderr, "\n");
-    free(dcnt_tight);
-    free(dcnt_loose);
+    safe_free(dcnt_tight);
+    safe_free(dcnt_loose);
   }
 #endif
 
-  free(occ);
-  free(min_occ);
-  free(active);
-  free(next_active);
+  safe_free(occ);
+  safe_free(min_occ);
+  safe_free(active);
+  safe_free(next_active);
 }  /* sine_filter_scan */

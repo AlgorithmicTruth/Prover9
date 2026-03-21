@@ -75,9 +75,7 @@ char *build_command_string(int argc, char **argv)
   for (i = 0; i < argc; i++)
     len += strlen(argv[i]) + 1;  /* +1 for space or NUL */
 
-  s = malloc(len);
-  if (s == NULL)
-    return NULL;
+  s = safe_malloc(len);
 
   p = s;
   for (i = 0; i < argc; i++) {

@@ -365,12 +365,14 @@ void enable_max_megs(void)
 
 /*************
  *
- *   alloc_retry_loop() - Retry allocation with exponential backoff
+ *   alloc_retry_loop() - Handle allocation failure
  *
- *   Wait sequence: 1, 2, 4, 8, 16, 32, 64 minutes
- *   Then prompt user to retry sequence or exit(3)
+ *   DEBUG:   exponential backoff retries, then prompt user
+ *   Release: immediate fatal exit
  *
  *************/
+
+#ifdef DEBUG
 
 static
 void *alloc_retry_loop(void *(*alloc_func)(size_t), size_t n, const char *func_name)
@@ -410,6 +412,20 @@ void *alloc_retry_loop(void *(*alloc_func)(size_t), size_t n, const char *func_n
     }
   }
 }  /* alloc_retry_loop */
+
+#else /* !DEBUG */
+
+static
+void *alloc_retry_loop(void *(*alloc_func)(size_t), size_t n, const char *func_name)
+{
+  (void) alloc_func;
+  fprintf(stderr, "%s: out of memory (allocation of %lu bytes failed)\n",
+          func_name, (unsigned long)n);
+  exit(3);
+  return NULL;  /* unreachable, silence compiler warning */
+}  /* alloc_retry_loop */
+
+#endif /* DEBUG */
 
 #ifdef DEBUG
 
@@ -661,6 +677,62 @@ void safe_free(void *p)
   free(header);
 }  /* safe_free */
 
+/*************
+ *
+ *   safe_realloc() - realloc with NULL check, retry, and tracking
+ *
+ *   Handles the size header so old pointer is not lost on failure.
+ *
+ *************/
+
+/* PUBLIC */
+void *safe_realloc(void *p, size_t n)
+{
+  void *new_p;
+  size_t *old_header;
+  size_t *new_header;
+  size_t old_size;
+  size_t total_size;
+
+  if (p == NULL)
+    return safe_malloc(n);
+
+  if (n == 0) {
+    safe_free(p);
+    return NULL;
+  }
+
+  /* Get the real allocation pointer (before header) */
+  old_header = (size_t *)((char *)p - SIZE_HEADER_SIZE);
+  old_size = *old_header;
+
+  total_size = n + SIZE_HEADER_SIZE;
+  new_p = realloc(old_header, total_size);
+  if (new_p == NULL) {
+    /* realloc failed -- old block is still valid */
+    fatal_error("safe_realloc: memory allocation failed");
+  }
+
+  /* Store new size in header */
+  new_header = (size_t *)new_p;
+  *new_header = n;
+
+  /* Update tracking */
+  Total_freed += old_size;
+  Total_allocated += n;
+
+  if (Memory_logging_enabled) {
+    fprintf(stderr, "MEMORY_LOG: safe_realloc(%p, %lu) = %p [net=%lld]\n",
+            p, (unsigned long)n,
+            (void *)((char *)new_p + SIZE_HEADER_SIZE),
+            (long long)(Total_allocated - Total_freed));
+    fflush(stderr);
+  }
+
+  /* Return pointer past the header */
+  return (char *)new_p + SIZE_HEADER_SIZE;
+}  /* safe_realloc */
+
 #else /* !DEBUG -- Release mode: no size headers, no tracking */
 
 /*************
@@ -776,5 +848,31 @@ void safe_free(void *p)
     return;
   free(p);
 }  /* safe_free */
+
+/*************
+ *
+ *   safe_realloc() - realloc with NULL check and retry mechanism
+ *
+ *************/
+
+/* PUBLIC */
+void *safe_realloc(void *p, size_t n)
+{
+  void *new_p;
+
+  if (p == NULL)
+    return safe_malloc(n);
+
+  if (n == 0) {
+    free(p);
+    return NULL;
+  }
+
+  new_p = realloc(p, n);
+  if (new_p == NULL)
+    fatal_error("safe_realloc: memory allocation failed");
+
+  return new_p;
+}  /* safe_realloc */
 
 #endif /* DEBUG */

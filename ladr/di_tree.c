@@ -225,12 +225,10 @@ BOOL di_tree_delete(int *vec, int len, Di_tree node, void *datum)
 
   /* Heap-allocated arrays for the walk-down path */
   {
-    Di_tree *parents = (Di_tree *) malloc(len * sizeof(Di_tree));
-    Di_tree *prevs   = (Di_tree *) malloc(len * sizeof(Di_tree));
-    Di_tree *currs   = (Di_tree *) malloc(len * sizeof(Di_tree));
+    Di_tree *parents = (Di_tree *) safe_malloc(len * sizeof(Di_tree));
+    Di_tree *prevs   = (Di_tree *) safe_malloc(len * sizeof(Di_tree));
+    Di_tree *currs   = (Di_tree *) safe_malloc(len * sizeof(Di_tree));
     BOOL keep;
-    if (!parents || !prevs || !currs)
-      fatal_error("di_tree_delete, malloc failed");
 
     /* Walk down, saving parent/prev/curr at each level */
     for (lev = 0; lev < len; lev++) {
@@ -263,9 +261,9 @@ BOOL di_tree_delete(int *vec, int len, Di_tree node, void *datum)
       keep = (parents[lev]->u.kids != NULL);
     }
 
-    free(parents);
-    free(prevs);
-    free(currs);
+    safe_free(parents);
+    safe_free(prevs);
+    safe_free(currs);
     return keep;
   }
 }  /* di_tree_delete */
@@ -284,10 +282,8 @@ void zap_di_tree(Di_tree node, int depth)
 {
   int cap = 256;
   int top = 0;
-  Di_tree *nd_stk = (Di_tree *) malloc(cap * sizeof(Di_tree));
-  int     *dp_stk = (int *)     malloc(cap * sizeof(int));
-  if (!nd_stk || !dp_stk)
-    fatal_error("zap_di_tree, malloc failed");
+  Di_tree *nd_stk = (Di_tree *) safe_malloc(cap * sizeof(Di_tree));
+  int     *dp_stk = (int *)     safe_malloc(cap * sizeof(int));
 
   nd_stk[top] = node;
   dp_stk[top] = depth;
@@ -309,10 +305,8 @@ void zap_di_tree(Di_tree node, int depth)
         /* Push child onto stack */
         if (top >= cap) {
           cap *= 2;
-          nd_stk = (Di_tree *) realloc(nd_stk, cap * sizeof(Di_tree));
-          dp_stk = (int *)     realloc(dp_stk, cap * sizeof(int));
-          if (!nd_stk || !dp_stk)
-            fatal_error("zap_di_tree, realloc failed");
+          nd_stk = (Di_tree *) safe_realloc(nd_stk, cap * sizeof(Di_tree));
+          dp_stk = (int *)     safe_realloc(dp_stk, cap * sizeof(int));
         }
         nd_stk[top] = tmp;
         dp_stk[top] = depth - 1;
@@ -322,8 +316,8 @@ void zap_di_tree(Di_tree node, int depth)
     free_di_tree(node);
   }
 
-  free(nd_stk);
-  free(dp_stk);
+  safe_free(nd_stk);
+  safe_free(dp_stk);
 }  /* zap_di_tree */
 
 /*************
@@ -347,9 +341,7 @@ void p_di_tree(int *vec, int len, Di_tree node, int depth)
   };
   int cap = 256;
   int sp = 0;
-  struct pdt_frame *stack = malloc(cap * sizeof(struct pdt_frame));
-  if (!stack)
-    fatal_error("p_di_tree: malloc failed");
+  struct pdt_frame *stack = safe_malloc(cap * sizeof(struct pdt_frame));
 
   /* Push initial call. */
   stack[sp].vec_idx = 0;
@@ -394,9 +386,7 @@ void p_di_tree(int *vec, int len, Di_tree node, int depth)
       /* Ensure capacity. */
       while (sp + nkids > cap) {
         cap *= 2;
-        stack = realloc(stack, cap * sizeof(struct pdt_frame));
-        if (!stack)
-          fatal_error("p_di_tree: realloc failed");
+        stack = safe_realloc(stack, cap * sizeof(struct pdt_frame));
       }
 
       /* Push children forward, then reverse the slice so that
@@ -423,7 +413,7 @@ void p_di_tree(int *vec, int len, Di_tree node, int depth)
       }
     }
   }
-  free(stack);
+  safe_free(stack);
 }  /* p_di_tree */
 
 /*************
@@ -534,11 +524,9 @@ Topform di_tree_forward(int *vec, int len, Di_tree node, Literals dlits,
   }
 
   {
-    Di_tree *stk = (Di_tree *) malloc(len * sizeof(Di_tree));
+    Di_tree *stk = (Di_tree *) safe_malloc(len * sizeof(Di_tree));
     int lev = 0;
     Di_tree kid;
-    if (!stk)
-      fatal_error("di_tree_forward, malloc failed");
 
     kid = node->u.kids;
 
@@ -573,7 +561,7 @@ Topform di_tree_forward(int *vec, int len, Di_tree node, Literals dlits,
     }
 
   done:
-    free(stk);
+    safe_free(stk);
     return result;
   }
 }  /* di_tree_forward */
@@ -623,11 +611,9 @@ void di_tree_back(int *vec, int len, Di_tree node, Literals clits,
   }
 
   {
-    Di_tree *stk = (Di_tree *) malloc(len * sizeof(Di_tree));
+    Di_tree *stk = (Di_tree *) safe_malloc(len * sizeof(Di_tree));
     int lev = 0;
     Di_tree kid;
-    if (!stk)
-      fatal_error("di_tree_back, malloc failed");
 
     /* Start: skip kids with label < vec[0] */
     kid = node->u.kids;
@@ -665,7 +651,7 @@ void di_tree_back(int *vec, int len, Di_tree node, Literals clits,
       }
     }
 
-    free(stk);
+    safe_free(stk);
   }
 }  /* di_tree_back */
 

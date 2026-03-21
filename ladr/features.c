@@ -64,9 +64,7 @@ void init_features(Ilist fsyms, Ilist rsyms)
   Neg_maxdepth    = safe_calloc(Work_size, sizeof(int));
 
   /* Build Is_function_sym cache */
-  Is_function_sym = calloc(Work_size, sizeof(BOOL));
-  if (!Is_function_sym)
-    fatal_error("init_features: calloc Is_function_sym failed");
+  Is_function_sym = safe_calloc(Work_size, sizeof(BOOL));
   for (p = fsyms; p; p = p->next) {
     if (p->i >= 0 && p->i < Work_size)
       Is_function_sym[p->i] = TRUE;
@@ -80,9 +78,7 @@ void init_features(Ilist fsyms, Ilist rsyms)
       n += 2;
   }
   Feature_count = n;
-  Feature_vec = calloc(Feature_count, sizeof(int));
-  if (!Feature_vec)
-    fatal_error("init_features: calloc Feature_vec failed");
+  Feature_vec = safe_calloc(Feature_count, sizeof(int));
 }  /* init_features */
 
 /*************

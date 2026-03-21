@@ -322,7 +322,7 @@ int main(int argc, char **argv)
       if (len >= 2 && strcmp(base + len - 2, ".p") == 0)
         len -= 2;
       if (len > 0) {
-        problem_name = malloc(len + 1);
+        problem_name = safe_malloc(len + 1);
         memcpy(problem_name, base, len);
         problem_name[len] = '\0';
         Mace4_problem_name = problem_name;
@@ -536,7 +536,7 @@ int main(int argc, char **argv)
 
       if (saved_depth > 0)
         saved_trail = (struct search_frame *)
-          malloc(saved_depth * sizeof(struct search_frame));
+          safe_malloc(saved_depth * sizeof(struct search_frame));
 
       for (d = 0; d < saved_depth; d++) {
         int depth_check;
@@ -577,7 +577,7 @@ int main(int argc, char **argv)
         results = mace4(clauses, &opt);
 
         if (saved_trail != NULL)
-          free(saved_trail);
+          safe_free(saved_trail);
       }
     }
   }

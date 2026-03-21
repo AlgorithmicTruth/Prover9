@@ -109,14 +109,14 @@ int main(int argc, char **argv)
 
   {
     int sn = greatest_symnum() + 1;
-    int *rcounts = calloc(sn, sizeof(int));
-    int *fcounts = calloc(sn, sizeof(int));
+    int *rcounts = safe_calloc(sn, sizeof(int));
+    int *fcounts = safe_calloc(sn, sizeof(int));
     Ilist rsyms, fsyms;
     gather_symbols_in_formulas(all, rcounts, fcounts);
     rsyms = counts_to_set(rcounts, sn);
     fsyms = counts_to_set(fcounts, sn);
-    free(rcounts);
-    free(fcounts);
+    safe_free(rcounts);
+    safe_free(fcounts);
     fp_syms = ilist_cat(rsyms, fsyms);
   }
 

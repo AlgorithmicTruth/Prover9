@@ -559,9 +559,7 @@ int str_to_sn(char *str, int arity)
 
   if (s == NULL) {
     s = get_symbol();
-    s->name = malloc(len + 1);
-    if (s->name == NULL)
-      fatal_error("str_to_sn, malloc failed for symbol name");
+    s->name = safe_malloc(len + 1);
     memcpy(s->name, str, len + 1);
     s->name_len = len;
     s->arity = arity;
@@ -2426,7 +2424,7 @@ Ilist sort_by_lex_val(Ilist p)
   if (n <= 1)
     return p;
 
-  arr = malloc(n * sizeof(int));
+  arr = safe_malloc(n * sizeof(int));
   for (q = p, i = 0; q; q = q->next, i++)
     arr[i] = q->i;
 
@@ -2437,7 +2435,7 @@ Ilist sort_by_lex_val(Ilist p)
   for (q = result, i = 0; q; q = q->next, i++)
     q->i = arr[i];
 
-  free(arr);
+  safe_free(arr);
   return result;
 }  /* sort_by_lex_val */
 

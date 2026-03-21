@@ -171,11 +171,11 @@ If a subformula as excess references, the refcount is decremented instead.
 void zap_formula(Formula f)
 {
   int capacity = 1000;
-  Formula *stack = malloc(capacity * sizeof(Formula));
+  Formula *stack = safe_malloc(capacity * sizeof(Formula));
   int top = 0;
 
   if (f == NULL) {
-    free(stack);
+    safe_free(stack);
     return;
   }
 
@@ -200,7 +200,7 @@ void zap_formula(Formula f)
         top++;
         if (top >= capacity) {
           capacity *= 2;
-          stack = realloc(stack, capacity * sizeof(Formula));
+          stack = safe_realloc(stack, capacity * sizeof(Formula));
         }
         stack[top] = cur->kids[i];
       }
@@ -209,7 +209,7 @@ void zap_formula(Formula f)
       zap_attributes(cur->attributes);
     free_formula(cur);
   }
-  free(stack);
+  safe_free(stack);
 }  /* zap_formula */
 
 /*************
@@ -247,7 +247,7 @@ void gather_symbols_in_term(Term t, int *rcounts, int *fcounts)
   /* Iterative pre-order traversal.  For "if" terms, the condition
      (ARG 0) is a formula-term and handled by gather_symbols_in_formula_term. */
   int stack_cap = 1000;
-  Term *stack = malloc(stack_cap * sizeof(Term));
+  Term *stack = safe_malloc(stack_cap * sizeof(Term));
   int top = 0;
   stack[0] = t;
 
@@ -261,10 +261,10 @@ void gather_symbols_in_term(Term t, int *rcounts, int *fcounts)
     if (is_term(cur, "if", 3)) {
       gather_symbols_in_formula_term(ARG(cur,0), rcounts, fcounts);
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top] = ARG(cur, 2);
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top] = ARG(cur, 1);
     }
     else {
@@ -272,12 +272,12 @@ void gather_symbols_in_term(Term t, int *rcounts, int *fcounts)
       fcounts[SYMNUM(cur)]++;
       for (i = ARITY(cur) - 1; i >= 0; i--) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = ARG(cur, i);
       }
     }
   }
-  free(stack);
+  safe_free(stack);
 }  /* gather_symbols_in_term */
 
 /*************
@@ -294,7 +294,7 @@ void gather_symbols_in_formula_term(Term t, int *rcounts, int *fcounts)
 {
   /* Iterative traversal of formula-term structure. */
   int fstack_cap = 1000;
-  Term *fstack = malloc(fstack_cap * sizeof(Term));
+  Term *fstack = safe_malloc(fstack_cap * sizeof(Term));
   int ftop = 0;
   fstack[0] = t;
 
@@ -309,7 +309,7 @@ void gather_symbols_in_formula_term(Term t, int *rcounts, int *fcounts)
           ;  /* skip quantifier and quantified variable */
         else {
           ftop++;
-          if (ftop >= fstack_cap) { fstack_cap *= 2; fstack = realloc(fstack, fstack_cap * sizeof(*fstack)); }
+          if (ftop >= fstack_cap) { fstack_cap *= 2; fstack = safe_realloc(fstack, fstack_cap * sizeof(*fstack)); }
           fstack[ftop] = ARG(cur, i);
         }
       }
@@ -321,7 +321,7 @@ void gather_symbols_in_formula_term(Term t, int *rcounts, int *fcounts)
         gather_symbols_in_term(ARG(cur, i), rcounts, fcounts);
     }
   }
-  free(fstack);
+  safe_free(fstack);
 }  /* gather_symbols_in_formula_term */
 
 /*************
@@ -337,7 +337,7 @@ void gather_symbols_in_formula_term(Term t, int *rcounts, int *fcounts)
 void gather_symbols_in_formula(Formula f, int *rcounts, int *fcounts)
 {
   int fstack_cap = 1000;
-  Formula *fstack = malloc(fstack_cap * sizeof(Formula));
+  Formula *fstack = safe_malloc(fstack_cap * sizeof(Formula));
   int ftop = 0;
   fstack[0] = f;
 
@@ -358,12 +358,12 @@ void gather_symbols_in_formula(Formula f, int *rcounts, int *fcounts)
       int i;
       for (i = cur->arity - 1; i >= 0; i--) {
         ftop++;
-        if (ftop >= fstack_cap) { fstack_cap *= 2; fstack = realloc(fstack, fstack_cap * sizeof(*fstack)); }
+        if (ftop >= fstack_cap) { fstack_cap *= 2; fstack = safe_realloc(fstack, fstack_cap * sizeof(*fstack)); }
         fstack[ftop] = cur->kids[i];
       }
     }
   }
-  free(fstack);
+  safe_free(fstack);
 }  /* gather_symbols_in_formula */
 
 /*************
@@ -396,13 +396,13 @@ void gather_symbols_in_formulas(Plist lst, int *rcounts, int *fcounts)
 Ilist function_symbols_in_formula(Formula f)
 {
   int n = greatest_symnum() + 1;
-  int *rcounts = calloc(n, sizeof(int));
-  int *fcounts = calloc(n, sizeof(int));
+  int *rcounts = safe_calloc(n, sizeof(int));
+  int *fcounts = safe_calloc(n, sizeof(int));
   Ilist p;
   gather_symbols_in_formula(f, rcounts, fcounts);
   p = counts_to_set(fcounts, n);
-  free(rcounts);
-  free(fcounts);
+  safe_free(rcounts);
+  safe_free(fcounts);
   return p;
 }  /* function_symbols_in_formula */
 
@@ -419,13 +419,13 @@ Ilist function_symbols_in_formula(Formula f)
 Ilist relation_symbols_in_formula(Formula f)
 {
   int n = greatest_symnum() + 1;
-  int *rcounts = calloc(n, sizeof(int));
-  int *fcounts = calloc(n, sizeof(int));
+  int *rcounts = safe_calloc(n, sizeof(int));
+  int *fcounts = safe_calloc(n, sizeof(int));
   Ilist p;
   gather_symbols_in_formula(f, rcounts, fcounts);
   p = counts_to_set(rcounts, n);
-  free(rcounts);
-  free(fcounts);
+  safe_free(rcounts);
+  safe_free(fcounts);
   return p;
 }  /* relation_symbols_in_formula */
 
@@ -469,7 +469,7 @@ Formula term_to_formula(Term t)
      source term tsrc and link result into parent->kids[ci]. */
   typedef struct { Term src; Formula parent; int ci; } Ttf_entry;
   int stack_cap = 1000;
-  Ttf_entry *stack = malloc(stack_cap * sizeof(*stack));
+  Ttf_entry *stack = safe_malloc(stack_cap * sizeof(*stack));
   int top = -1;
   Formula result = NULL;
 
@@ -503,7 +503,7 @@ Formula term_to_formula(Term t)
       f->attributes = attributes;
       /* Push body as child 0. */
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = ARG(tsrc,2);
       stack[top].parent = f;
       stack[top].ci = 0;
@@ -532,7 +532,7 @@ Formula term_to_formula(Term t)
 	f = formula_get(1, NOT_FORM);
 	f->attributes = attributes;
 	top++;
-	if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+	if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
 	stack[top].src = ARG(tsrc,0);
 	stack[top].parent = f;
 	stack[top].ci = 0;
@@ -542,12 +542,12 @@ Formula term_to_formula(Term t)
 	f->attributes = attributes;
 	/* Push children: child 1 first (processed second). */
 	top++;
-	if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+	if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
 	stack[top].src = ARG(tsrc,1);
 	stack[top].parent = f;
 	stack[top].ci = 1;
 	top++;
-	if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+	if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
 	stack[top].src = ARG(tsrc,0);
 	stack[top].parent = f;
 	stack[top].ci = 0;
@@ -560,14 +560,14 @@ Formula term_to_formula(Term t)
     else
       parent->kids[ci] = f;
   }
-  free(stack);
+  safe_free(stack);
 
   /* Phase 2: post-order flatten_top pass.  flatten_top may free the old
      node and return a new one, so we save/restore attributes. */
   {
     typedef struct { Formula node; int child; } Ttf_p2_entry;
     int pstack_cap = 1000;
-    Ttf_p2_entry *pstack = malloc(pstack_cap * sizeof(*pstack));
+    Ttf_p2_entry *pstack = safe_malloc(pstack_cap * sizeof(*pstack));
     int ptop = 0;
     pstack[0].node = result;
     pstack[0].child = 0;
@@ -577,7 +577,7 @@ Formula term_to_formula(Term t)
       if (pstack[ptop].child < cur->arity) {
 	int c = pstack[ptop].child++;
 	ptop++;
-	if (ptop >= pstack_cap) { pstack_cap *= 2; pstack = realloc(pstack, pstack_cap * sizeof(*pstack)); }
+	if (ptop >= pstack_cap) { pstack_cap *= 2; pstack = safe_realloc(pstack, pstack_cap * sizeof(*pstack)); }
 	pstack[ptop].node = cur->kids[c];
 	pstack[ptop].child = 0;
       }
@@ -596,7 +596,7 @@ Formula term_to_formula(Term t)
 	ptop--;
       }
     }
-    free(pstack);
+    safe_free(pstack);
   }
 
   return result;
@@ -621,7 +621,7 @@ Term formula_to_term(Formula f)
    */
   typedef struct { Formula src; Term dst; int child; } Ftt_entry;
   int stack_cap = 1000;
-  Ftt_entry *stack = malloc(stack_cap * sizeof(*stack));
+  Ftt_entry *stack = safe_malloc(stack_cap * sizeof(*stack));
   int top = -1;
   Term result = NULL;
 
@@ -638,7 +638,7 @@ Term formula_to_term(Formula f)
       t = get_rigid_term(not_sym(), 1);
       /* Push child: kids[0] -> ARG(t,0) */
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[0];
       stack[top].dst = t;
       stack[top].child = 0;
@@ -646,28 +646,28 @@ Term formula_to_term(Formula f)
     case IFF_FORM:
       t = get_rigid_term(iff_sym(), 2);
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[1]; stack[top].dst = t; stack[top].child = 1;
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[0]; stack[top].dst = t; stack[top].child = 0;
       break;
     case IMP_FORM:
       t = get_rigid_term(imp_sym(), 2);
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[1]; stack[top].dst = t; stack[top].child = 1;
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[0]; stack[top].dst = t; stack[top].child = 0;
       break;
     case IMPBY_FORM:
       t = get_rigid_term(impby_sym(), 2);
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[1]; stack[top].dst = t; stack[top].child = 1;
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[0]; stack[top].dst = t; stack[top].child = 0;
       break;
     case AND_FORM:
@@ -682,7 +682,7 @@ Term formula_to_term(Formula f)
         /* Build chain from right: start with rightmost kid as a pending src. */
         /* First, create (arity-1) binary nodes chained right-associatively. */
         int nops = cur->arity - 1;
-        Term *chain_terms = calloc(nops, sizeof(Term));
+        Term *chain_terms = safe_calloc(nops, sizeof(Term));
         if (chain_terms == NULL)
           fatal_error("formula_to_term: malloc failed");
         for (i = 0; i < nops; i++)
@@ -693,19 +693,19 @@ Term formula_to_term(Formula f)
         t = chain_terms[0];
         /* The rightmost op node's ARG(,1) gets the last kid. Push it. */
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top].src = cur->kids[cur->arity - 1];
         stack[top].dst = chain_terms[nops - 1];
         stack[top].child = 1;
         /* Each chain_terms[i]->args[0] gets kids[i]. Push them. */
         for (i = nops - 1; i >= 0; i--) {
           top++;
-          if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+          if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
           stack[top].src = cur->kids[i];
           stack[top].dst = chain_terms[i];
           stack[top].child = 0;
         }
-        free(chain_terms);
+        safe_free(chain_terms);
       }
       break;
     case ALL_FORM:
@@ -715,7 +715,7 @@ Term formula_to_term(Formula f)
       ARG(t,1) = get_rigid_term(cur->qvar, 0);
       /* Push child: kids[0] -> ARG(t,2) */
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[0];
       stack[top].dst = t;
       stack[top].child = 2;
@@ -745,7 +745,7 @@ Term formula_to_term(Formula f)
     case NOT_FORM:
       t = get_rigid_term(not_sym(), 1);
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[0];
       stack[top].dst = t;
       stack[top].child = 0;
@@ -753,28 +753,28 @@ Term formula_to_term(Formula f)
     case IFF_FORM:
       t = get_rigid_term(iff_sym(), 2);
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[1]; stack[top].dst = t; stack[top].child = 1;
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[0]; stack[top].dst = t; stack[top].child = 0;
       break;
     case IMP_FORM:
       t = get_rigid_term(imp_sym(), 2);
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[1]; stack[top].dst = t; stack[top].child = 1;
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[0]; stack[top].dst = t; stack[top].child = 0;
       break;
     case IMPBY_FORM:
       t = get_rigid_term(impby_sym(), 2);
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[1]; stack[top].dst = t; stack[top].child = 1;
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[0]; stack[top].dst = t; stack[top].child = 0;
       break;
     case AND_FORM:
@@ -785,7 +785,7 @@ Term formula_to_term(Formula f)
         int i;
         char *sym = (cur->type == AND_FORM ? and_sym() : or_sym());
         int nops = cur->arity - 1;
-        Term *chain_terms = calloc(nops, sizeof(Term));
+        Term *chain_terms = safe_calloc(nops, sizeof(Term));
         if (chain_terms == NULL)
           fatal_error("formula_to_term: malloc failed");
         for (i = 0; i < nops; i++)
@@ -794,18 +794,18 @@ Term formula_to_term(Formula f)
           ARG(chain_terms[i], 1) = chain_terms[i + 1];
         t = chain_terms[0];
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top].src = cur->kids[cur->arity - 1];
         stack[top].dst = chain_terms[nops - 1];
         stack[top].child = 1;
         for (i = nops - 1; i >= 0; i--) {
           top++;
-          if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+          if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
           stack[top].src = cur->kids[i];
           stack[top].dst = chain_terms[i];
           stack[top].child = 0;
         }
-        free(chain_terms);
+        safe_free(chain_terms);
       }
       break;
     case ALL_FORM:
@@ -814,7 +814,7 @@ Term formula_to_term(Formula f)
       ARG(t,0) = get_rigid_term(cur->type == ALL_FORM ? all_sym() : exists_sym(), 0);
       ARG(t,1) = get_rigid_term(cur->qvar, 0);
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top].src = cur->kids[0];
       stack[top].dst = t;
       stack[top].child = 2;
@@ -827,7 +827,7 @@ Term formula_to_term(Formula f)
                             attributes_to_term(cur->attributes, attrib_sym()));
     ARG(parent, ci) = t;
   }
-  free(stack);
+  safe_free(stack);
 
   return result;
 }  /* formula_to_term */
@@ -941,7 +941,7 @@ unsigned hash_formula(Formula f)
    */
   typedef struct { Formula node; int child; unsigned accum; } Hframe;
   int cap = 1000;
-  Hframe *stack = malloc(cap * sizeof(Hframe));
+  Hframe *stack = safe_malloc(cap * sizeof(Hframe));
   int top = 0;
   unsigned result = 0;
 
@@ -972,7 +972,7 @@ unsigned hash_formula(Formula f)
         /* Push first child */
         fr->child = 1;
         top++;
-        if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Hframe)); }
+        if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Hframe)); }
         stack[top].node = cur->kids[0];
         stack[top].child = 0;
         stack[top].accum = 0;
@@ -986,7 +986,7 @@ unsigned hash_formula(Formula f)
         int next = fr->child;
         fr->child = next + 1;
         top++;
-        if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Hframe)); }
+        if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Hframe)); }
         stack[top].node = cur->kids[next];
         stack[top].child = 0;
         stack[top].accum = 0;
@@ -997,7 +997,7 @@ unsigned hash_formula(Formula f)
       }
     }
   }
-  free(stack);
+  safe_free(stack);
   return result;
 }  /* hash_formula */
 
@@ -1022,7 +1022,7 @@ BOOL formula_ident(Formula f, Formula g)
   /* Iterative comparison using a stack of pairs. */
   typedef struct { Formula a; Formula b; } Fi_entry;
   int stack_cap = 1000;
-  Fi_entry *stack = malloc(stack_cap * sizeof(*stack));
+  Fi_entry *stack = safe_malloc(stack_cap * sizeof(*stack));
   int top = 0;
 
   stack[0].a = f;
@@ -1034,30 +1034,30 @@ BOOL formula_ident(Formula f, Formula g)
     top--;
 
     if (a->type != b->type || a->arity != b->arity) {
-      free(stack);
+      safe_free(stack);
       return FALSE;
     }
     else if (a->type == ATOM_FORM) {
       if (!term_ident(a->atom, b->atom)) {
-        free(stack);
+        safe_free(stack);
         return FALSE;
       }
     }
     else {
       int i;
       if (quant_form(a) && !str_ident(a->qvar, b->qvar)) {
-        free(stack);
+        safe_free(stack);
         return FALSE;
       }
       for (i = 0; i < a->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top].a = a->kids[i];
         stack[top].b = b->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
   return TRUE;
 }  /* formula_ident */
 
@@ -1081,7 +1081,7 @@ Formula formula_copy(Formula f)
    */
   typedef struct { Formula orig; Formula copy; int child; } Fcframe;
   int cap = 1000;
-  Fcframe *stack = malloc(cap * sizeof(Fcframe));
+  Fcframe *stack = safe_malloc(cap * sizeof(Fcframe));
   int top = 0;
   Formula result = NULL;
   Formula cur;
@@ -1107,7 +1107,7 @@ restart:
       stack[top].copy = g;
       stack[top].child = 1;
       top++;
-      if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Fcframe)); }
+      if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Fcframe)); }
       cur = cur->kids[0];
       goto restart;
     }
@@ -1133,7 +1133,7 @@ restart:
     result = fr->copy;
   }
 
-  free(stack);
+  safe_free(stack);
   return result;
 }  /* formula_copy */
 
@@ -1173,7 +1173,7 @@ Formula dual(Formula f)
 {
   /* Iterative traversal: visit every node, change its type. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
 
   stack[0] = f;
@@ -1188,12 +1188,12 @@ Formula dual(Formula f)
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
   return f;
 }  /* dual */
 
@@ -1386,7 +1386,7 @@ Formula formula_flatten(Formula f)
    */
   typedef struct { Formula node; int child; } Ffframe;
   int cap = 1000;
-  Ffframe *stack = malloc(cap * sizeof(Ffframe));
+  Ffframe *stack = safe_malloc(cap * sizeof(Ffframe));
   int top = 0;
   Formula result = NULL;
   Formula cur;
@@ -1402,7 +1402,7 @@ restart:
     stack[top].node = cur;
     stack[top].child = 1;
     top++;
-    if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Ffframe)); }
+    if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Ffframe)); }
     cur = cur->kids[0];
     goto restart;
   }
@@ -1426,7 +1426,7 @@ restart:
     result = flatten_top(fr->node);
   }
 
-  free(stack);
+  safe_free(stack);
   return result;
 }  /* flatten */
   
@@ -1459,7 +1459,7 @@ Formula nnf2(Formula f, Fpref pref)
    */
   typedef struct { Formula node; int child; } Nframe;
   int cap = 1000;
-  Nframe *stack = malloc(cap * sizeof(Nframe));
+  Nframe *stack = safe_malloc(cap * sizeof(Nframe));
   int top = 0;
   Formula result = NULL;
   Formula cur;
@@ -1475,7 +1475,7 @@ restart:
     stack[top].node = cur;
     stack[top].child = 1;
     top++;
-    if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Nframe)); }
+    if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Nframe)); }
     cur = cur->kids[0];
     goto restart;
   }
@@ -1487,7 +1487,7 @@ restart:
       stack[top].node = cur;
       stack[top].child = 1;
       top++;
-      if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Nframe)); }
+      if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Nframe)); }
       cur = cur->kids[0];
       goto restart;
     }
@@ -1544,7 +1544,7 @@ restart:
       stack[top].node = g;
       stack[top].child = 1;
       top++;
-      if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Nframe)); }
+      if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Nframe)); }
       cur = nkid;
       goto restart;
     }
@@ -1563,7 +1563,7 @@ restart:
         stack[top].node = g;
         stack[top].child = 1;
         top++;
-        if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Nframe)); }
+        if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Nframe)); }
         cur = g->kids[0];
         goto restart;
       }
@@ -1627,7 +1627,7 @@ restart:
     result = fr->node;
   }
 
-  free(stack);
+  safe_free(stack);
   return result;
 }  /* nnf2 */
 
@@ -1712,7 +1712,7 @@ void formula_canon_eq(Formula f)
 {
   /* Iterative: flat stack, modify ATOMs in-place. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
 
   stack[0] = f;
@@ -1736,12 +1736,12 @@ void formula_canon_eq(Formula f)
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
 }  /* formula_canon_eq */
 
 /*************
@@ -1759,7 +1759,7 @@ int formula_size(Formula f)
 {
   /* Iterative traversal with accumulator. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
   int n = 0;
 
@@ -1774,12 +1774,12 @@ int formula_size(Formula f)
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
   return n;
 }  /* formula_size */
 
@@ -1802,7 +1802,7 @@ int greatest_qvar(Formula f)
 {
   /* Iterative traversal with max accumulator. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
   int max = -1;
 
@@ -1822,12 +1822,12 @@ int greatest_qvar(Formula f)
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
   return max;
 }  /* greatest_qvar */
 
@@ -1850,7 +1850,7 @@ int greatest_symnum_in_formula(Formula f)
 {
   /* Iterative: flat stack + running max (commutative). */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
   int max = -1;
 
@@ -1873,12 +1873,12 @@ int greatest_symnum_in_formula(Formula f)
       }
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
   return max;
 }  /* greatest_symnum_in_formula */
 
@@ -1899,7 +1899,7 @@ void subst_free_var(Formula f, Term target, Term replacement)
 {
   /* Iterative traversal. Skip subtrees under quantifiers that bind target. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
 
   stack[0] = f;
@@ -1917,12 +1917,12 @@ void subst_free_var(Formula f, Term target, Term replacement)
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
 }  /* subst_free_var */
 
 /*************
@@ -1941,7 +1941,7 @@ Formula elim_rebind(Formula f, Ilist uvars)
    */
   typedef struct { Formula node; Ilist uvars_ctx; Term var_to_free; int phase; } Er_entry;
   int stack_cap = 1000;
-  Er_entry *stack = malloc(stack_cap * sizeof(*stack));
+  Er_entry *stack = safe_malloc(stack_cap * sizeof(*stack));
   int top = 0;
 
   stack[0].node = f;
@@ -1983,7 +1983,7 @@ Formula elim_rebind(Formula f, Ilist uvars)
 
         /* Push cleanup marker first (will be processed after child). */
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top].node = NULL;
         stack[top].uvars_ctx = uvars_plus;
         stack[top].var_to_free = var;
@@ -1991,7 +1991,7 @@ Formula elim_rebind(Formula f, Ilist uvars)
 
         /* Push the child with the extended uvars context. */
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top].node = cur->kids[0];
         stack[top].uvars_ctx = uvars_plus;
         stack[top].var_to_free = NULL;
@@ -2001,7 +2001,7 @@ Formula elim_rebind(Formula f, Ilist uvars)
         int i;
         for (i = 0; i < cur->arity; i++) {
           top++;
-          if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+          if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
           stack[top].node = cur->kids[i];
           stack[top].uvars_ctx = cur_uvars;
           stack[top].var_to_free = NULL;
@@ -2010,7 +2010,7 @@ Formula elim_rebind(Formula f, Ilist uvars)
       }
     }
   }
-  free(stack);
+  safe_free(stack);
   return f;
 }  /* elim_rebind */
 
@@ -2068,7 +2068,7 @@ Plist free_vars(Formula f, Plist vars)
     Term qvar_term;
   } Fvframe;
   int cap = 1000;
-  Fvframe *stack = malloc(cap * sizeof(Fvframe));
+  Fvframe *stack = safe_malloc(cap * sizeof(Fvframe));
   int top = 0;
   Plist cur_vars;
   Formula cur;
@@ -2089,7 +2089,7 @@ restart:
     stack[top].is_quant = TRUE;
     stack[top].qvar_term = get_rigid_term(cur->qvar, 0);
     top++;
-    if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Fvframe)); }
+    if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Fvframe)); }
     cur_vars = NULL;
     cur = cur->kids[0];
     goto restart;
@@ -2106,7 +2106,7 @@ restart:
       stack[top].is_quant = FALSE;
       stack[top].qvar_term = NULL;
       top++;
-      if (top >= cap) { cap *= 2; stack = realloc(stack, cap * sizeof(Fvframe)); }
+      if (top >= cap) { cap *= 2; stack = safe_realloc(stack, cap * sizeof(Fvframe)); }
       cur = cur->kids[0];
       goto restart;
     }
@@ -2246,7 +2246,7 @@ BOOL free_var(char *svar, Term tvar, Formula f)
 {
   /* Iterative: flat stack, early exit on TRUE. Stops at binding quantifiers. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
 
   stack[0] = f;
@@ -2257,7 +2257,7 @@ BOOL free_var(char *svar, Term tvar, Formula f)
 
     if (cur->type == ATOM_FORM) {
       if (occurs_in(tvar, cur->atom)) {
-        free(stack);
+        safe_free(stack);
         return TRUE;
       }
     }
@@ -2268,12 +2268,12 @@ BOOL free_var(char *svar, Term tvar, Formula f)
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
   return FALSE;
 }  /* free_var */
 
@@ -2408,7 +2408,7 @@ BOOL clausal_formula(Formula f)
 {
   /* Iterative: flat stack on OR children, check literal_formula on non-OR. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
 
   stack[0] = f;
@@ -2421,16 +2421,16 @@ BOOL clausal_formula(Formula f)
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
     else if (!literal_formula(cur)) {
-      free(stack);
+      safe_free(stack);
       return FALSE;
     }
   }
-  free(stack);
+  safe_free(stack);
   return TRUE;
 }  /* clausal_formula */
 
@@ -2445,7 +2445,7 @@ void formula_set_vars_recurse(Formula f, char *vnames[], int max_vars)
 {
   /* Iterative: flat stack, modify ATOMs in-place. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
 
   stack[0] = f;
@@ -2460,12 +2460,12 @@ void formula_set_vars_recurse(Formula f, char *vnames[], int max_vars)
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
 }  /* formula_set_vars_recurse */
 
 /*************
@@ -2550,7 +2550,7 @@ BOOL positive_formula(Formula f)
 {
   /* Iterative: stack-based check with early exit on FALSE. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
 
   stack[0] = f;
@@ -2566,19 +2566,19 @@ BOOL positive_formula(Formula f)
     if (g->type == ATOM_FORM)
       ;  /* ok, continue checking rest of stack */
     else if (g->type != AND_FORM) {
-      free(stack);
+      safe_free(stack);
       return FALSE;
     }
     else {
       int i;
       for (i = 0; i < g->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = g->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
   return TRUE;
 }  /* positive_formula */
 
@@ -2597,7 +2597,7 @@ BOOL formula_contains_attributes(Formula f)
 {
   /* Iterative: flat stack, early exit on TRUE. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
 
   stack[0] = f;
@@ -2607,19 +2607,19 @@ BOOL formula_contains_attributes(Formula f)
     top--;
 
     if (cur->attributes != NULL) {
-      free(stack);
+      safe_free(stack);
       return TRUE;
     }
     if (cur->type != ATOM_FORM) {
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
   return FALSE;
 }  /* formula_contains_attributes */
 
@@ -2678,7 +2678,7 @@ BOOL relation_in_formula(Formula f, int symnum)
 {
   /* Iterative: flat stack, early exit on TRUE. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
 
   stack[0] = f;
@@ -2689,7 +2689,7 @@ BOOL relation_in_formula(Formula f, int symnum)
 
     if (cur->type == ATOM_FORM) {
       if (SYMNUM(cur->atom) == symnum) {
-        free(stack);
+        safe_free(stack);
         return TRUE;
       }
     }
@@ -2697,12 +2697,12 @@ BOOL relation_in_formula(Formula f, int symnum)
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
   return FALSE;
 }  /* relation_in_formula */
 
@@ -2720,7 +2720,7 @@ void rename_all_bound_vars(Formula f)
 {
   /* Iterative traversal. Process quantifier nodes and push children. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
 
   stack[0] = f;
@@ -2739,19 +2739,19 @@ void rename_all_bound_vars(Formula f)
       free_term(newvar);
       /* Push the child (now with substituted variable) for further processing. */
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top] = cur->kids[0];
     }
     else {
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
 }  /* rename_all_bound_vars */
 
 /*************
@@ -2768,7 +2768,7 @@ void rename_these_bound_vars(Formula f, Ilist vars)
 {
   /* Iterative: flat stack. QUANT: check & rename qvar. */
   int stack_cap = 1000;
-  Formula *stack = malloc(stack_cap * sizeof(Formula));
+  Formula *stack = safe_malloc(stack_cap * sizeof(Formula));
   int top = 0;
 
   stack[0] = f;
@@ -2788,19 +2788,19 @@ void rename_these_bound_vars(Formula f, Ilist vars)
       }
       /* Push child for further processing */
       top++;
-      if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+      if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
       stack[top] = cur->kids[0];
     }
     else {
       int i;
       for (i = 0; i < cur->arity; i++) {
         top++;
-        if (top >= stack_cap) { stack_cap *= 2; stack = realloc(stack, stack_cap * sizeof(*stack)); }
+        if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
         stack[top] = cur->kids[i];
       }
     }
   }
-  free(stack);
+  safe_free(stack);
 }  /* rename_these_bound_vars */
 
 

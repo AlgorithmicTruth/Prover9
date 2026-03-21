@@ -692,13 +692,13 @@ void gather_symbols_in_topforms(Plist lst, int *rcounts, int *fcounts)
 Ilist fsym_set_in_topforms(Plist lst)
 {
   int n = greatest_symnum() + 1;
-  int *rcounts = calloc(n, sizeof(int));
-  int *fcounts = calloc(n, sizeof(int));
+  int *rcounts = safe_calloc(n, sizeof(int));
+  int *fcounts = safe_calloc(n, sizeof(int));
   Ilist p;
   gather_symbols_in_topforms(lst, rcounts, fcounts);
   p = counts_to_set(fcounts, n);
-  free(rcounts);
-  free(fcounts);
+  safe_free(rcounts);
+  safe_free(fcounts);
   return p;
 }  /* fsym_set_in_topforms */
 
@@ -715,13 +715,13 @@ Ilist fsym_set_in_topforms(Plist lst)
 Ilist rsym_set_in_topforms(Plist lst)
 {
   int n = greatest_symnum() + 1;
-  int *rcounts = calloc(n, sizeof(int));
-  int *fcounts = calloc(n, sizeof(int));
+  int *rcounts = safe_calloc(n, sizeof(int));
+  int *fcounts = safe_calloc(n, sizeof(int));
   Ilist p;
   gather_symbols_in_topforms(lst, rcounts, fcounts);
   p = counts_to_set(rcounts, n);
-  free(rcounts);
-  free(fcounts);
+  safe_free(rcounts);
+  safe_free(fcounts);
   return p;
 }  /* rsym_set_in_topforms */
 

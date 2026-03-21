@@ -3968,14 +3968,14 @@ static void record_auto_checkpoint(const char *dirname)
   /* Initialize or resize circular buffer if needed */
   if (Auto_ckpt_dirs == NULL || Auto_ckpt_capacity < keep) {
     int new_cap = keep;
-    char **new_buf = calloc(new_cap, sizeof(char *));
+    char **new_buf = safe_calloc(new_cap, sizeof(char *));
     /* Copy existing entries if any */
     int i;
     for (i = 0; i < Auto_ckpt_count && i < new_cap; i++) {
       int idx = (Auto_ckpt_head + i) % Auto_ckpt_capacity;
       new_buf[i] = Auto_ckpt_dirs[idx];
     }
-    free(Auto_ckpt_dirs);
+    safe_free(Auto_ckpt_dirs);
     Auto_ckpt_dirs = new_buf;
     Auto_ckpt_head = 0;
     Auto_ckpt_capacity = new_cap;
@@ -3989,7 +3989,7 @@ static void record_auto_checkpoint(const char *dirname)
     if (Auto_ckpt_dirs[oldest]) {
       fprintf(stderr, "  Removing old checkpoint: %s\n", Auto_ckpt_dirs[oldest]);
       remove_checkpoint_dir(Auto_ckpt_dirs[oldest]);
-      free(Auto_ckpt_dirs[oldest]);
+      safe_free(Auto_ckpt_dirs[oldest]);
       Auto_ckpt_dirs[oldest] = NULL;
     }
     Auto_ckpt_head = (Auto_ckpt_head + 1) % Auto_ckpt_capacity;
@@ -4574,9 +4574,7 @@ int load_clause_data(const char *dir, struct clause_meta **out)
   if (!fp)
     fatal_error("resume: cannot open clause_data.txt");
 
-  arr = malloc(capacity * sizeof(struct clause_meta));
-  if (!arr)
-    fatal_error("resume: malloc failed for clause_data");
+  arr = safe_malloc(capacity * sizeof(struct clause_meta));
 
   while (fscanf(fp, "%31s %d %llu %lf %d",
                 arr[count].list_name, &arr[count].position,
@@ -4585,9 +4583,7 @@ int load_clause_data(const char *dir, struct clause_meta **out)
     count++;
     if (count >= capacity) {
       capacity *= 2;
-      arr = realloc(arr, capacity * sizeof(struct clause_meta));
-      if (!arr)
-        fatal_error("resume: realloc failed for clause_data");
+      arr = safe_realloc(arr, capacity * sizeof(struct clause_meta));
     }
   }
   fclose(fp);
@@ -4815,7 +4811,7 @@ void resume_load_clauses(const char *dir)
                                          meta, meta_count, &meta_offset);
   loaded_disabled = load_clauses_from_file(dir, "disabled.clauses", "disabled",
                                             meta, meta_count, &meta_offset);
-  free(meta);
+  safe_free(meta);
 
   /* 4. Set clause ID counter past all loaded IDs */
   set_clause_id_count(max_clause_id);

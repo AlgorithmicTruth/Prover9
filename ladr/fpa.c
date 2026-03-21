@@ -142,7 +142,7 @@ void free_fpa_trie(Fpa_trie p)
 {
 #ifndef NO_FPA_HASH
   if (p->kid_hash != NULL)
-    free(p->kid_hash);
+    safe_free(p->kid_hash);
 #endif
   free_mem(p, PTRS_FPA_TRIE);
   Fpa_trie_frees++;
@@ -227,9 +227,7 @@ void kid_hash_build(Fpa_trie node)
   while (cap < node->num_kids * 2)
     cap *= 2;
 
-  ht = calloc(1, sizeof(struct kid_ht) + cap * sizeof(Fpa_trie));
-  if (ht == NULL)
-    fatal_error("kid_hash_build: malloc failed");
+  ht = safe_calloc(1, sizeof(struct kid_ht) + cap * sizeof(Fpa_trie));
   ht->cap = cap;
   for (k = node->kids; k != NULL; k = k->next)
     kid_hash_insert_entry(ht, k);
@@ -249,15 +247,13 @@ void kid_hash_resize(Fpa_trie node)
   struct kid_ht *ht;
   int i;
 
-  ht = calloc(1, sizeof(struct kid_ht) + new_cap * sizeof(Fpa_trie));
-  if (ht == NULL)
-    fatal_error("kid_hash_resize: malloc failed");
+  ht = safe_calloc(1, sizeof(struct kid_ht) + new_cap * sizeof(Fpa_trie));
   ht->cap = new_cap;
   for (i = 0; i < old_cap; i++) {
     if (old->e[i] != NULL)
       kid_hash_insert_entry(ht, old->e[i]);
   }
-  free(old);
+  safe_free(old);
   node->kid_hash = ht;
 }  /* kid_hash_resize */
 #endif
@@ -437,13 +433,10 @@ void fprint_fpa_trie(FILE *fp, Fpa_trie p, int depth)
   /* Iterative DFS using heap-allocated stack */
   struct fpt_frame { Fpa_trie node; int depth; };
   int cap = 1024;
-  struct fpt_frame *stack = malloc(cap * sizeof(struct fpt_frame));
+  struct fpt_frame *stack = safe_malloc(cap * sizeof(struct fpt_frame));
   int top = 0;
   int ccap = 1024;
-  Fpa_trie *children = malloc(ccap * sizeof(Fpa_trie));
-
-  if (stack == NULL || children == NULL)
-    fatal_error("fprint_fpa_trie: malloc failed");
+  Fpa_trie *children = safe_malloc(ccap * sizeof(Fpa_trie));
 
   stack[top].node = p;
   stack[top].depth = depth;
@@ -484,26 +477,22 @@ void fprint_fpa_trie(FILE *fp, Fpa_trie p, int depth)
     for (q = cur->kids; q != NULL; q = q->next) {
       if (count >= ccap) {
 	ccap *= 2;
-	children = realloc(children, ccap * sizeof(Fpa_trie));
-	if (children == NULL)
-	  fatal_error("fprint_fpa_trie: realloc failed");
+	children = safe_realloc(children, ccap * sizeof(Fpa_trie));
       }
       children[count++] = q;
     }
     for (j = count - 1; j >= 0; j--) {
       if (top >= cap) {
 	cap *= 2;
-	stack = realloc(stack, cap * sizeof(struct fpt_frame));
-	if (stack == NULL)
-	  fatal_error("fprint_fpa_trie: realloc failed");
+	stack = safe_realloc(stack, cap * sizeof(struct fpt_frame));
       }
       stack[top].node = children[j];
       stack[top].depth = cur_depth + 1;
       top++;
     }
   }
-  free(children);
-  free(stack);
+  safe_free(children);
+  safe_free(stack);
 }  /* fprint_fpa_trie */
 
 /*************
@@ -694,7 +683,7 @@ void fpa_trie_possible_delete(Fpa_trie node)
     parent->num_kids--;
     /* Free hash table if we drop below threshold */
     if (parent->kid_hash != NULL && parent->num_kids < Kid_hash_threshold / 2) {
-      free(parent->kid_hash);
+      safe_free(parent->kid_hash);
       parent->kid_hash = NULL;
     }
 #endif
@@ -1067,15 +1056,12 @@ Fpa_state query_special(Fpa_trie n)
    * log2(N), keeping next_term() recursion safe.
    */
   int trie_cap = 1024;
-  Fpa_trie *trie_stack = malloc(trie_cap * sizeof(Fpa_trie));
+  Fpa_trie *trie_stack = safe_malloc(trie_cap * sizeof(Fpa_trie));
   int trie_top = 0;
 
   int leaf_cap = 1024;
-  Fpa_state *leaves = malloc(leaf_cap * sizeof(Fpa_state));
+  Fpa_state *leaves = safe_malloc(leaf_cap * sizeof(Fpa_state));
   int leaf_count = 0;
-
-  if (trie_stack == NULL || leaves == NULL)
-    fatal_error("query_special: malloc failed");
 
   trie_stack[trie_top++] = n;
 
@@ -1093,9 +1079,7 @@ Fpa_state query_special(Fpa_trie n)
 #endif
       if (leaf_count >= leaf_cap) {
 	leaf_cap *= 2;
-	leaves = realloc(leaves, leaf_cap * sizeof(Fpa_state));
-	if (leaves == NULL)
-	  fatal_error("query_special: realloc failed");
+	leaves = safe_realloc(leaves, leaf_cap * sizeof(Fpa_state));
       }
       leaves[leaf_count++] = q;
     }
@@ -1109,9 +1093,7 @@ Fpa_state query_special(Fpa_trie n)
 	       sym_child = sym_child->next) {
 	    if (trie_top >= trie_cap) {
 	      trie_cap *= 2;
-	      trie_stack = realloc(trie_stack, trie_cap * sizeof(Fpa_trie));
-	      if (trie_stack == NULL)
-		fatal_error("query_special: realloc failed");
+	      trie_stack = safe_realloc(trie_stack, trie_cap * sizeof(Fpa_trie));
 	    }
 	    trie_stack[trie_top++] = sym_child;
 	  }
@@ -1119,11 +1101,11 @@ Fpa_state query_special(Fpa_trie n)
       }
     }
   }
-  free(trie_stack);
+  safe_free(trie_stack);
 
   /* Phase 2: build balanced union tree by pairwise merging */
   if (leaf_count == 0) {
-    free(leaves);
+    safe_free(leaves);
     return NULL;
   }
   while (leaf_count > 1) {
@@ -1139,7 +1121,7 @@ Fpa_state query_special(Fpa_trie n)
   }
   {
     Fpa_state result = leaves[0];
-    free(leaves);
+    safe_free(leaves);
     return result;
   }
 }  /* query_special */
@@ -1680,11 +1662,8 @@ void zap_fpa_trie(Fpa_trie n)
 {
   /* Iterative DFS using heap-allocated stack */
   int cap = 1024;
-  Fpa_trie *stack = malloc(cap * sizeof(Fpa_trie));
+  Fpa_trie *stack = safe_malloc(cap * sizeof(Fpa_trie));
   int top = 0;
-
-  if (stack == NULL)
-    fatal_error("zap_fpa_trie: malloc failed");
 
   stack[top++] = n;
 
@@ -1697,9 +1676,7 @@ void zap_fpa_trie(Fpa_trie n)
       Fpa_trie next_k = k->next;
       if (top >= cap) {
 	cap *= 2;
-	stack = realloc(stack, cap * sizeof(Fpa_trie));
-	if (stack == NULL)
-	  fatal_error("zap_fpa_trie: realloc failed");
+	stack = safe_realloc(stack, cap * sizeof(Fpa_trie));
       }
       stack[top++] = k;
       k = next_k;
@@ -1713,7 +1690,7 @@ void zap_fpa_trie(Fpa_trie n)
 
     free_fpa_trie(cur);
   }
-  free(stack);
+  safe_free(stack);
 }  /* zap_fpa_trie */
 
 /*************
@@ -1761,11 +1738,8 @@ void fpa_density(Fpa_trie p)
 {
   /* Iterative DFS using heap-allocated stack */
   int cap = 1024;
-  Fpa_trie *stack = malloc(cap * sizeof(Fpa_trie));
+  Fpa_trie *stack = safe_malloc(cap * sizeof(Fpa_trie));
   int top = 0;
-
-  if (stack == NULL)
-    fatal_error("fpa_density: malloc failed");
 
   stack[top++] = p;
 
@@ -1777,9 +1751,7 @@ void fpa_density(Fpa_trie p)
     for (q = cur->kids; q; q = q->next) {
       if (top >= cap) {
 	cap *= 2;
-	stack = realloc(stack, cap * sizeof(Fpa_trie));
-	if (stack == NULL)
-	  fatal_error("fpa_density: realloc failed");
+	stack = safe_realloc(stack, cap * sizeof(Fpa_trie));
       }
       stack[top++] = q;
     }
@@ -1791,7 +1763,7 @@ void fpa_density(Fpa_trie p)
 	     cur->terms->num_terms);
     }
   }
-  free(stack);
+  safe_free(stack);
 }  /* fpa_density */
 
 /*************

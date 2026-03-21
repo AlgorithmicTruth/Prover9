@@ -271,13 +271,13 @@ void symbol_order(Clist usable, Clist sos, Clist demods, BOOL echo)
   zap_plist(all);
 
   n = greatest_symnum() + 1;
-  rcounts = calloc(n, sizeof(int));
-  fcounts = calloc(n, sizeof(int));
+  rcounts = safe_calloc(n, sizeof(int));
+  fcounts = safe_calloc(n, sizeof(int));
   gather_symbols_in_topforms(nonneg, rcounts, fcounts);
   rsyms_multiset = counts_to_multiset(rcounts, n);
   fsyms_multiset = counts_to_multiset(fcounts, n);
-  free(rcounts);
-  free(fcounts);
+  safe_free(rcounts);
+  safe_free(fcounts);
 
   lex_order(fsyms, rsyms, fsyms_multiset, rsyms_multiset,
 	    lex_compare_arity_0213);
@@ -947,8 +947,8 @@ void mark_constants_in_clause(Literals lits, BOOL *arr, int arr_size)
 void check_constant_sharing(Plist clauses)
 {
   int sz = greatest_symnum() + 1;
-  int *clause_count = calloc(sz, sizeof(int));  /* # clauses containing each constant */
-  BOOL *seen        = calloc(sz, sizeof(BOOL)); /* work array per clause */
+  int *clause_count = safe_calloc(sz, sizeof(int));  /* # clauses containing each constant */
+  BOOL *seen        = safe_calloc(sz, sizeof(BOOL)); /* work array per clause */
   BOOL found = FALSE;
   Plist a;
   int i;
@@ -992,8 +992,8 @@ void check_constant_sharing(Plist clauses)
     }
   }
 
-  free(clause_count);
-  free(seen);
+  safe_free(clause_count);
+  safe_free(seen);
 }  /* check_constant_sharing */
 
 /*************
@@ -1183,7 +1183,7 @@ void multi_order_trial(Clist usable, Clist sos, BOOL echo)
   }
 
   /* Convert Ilist to array for qsort. */
-  fsyms = malloc(nf * sizeof(int));
+  fsyms = safe_malloc(nf * sizeof(int));
   {
     Ilist q;
     for (q = fsyms_list, i = 0; q; q = q->next, i++)
@@ -1191,9 +1191,9 @@ void multi_order_trial(Clist usable, Clist sos, BOOL echo)
   }
 
   /* Save baseline lex_vals. */
-  baseline_lv = malloc(nf * sizeof(int));
-  best_lv = malloc(nf * sizeof(int));
-  trial_arr = malloc(nf * sizeof(int));
+  baseline_lv = safe_malloc(nf * sizeof(int));
+  best_lv = safe_malloc(nf * sizeof(int));
+  trial_arr = safe_malloc(nf * sizeof(int));
   for (i = 0; i < nf; i++) {
     baseline_lv[i] = sn_to_lex_val(fsyms[i]);
     best_lv[i] = baseline_lv[i];
@@ -1207,7 +1207,7 @@ void multi_order_trial(Clist usable, Clist sos, BOOL echo)
   /* Set up occurrence counts for qsort comparators. */
   sz = greatest_symnum() + 1;
   {
-    int *occ = malloc(sz * sizeof(int));
+    int *occ = safe_malloc(sz * sizeof(int));
     for (i = 0; i < sz; i++)
       occ[i] = sn_to_occurrences(i);
     Sort_occurrences = occ;
@@ -1245,7 +1245,7 @@ void multi_order_trial(Clist usable, Clist sos, BOOL echo)
   }
 
   /* --- Strategy 3: Goal-directed --- */
-  goal_counts = calloc(sz, sizeof(int));
+  goal_counts = safe_calloc(sz, sizeof(int));
   /* Count function symbol occurrences in negative (denial) clauses. */
   if (sos) {
     Clist_pos p;
@@ -1299,14 +1299,14 @@ void multi_order_trial(Clist usable, Clist sos, BOOL echo)
 
   /* Cleanup. */
   Sort_goal_counts = NULL;
-  free(goal_counts);
-  free(Sort_occurrences);
+  safe_free(goal_counts);
+  safe_free(Sort_occurrences);
   Sort_occurrences = NULL;
   Sort_max_symnum = 0;
-  free(fsyms);
-  free(baseline_lv);
-  free(best_lv);
-  free(trial_arr);
+  safe_free(fsyms);
+  safe_free(baseline_lv);
+  safe_free(best_lv);
+  safe_free(trial_arr);
   zap_ilist(fsyms_list);
 }  /* multi_order_trial */
 

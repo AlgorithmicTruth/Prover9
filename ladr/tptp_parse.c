@@ -273,7 +273,7 @@ static void skip_whitespace_and_comments(Lexer *lex)
           cmd[--ci] = '\0';
 
         if (ci > 0) {
-          char *copy = malloc(ci + 1);
+          char *copy = safe_malloc(ci + 1);
           strcpy(copy, cmd);
           lex->magic_commands = plist_prepend(lex->magic_commands, copy);
         }
@@ -661,7 +661,7 @@ static Term parse_term(Lexer *lex)
       consume(lex);
       int arity = 0;
       int args_cap = 256;
-      Term *args = malloc(args_cap * sizeof(Term));
+      Term *args = safe_malloc(args_cap * sizeof(Term));
 
       args[arity++] = parse_term(lex);
       while (peek(lex)->type == TOK_COMMA) {
@@ -670,7 +670,7 @@ static Term parse_term(Lexer *lex)
           tptp_parse_error(lex, "too many arguments (max %d)", MAX_ARITY);
         if (arity >= args_cap) {
           args_cap *= 2;
-          args = realloc(args, args_cap * sizeof(Term));
+          args = safe_realloc(args, args_cap * sizeof(Term));
         }
         args[arity++] = parse_term(lex);
       }
@@ -680,7 +680,7 @@ static Term parse_term(Lexer *lex)
       int i;
       for (i = 0; i < arity; i++)
         ARG(term, i) = args[i];
-      free(args);
+      safe_free(args);
       return term;
     }
     else {
@@ -791,12 +791,10 @@ static Formula parse_fof_unitary(Lexer *lex)
   if (t->type == TOK_BANG) {
     int var_list_cap = 2000;
     int var_list_count = 0;
-    char **var_list = malloc(var_list_cap * sizeof(char *));
+    char **var_list = safe_malloc(var_list_cap * sizeof(char *));
     char vname[MAX_TOKEN_LEN];
     Formula body;
     int i;
-
-    if (!var_list) fatal_error("malloc failed for quantified variable list");
 
     consume(lex);
     expect(lex, TOK_LBRACKET, "'['");
@@ -809,7 +807,7 @@ static Formula parse_fof_unitary(Lexer *lex)
     consume(lex);
 
     /* Collect all quantified variable names (heap-allocated, grows as needed) */
-    var_list[var_list_count] = malloc(strlen(vname) + 1);
+    var_list[var_list_count] = safe_malloc(strlen(vname) + 1);
     strcpy(var_list[var_list_count], vname);
     var_list_count++;
 
@@ -820,10 +818,9 @@ static Formula parse_fof_unitary(Lexer *lex)
         tptp_parse_error(lex, "expected variable in quantifier, got '%s'", t->text);
       if (var_list_count >= var_list_cap) {
         var_list_cap *= 2;
-        var_list = realloc(var_list, var_list_cap * sizeof(char *));
-        if (!var_list) fatal_error("realloc failed for quantified variable list");
+        var_list = safe_realloc(var_list, var_list_cap * sizeof(char *));
       }
-      var_list[var_list_count] = malloc(strlen(t->text) + 1);
+      var_list[var_list_count] = safe_malloc(strlen(t->text) + 1);
       strcpy(var_list[var_list_count], t->text);
       var_list_count++;
       consume(lex);
@@ -839,7 +836,7 @@ static Formula parse_fof_unitary(Lexer *lex)
       body = get_quant_form(ALL_FORM, var_list[i], body);
       /* get_quant_form takes ownership of the string pointer */
     }
-    free(var_list);
+    safe_free(var_list);
     return body;
   }
 
@@ -847,12 +844,10 @@ static Formula parse_fof_unitary(Lexer *lex)
   if (t->type == TOK_QUESTION) {
     int var_list_cap = 2000;
     int var_list_count = 0;
-    char **var_list = malloc(var_list_cap * sizeof(char *));
+    char **var_list = safe_malloc(var_list_cap * sizeof(char *));
     char vname[MAX_TOKEN_LEN];
     Formula body;
     int i;
-
-    if (!var_list) fatal_error("malloc failed for quantified variable list");
 
     consume(lex);
     expect(lex, TOK_LBRACKET, "'['");
@@ -863,7 +858,7 @@ static Formula parse_fof_unitary(Lexer *lex)
     strcpy(vname, t->text);
     consume(lex);
 
-    var_list[var_list_count] = malloc(strlen(vname) + 1);
+    var_list[var_list_count] = safe_malloc(strlen(vname) + 1);
     strcpy(var_list[var_list_count], vname);
     var_list_count++;
 
@@ -874,10 +869,9 @@ static Formula parse_fof_unitary(Lexer *lex)
         tptp_parse_error(lex, "expected variable in quantifier, got '%s'", t->text);
       if (var_list_count >= var_list_cap) {
         var_list_cap *= 2;
-        var_list = realloc(var_list, var_list_cap * sizeof(char *));
-        if (!var_list) fatal_error("realloc failed for quantified variable list");
+        var_list = safe_realloc(var_list, var_list_cap * sizeof(char *));
       }
-      var_list[var_list_count] = malloc(strlen(t->text) + 1);
+      var_list[var_list_count] = safe_malloc(strlen(t->text) + 1);
       strcpy(var_list[var_list_count], t->text);
       var_list_count++;
       consume(lex);
@@ -892,7 +886,7 @@ static Formula parse_fof_unitary(Lexer *lex)
       body = get_quant_form(EXISTS_FORM, var_list[i], body);
       /* get_quant_form takes ownership of the string pointer */
     }
-    free(var_list);
+    safe_free(var_list);
     return body;
   }
 
@@ -1068,7 +1062,7 @@ static char *resolve_include_path(const char *include_name,
     if (last_slash != NULL) {
       int dir_len = (int)(last_slash - source_name) + 1;
       int total = dir_len + (int)strlen(include_name) + 1;
-      char *result = malloc(total);
+      char *result = safe_malloc(total);
       memcpy(result, source_name, dir_len);
       strcpy(result + dir_len, include_name);
       return result;
@@ -1119,13 +1113,13 @@ static void parse_tptp_input(Lexer *lex,
         expect(lex, TOK_LBRACKET, "'['");
         char nbuf[MAX_TOKEN_LEN];
         parse_name(lex, nbuf, sizeof(nbuf));
-        char *n = malloc(strlen(nbuf) + 1);
+        char *n = safe_malloc(strlen(nbuf) + 1);
         strcpy(n, nbuf);
         name_filter = plist_prepend(name_filter, n);
         while (peek(lex)->type == TOK_COMMA) {
           consume(lex);
           parse_name(lex, nbuf, sizeof(nbuf));
-          n = malloc(strlen(nbuf) + 1);
+          n = safe_malloc(strlen(nbuf) + 1);
           strcpy(n, nbuf);
           name_filter = plist_prepend(name_filter, n);
         }
@@ -1141,15 +1135,15 @@ static void parse_tptp_input(Lexer *lex,
         /* Try with TPTP environment variable */
         char *tptp_dir = getenv("TPTP");
         if (tptp_dir != NULL) {
-          char *tptp_path = malloc(strlen(tptp_dir) + strlen(include_name) + 2);
+          char *tptp_path = safe_malloc(strlen(tptp_dir) + strlen(include_name) + 2);
           sprintf(tptp_path, "%s/%s", tptp_dir, include_name);
           inc_file = fopen(tptp_path, "r");
           if (inc_file != NULL) {
-            free(path);
+            safe_free(path);
             path = tptp_path;
           }
           else {
-            free(tptp_path);
+            safe_free(tptp_path);
           }
         }
         /* Auto-detect TPTP root from source path: look for /Problems/
@@ -1163,7 +1157,7 @@ static void parse_tptp_input(Lexer *lex,
           if (prob == NULL) {
             char rp_buf[PATH_MAX];
             if (realpath(lex->source_name, rp_buf) != NULL) {
-              resolved = malloc(strlen(rp_buf) + 1);
+              resolved = safe_malloc(strlen(rp_buf) + 1);
               strcpy(resolved, rp_buf);
               search_path = resolved;
               prob = strstr(search_path, "/Problems/");
@@ -1172,21 +1166,21 @@ static void parse_tptp_input(Lexer *lex,
           if (prob != NULL) {
             int root_len = (int)(prob - search_path);
             int total = root_len + 1 + (int)strlen(include_name) + 1;
-            char *auto_path = malloc(total);
+            char *auto_path = safe_malloc(total);
             memcpy(auto_path, search_path, root_len);
             auto_path[root_len] = '/';
             strcpy(auto_path + root_len + 1, include_name);
             inc_file = fopen(auto_path, "r");
             if (inc_file != NULL) {
-              free(path);
+              safe_free(path);
               path = auto_path;
             }
             else {
-              free(auto_path);
+              safe_free(auto_path);
             }
           }
           if (resolved != NULL)
-            free(resolved);
+            safe_free(resolved);
         }
         if (inc_file == NULL)
           tptp_parse_error(lex, "cannot open include file '%s'", path);
@@ -1222,13 +1216,13 @@ static void parse_tptp_input(Lexer *lex,
                                       inc_lex.magic_commands);
 
       fclose(inc_file);
-      free(path);
-      free(include_name);
+      safe_free(path);
+      safe_free(include_name);
       /* Free name filter strings */
       if (name_filter) {
         Plist p;
         for (p = name_filter; p; p = p->next)
-          free(p->v);
+          safe_free(p->v);
         zap_plist(name_filter);
       }
       continue;
@@ -1393,7 +1387,7 @@ Tptp_input read_tptp_stream(FILE *fin, const char *source_name)
   init_symbol_cache();
   parse_tptp_input(&lex, &assumps, &goals, &neg_conj, 0);
 
-  Tptp_input result = malloc(sizeof(struct tptp_input));
+  Tptp_input result = safe_malloc(sizeof(struct tptp_input));
   result->assumptions = reverse_plist(assumps);
   result->goals = reverse_plist(goals);
   result->magic_commands = reverse_plist(lex.magic_commands);
@@ -1421,10 +1415,10 @@ void zap_tptp_input(Tptp_input input)
   zap_plist(input->goals);
 
   for (p = input->magic_commands; p; p = p->next)
-    free(p->v);
+    safe_free(p->v);
   zap_plist(input->magic_commands);
 
-  free(input);
+  safe_free(input);
 }
 
 /* =========================================================================
@@ -1463,8 +1457,8 @@ static int scan_lookup(struct scan_htable *ht, const char *name)
       return p->id;
   }
   /* Insert new */
-  p = malloc(sizeof(struct scan_sym));
-  p->name = malloc(strlen(name) + 1);
+  p = safe_malloc(sizeof(struct scan_sym));
+  p->name = safe_malloc(strlen(name) + 1);
   strcpy(p->name, name);
   p->id = ht->next_id++;
   p->next = ht->buckets[h];
@@ -1479,12 +1473,12 @@ static void free_scan_htable(struct scan_htable *ht)
     struct scan_sym *p = ht->buckets[i];
     while (p) {
       struct scan_sym *nxt = p->next;
-      free(p->name);
-      free(p);
+      safe_free(p->name);
+      safe_free(p);
       p = nxt;
     }
   }
-  free(ht);
+  safe_free(ht);
 }
 
 /*
@@ -1499,7 +1493,7 @@ struct body_buf {
 static void body_buf_init(struct body_buf *bb)
 {
   bb->cap = 1024;
-  bb->data = malloc(bb->cap);
+  bb->data = safe_malloc(bb->cap);
   bb->len = 0;
 }
 
@@ -1510,7 +1504,7 @@ static void body_buf_append(struct body_buf *bb, const char *text)
   if (need > bb->cap) {
     while (need > bb->cap)
       bb->cap *= 2;
-    bb->data = realloc(bb->data, bb->cap);
+    bb->data = safe_realloc(bb->data, bb->cap);
   }
   if (bb->len > 0)
     bb->data[bb->len++] = ' ';
@@ -1532,10 +1526,10 @@ struct sym_acc {
 static void sym_acc_init(struct sym_acc *sa, int init_seen_cap)
 {
   sa->cap = 64;
-  sa->ids = malloc(sa->cap * sizeof(int));
+  sa->ids = safe_malloc(sa->cap * sizeof(int));
   sa->count = 0;
   sa->seen_cap = init_seen_cap;
-  sa->seen = calloc(sa->seen_cap, sizeof(BOOL));
+  sa->seen = safe_calloc(sa->seen_cap, sizeof(BOOL));
 }
 
 static void sym_acc_add(struct sym_acc *sa, int id)
@@ -1544,7 +1538,7 @@ static void sym_acc_add(struct sym_acc *sa, int id)
   if (id >= sa->seen_cap) {
     int new_cap = sa->seen_cap * 2;
     if (id >= new_cap) new_cap = id + 256;
-    sa->seen = realloc(sa->seen, new_cap * sizeof(BOOL));
+    sa->seen = safe_realloc(sa->seen, new_cap * sizeof(BOOL));
     memset(sa->seen + sa->seen_cap, 0, (new_cap - sa->seen_cap) * sizeof(BOOL));
     sa->seen_cap = new_cap;
   }
@@ -1552,7 +1546,7 @@ static void sym_acc_add(struct sym_acc *sa, int id)
     sa->seen[id] = TRUE;
     if (sa->count >= sa->cap) {
       sa->cap *= 2;
-      sa->ids = realloc(sa->ids, sa->cap * sizeof(int));
+      sa->ids = safe_realloc(sa->ids, sa->cap * sizeof(int));
     }
     sa->ids[sa->count++] = id;
   }
@@ -1566,10 +1560,10 @@ static void sym_acc_clear(struct sym_acc *sa)
   sa->count = 0;
 }
 
-static void sym_acc_free(struct sym_acc *sa)
+static void sym_acc_safe_free(struct sym_acc *sa)
 {
-  free(sa->ids);
-  free(sa->seen);
+  safe_free(sa->ids);
+  safe_free(sa->seen);
 }
 
 /*
@@ -1584,7 +1578,7 @@ struct scan_entries_buf {
 static void scan_entries_init(struct scan_entries_buf *eb)
 {
   eb->cap = 256;
-  eb->entries = malloc(eb->cap * sizeof(struct scan_entry));
+  eb->entries = safe_malloc(eb->cap * sizeof(struct scan_entry));
   eb->count = 0;
 }
 
@@ -1592,7 +1586,7 @@ static struct scan_entry *scan_entries_add(struct scan_entries_buf *eb)
 {
   if (eb->count >= eb->cap) {
     eb->cap *= 2;
-    eb->entries = realloc(eb->entries, eb->cap * sizeof(struct scan_entry));
+    eb->entries = safe_realloc(eb->entries, eb->cap * sizeof(struct scan_entry));
   }
   return &eb->entries[eb->count++];
 }
@@ -1645,7 +1639,7 @@ static void scan_tptp_input(Lexer *lex,
       t = peek(lex);
       if (t->type != TOK_QUOTED)
         tptp_parse_error(lex, "expected quoted filename in include");
-      include_name = malloc(strlen(t->text) + 1);
+      include_name = safe_malloc(strlen(t->text) + 1);
       strcpy(include_name, t->text);
       consume(lex);
 
@@ -1677,11 +1671,11 @@ static void scan_tptp_input(Lexer *lex,
         /* Try TPTP env */
         char *tptp_dir = getenv("TPTP");
         if (tptp_dir != NULL) {
-          char *tptp_path = malloc(strlen(tptp_dir) + strlen(include_name) + 2);
+          char *tptp_path = safe_malloc(strlen(tptp_dir) + strlen(include_name) + 2);
           sprintf(tptp_path, "%s/%s", tptp_dir, include_name);
           inc_file = fopen(tptp_path, "r");
-          if (inc_file != NULL) { free(path); path = tptp_path; }
-          else free(tptp_path);
+          if (inc_file != NULL) { safe_free(path); path = tptp_path; }
+          else safe_free(tptp_path);
         }
         /* Auto-detect TPTP root from /Problems/ in path */
         if (inc_file == NULL && lex->source_name != NULL) {
@@ -1691,7 +1685,7 @@ static void scan_tptp_input(Lexer *lex,
           if (prob == NULL) {
             char rp_buf[PATH_MAX];
             if (realpath(lex->source_name, rp_buf) != NULL) {
-              resolved = malloc(strlen(rp_buf) + 1);
+              resolved = safe_malloc(strlen(rp_buf) + 1);
               strcpy(resolved, rp_buf);
               search_path = resolved;
               prob = strstr(search_path, "/Problems/");
@@ -1700,15 +1694,15 @@ static void scan_tptp_input(Lexer *lex,
           if (prob != NULL) {
             int root_len = (int)(prob - search_path);
             int total = root_len + 1 + (int)strlen(include_name) + 1;
-            char *auto_path = malloc(total);
+            char *auto_path = safe_malloc(total);
             memcpy(auto_path, search_path, root_len);
             auto_path[root_len] = '/';
             strcpy(auto_path + root_len + 1, include_name);
             inc_file = fopen(auto_path, "r");
-            if (inc_file != NULL) { free(path); path = auto_path; }
-            else free(auto_path);
+            if (inc_file != NULL) { safe_free(path); path = auto_path; }
+            else safe_free(auto_path);
           }
-          if (resolved != NULL) free(resolved);
+          if (resolved != NULL) safe_free(resolved);
         }
         if (inc_file == NULL)
           tptp_parse_error(lex, "cannot open include file '%s'", path);
@@ -1727,8 +1721,8 @@ static void scan_tptp_input(Lexer *lex,
       lex->magic_commands = plist_cat(lex->magic_commands,
                                       inc_lex.magic_commands);
       fclose(inc_file);
-      free(path);
-      free(include_name);
+      safe_free(path);
+      safe_free(include_name);
       continue;
     }
 
@@ -1804,7 +1798,7 @@ static void scan_tptp_input(Lexer *lex,
         if (t->type == TOK_QUOTED) {
           /* Reconstruct single-quoted form for re-lexing */
           int qlen = strlen(t->text);
-          char *qbuf = malloc(qlen + 3);
+          char *qbuf = safe_malloc(qlen + 3);
           qbuf[0] = '\'';
           memcpy(qbuf + 1, t->text, qlen);
           qbuf[qlen + 1] = '\'';
@@ -1815,7 +1809,7 @@ static void scan_tptp_input(Lexer *lex,
             int sid = scan_lookup(ht, t->text);
             sym_acc_add(sa, sid);
           }
-          free(qbuf);
+          safe_free(qbuf);
         }
         else {
           body_buf_append(&bb, t->text);
@@ -1880,7 +1874,7 @@ static void scan_tptp_input(Lexer *lex,
       }
       else if (strcmp(role, "type") == 0 || strcmp(role, "unknown") == 0) {
         /* Skip */
-        free(bb.data);
+        safe_free(bb.data);
         continue;
       }
       else {
@@ -1892,7 +1886,7 @@ static void scan_tptp_input(Lexer *lex,
       bb.data[bb.len] = '\0';
       entry->body_text = bb.data;
       entry->body_len = bb.len;
-      entry->syms = malloc(sa->count * sizeof(int));
+      entry->syms = safe_malloc(sa->count * sizeof(int));
       memcpy(entry->syms, sa->ids, sa->count * sizeof(int));
       entry->nsyms = sa->count;
       entry->role = scan_role;
@@ -1951,7 +1945,7 @@ Scan_result scan_tptp_stream(FILE *fin, const char *source_name)
   BOOL neg_conj = FALSE;
   Scan_result result;
 
-  ht = calloc(1, sizeof(struct scan_htable));
+  ht = safe_calloc(1, sizeof(struct scan_htable));
   scan_entries_init(&eb);
   sym_acc_init(&sa, 256);
 
@@ -1959,7 +1953,7 @@ Scan_result scan_tptp_stream(FILE *fin, const char *source_name)
   scan_tptp_input(&lex, ht, &eb, &sa,
                    &n_axioms, &n_goals, &neg_conj, 0);
 
-  result = malloc(sizeof(struct scan_result));
+  result = safe_malloc(sizeof(struct scan_result));
   result->entries = eb.entries;
   result->n_entries = eb.count;
   result->n_axioms = n_axioms;
@@ -1968,7 +1962,7 @@ Scan_result scan_tptp_stream(FILE *fin, const char *source_name)
   result->magic_commands = lex.magic_commands;
   result->has_neg_conj = neg_conj;
 
-  sym_acc_free(&sa);
+  sym_acc_safe_free(&sa);
   free_scan_htable(ht);
 
   return result;
@@ -2020,7 +2014,7 @@ Tptp_input parse_scanned_formulas(Scan_result scan, BOOL *keep)
     }
   }
 
-  result = malloc(sizeof(struct tptp_input));
+  result = safe_malloc(sizeof(struct tptp_input));
   result->assumptions = reverse_plist(assumps);
   result->goals = reverse_plist(goals);
   result->magic_commands = scan->magic_commands;
@@ -2041,15 +2035,15 @@ void free_scan_result(Scan_result scan)
 {
   int i;
   for (i = 0; i < scan->n_entries; i++) {
-    free(scan->entries[i].body_text);
-    free(scan->entries[i].syms);
+    safe_free(scan->entries[i].body_text);
+    safe_free(scan->entries[i].syms);
   }
-  free(scan->entries);
+  safe_free(scan->entries);
   if (scan->magic_commands) {
     Plist p;
     for (p = scan->magic_commands; p; p = p->next)
-      free(p->v);
+      safe_free(p->v);
     zap_plist(scan->magic_commands);
   }
-  free(scan);
+  safe_free(scan);
 }

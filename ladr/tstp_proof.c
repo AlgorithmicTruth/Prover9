@@ -77,8 +77,8 @@ int name_register(const char *name, int id)
 {
   unsigned h = name_hash(name);
   struct name_entry *e;
-  e = (struct name_entry *) malloc(sizeof(struct name_entry));
-  e->name = (char *) malloc(strlen(name) + 1);
+  e = (struct name_entry *) safe_malloc(sizeof(struct name_entry));
+  e->name = (char *) safe_malloc(strlen(name) + 1);
   strcpy(e->name, name);
   e->id = id;
   e->next = Name_map[h];

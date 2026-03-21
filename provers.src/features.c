@@ -106,7 +106,7 @@ void extract_features(Scan_result sd, int *fv)
 
   /* Allocate symbol frequency table */
   if (sd->n_symbols > 0) {
-    sym_freq = (int *) calloc(sd->n_symbols, sizeof(int));
+    sym_freq = (int *) safe_calloc(sd->n_symbols, sizeof(int));
   }
 
   for (i = 0; i < n; i++) {
@@ -166,7 +166,7 @@ void extract_features(Scan_result sd, int *fv)
       if (sym_freq[i] == 1) singleton_syms++;
       else if (sym_freq[i] > 1) multi_form_syms++;
     }
-    free(sym_freq);
+    safe_free(sym_freq);
   }
 
   /* Fill feature vector */

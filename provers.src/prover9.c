@@ -780,10 +780,10 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
   struct suspended_child *suspended;
   int n_suspended;
 
-  slots = calloc(N, sizeof(pid_t));
-  slot_strat = calloc(N, sizeof(int));
-  slot_oidx = calloc(N, sizeof(int));
-  suspended = calloc(phase1_limit, sizeof(struct suspended_child));
+  slots = safe_calloc(N, sizeof(pid_t));
+  slot_strat = safe_calloc(N, sizeof(int));
+  slot_oidx = safe_calloc(N, sizeof(int));
+  suspended = safe_calloc(phase1_limit, sizeof(struct suspended_child));
 
   next = 0;
   best_code = -1;
@@ -997,10 +997,10 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
                   i, Portfolio[slot_strat[i]].name);
 #endif
 
-          free(slots);
-          free(slot_strat);
-          free(slot_oidx);
-          free(suspended);
+          safe_free(slots);
+          safe_free(slot_strat);
+          safe_free(slot_oidx);
+          safe_free(suspended);
           return MAX_PROOFS_EXIT;
         }
 
@@ -1081,10 +1081,10 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
     usleep(10000);  /* 10ms poll */
   }
 
-  free(slots);
-  free(slot_strat);
-  free(slot_oidx);
-  free(suspended);
+  safe_free(slots);
+  safe_free(slot_strat);
+  safe_free(slot_oidx);
+  safe_free(suspended);
   return best_code;
 }  /* cores_poll_loop */
 
@@ -1148,7 +1148,7 @@ void cores_search(Prover_input input, const short *ml_ranking,
   else
     per_child_megs = 0;  /* no budget enforcement */
 
-  order = malloc(num_strats * sizeof(int));
+  order = safe_malloc(num_strats * sizeof(int));
   build_cores_order(ml_ranking, ml_ranking_len, order, num_strats);
 
   saved_stdout = dup(STDOUT_FILENO);
@@ -1191,7 +1191,7 @@ void cores_search(Prover_input input, const short *ml_ranking,
                            saved_stdout, input, NULL,
                            total_time + 2,
                            hints_shm, per_child_megs, output_shm);
-  free(order);
+  safe_free(order);
 
   if (hints_shm)
     munmap(hints_shm, phase1_limit * sizeof(struct child_hints));
@@ -1270,7 +1270,7 @@ void cores_from_scan(Prover_scan_result psr, const short *ml_ranking,
   else
     per_child_megs = 0;  /* no budget enforcement */
 
-  order = malloc(num_strats * sizeof(int));
+  order = safe_malloc(num_strats * sizeof(int));
   build_cores_order(ml_ranking, ml_ranking_len, order, num_strats);
 
   saved_stdout = dup(STDOUT_FILENO);
@@ -1328,7 +1328,7 @@ void cores_from_scan(Prover_scan_result psr, const short *ml_ranking,
                            saved_stdout, NULL, psr,
                            total_time + 2,
                            hints_shm, per_child_megs, output_shm);
-  free(order);
+  safe_free(order);
 
   if (hints_shm)
     munmap(hints_shm, phase1_limit * sizeof(struct child_hints));

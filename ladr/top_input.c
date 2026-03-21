@@ -603,8 +603,8 @@ static
 void input_symbols(int type, BOOL aux, Ilist *fsyms, Ilist *rsyms)
 {
   int n = greatest_symnum() + 1;
-  int *rcounts = calloc(n, sizeof(int));
-  int *fcounts = calloc(n, sizeof(int));
+  int *rcounts = safe_calloc(n, sizeof(int));
+  int *fcounts = safe_calloc(n, sizeof(int));
   Readlist p;
   for (p = Input_lists; p; p = p->next) {
     if (p->type == type && p->auxiliary == aux) {
@@ -614,8 +614,8 @@ void input_symbols(int type, BOOL aux, Ilist *fsyms, Ilist *rsyms)
   *rsyms = counts_to_set(rcounts, n);
   *fsyms = counts_to_set(fcounts, n);
   *fsyms = remove_variable_symbols(*fsyms);
-  free(rcounts);
-  free(fcounts);
+  safe_free(rcounts);
+  safe_free(fcounts);
 
   if (FALSE) {
     Ilist p;

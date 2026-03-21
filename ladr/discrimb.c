@@ -138,9 +138,7 @@ void check_discrim_bind_tree(Discrim d, int n)
   struct check_frame { Discrim node; int n; };
   int cap = 256;
   int top = 0;
-  struct check_frame *stack = malloc(cap * sizeof(struct check_frame));
-  if (stack == NULL)
-    fatal_error("check_discrim_bind_tree: malloc failed");
+  struct check_frame *stack = safe_malloc(cap * sizeof(struct check_frame));
 
   stack[top].node = d;
   stack[top].n = n;
@@ -164,9 +162,7 @@ void check_discrim_bind_tree(Discrim d, int n)
 	  arity = sn_to_arity(d1->symbol);
 	if (top >= cap) {
 	  cap *= 2;
-	  stack = realloc(stack, cap * sizeof(struct check_frame));
-	  if (stack == NULL)
-	    fatal_error("check_discrim_bind_tree: realloc failed");
+	  stack = safe_realloc(stack, cap * sizeof(struct check_frame));
 	}
 	stack[top].node = d1;
 	stack[top].n = cur_n + arity - 1;
@@ -174,7 +170,7 @@ void check_discrim_bind_tree(Discrim d, int n)
       }
     }
   }
-  free(stack);
+  safe_free(stack);
 }  /* check_discrim_bind_tree */
 
 /*************
@@ -190,12 +186,10 @@ void print_discrim_bind_tree(FILE *fp, Discrim d, int n, int depth)
   struct print_frame { Discrim node; int n; int depth; };
   int cap = 256;
   int top = 0;
-  struct print_frame *stack = malloc(cap * sizeof(struct print_frame));
+  struct print_frame *stack = safe_malloc(cap * sizeof(struct print_frame));
   int child_cap = 256;
-  Discrim *children = malloc(child_cap * sizeof(Discrim));
-  int *child_n = malloc(child_cap * sizeof(int));
-  if (stack == NULL || children == NULL || child_n == NULL)
-    fatal_error("print_discrim_bind_tree: malloc failed");
+  Discrim *children = safe_malloc(child_cap * sizeof(Discrim));
+  int *child_n = safe_malloc(child_cap * sizeof(int));
 
   stack[top].node = d;
   stack[top].n = n;
@@ -240,10 +234,8 @@ void print_discrim_bind_tree(FILE *fp, Discrim d, int n, int depth)
 	  arity = sn_to_arity(d1->symbol);
 	if (count >= child_cap) {
 	  child_cap *= 2;
-	  children = realloc(children, child_cap * sizeof(Discrim));
-	  child_n = realloc(child_n, child_cap * sizeof(int));
-	  if (children == NULL || child_n == NULL)
-	    fatal_error("print_discrim_bind_tree: realloc failed");
+	  children = safe_realloc(children, child_cap * sizeof(Discrim));
+	  child_n = safe_realloc(child_n, child_cap * sizeof(int));
 	}
 	children[count] = d1;
 	child_n[count] = cur_n + arity - 1;
@@ -253,9 +245,7 @@ void print_discrim_bind_tree(FILE *fp, Discrim d, int n, int depth)
       for (j = count - 1; j >= 0; j--) {
 	if (top >= cap) {
 	  cap *= 2;
-	  stack = realloc(stack, cap * sizeof(struct print_frame));
-	  if (stack == NULL)
-	    fatal_error("print_discrim_bind_tree: realloc failed");
+	  stack = safe_realloc(stack, cap * sizeof(struct print_frame));
 	}
 	stack[top].node = children[j];
 	stack[top].n = child_n[j];
@@ -264,9 +254,9 @@ void print_discrim_bind_tree(FILE *fp, Discrim d, int n, int depth)
       }
     }
   }
-  free(stack);
-  free(children);
-  free(child_n);
+  safe_free(stack);
+  safe_free(children);
+  safe_free(child_n);
 }  /* print_discrim_bind_tree */
 
 /*************
@@ -328,12 +318,9 @@ Discrim discrim_bind_insert_rec(Term t, Discrim d)
    * The discrim node d1 chains forward through each symbol in sequence.
    */
   int tcap = 256;
-  Term *tstack = malloc(tcap * sizeof(Term));
+  Term *tstack = safe_malloc(tcap * sizeof(Term));
   int ttop = 0;
   Discrim d1;
-
-  if (tstack == NULL)
-    fatal_error("discrim_bind_insert_rec: malloc failed");
 
   /* Push initial term */
   tstack[ttop++] = t;
@@ -447,15 +434,13 @@ Discrim discrim_bind_insert_rec(Term t, Discrim d)
       for (i = ARITY(t) - 1; i >= 0; i--) {
 	if (ttop >= tcap) {
 	  tcap *= 2;
-	  tstack = realloc(tstack, tcap * sizeof(Term));
-	  if (tstack == NULL)
-	    fatal_error("discrim_bind_insert_rec: realloc failed");
+	  tstack = safe_realloc(tstack, tcap * sizeof(Term));
 	}
 	tstack[ttop++] = ARG(t, i);
       }
     }
   }
-  free(tstack);
+  safe_free(tstack);
   return d1;
 }  /* discrim_bind_insert_rec */
 
@@ -508,13 +493,10 @@ Discrim discrim_bind_end(Term t, Discrim d, Plist *path_p)
    * to the path list.  We replicate this with a term stack.
    */
   int tcap = 256;
-  Term *tstack = malloc(tcap * sizeof(Term));
+  Term *tstack = safe_malloc(tcap * sizeof(Term));
   int ttop = 0;
   Discrim d1;
   Plist dp;
-
-  if (tstack == NULL)
-    fatal_error("discrim_bind_end: malloc failed");
 
   /* Push initial term */
   tstack[ttop++] = t;
@@ -544,7 +526,7 @@ Discrim discrim_bind_end(Term t, Discrim d, Plist *path_p)
 	  *path_p = dp->next;
 	  free_plist(dp);
 	}
-	free(tstack);
+	safe_free(tstack);
 	return NULL;
       }
       else
@@ -564,7 +546,7 @@ Discrim discrim_bind_end(Term t, Discrim d, Plist *path_p)
 	    *path_p = dp->next;
 	    free_plist(dp);
 	  }
-	  free(tstack);
+	  safe_free(tstack);
 	  return NULL;
 	}
 	d1 = dk;
@@ -585,7 +567,7 @@ Discrim discrim_bind_end(Term t, Discrim d, Plist *path_p)
 	    *path_p = dp->next;
 	    free_plist(dp);
 	  }
-	  free(tstack);
+	  safe_free(tstack);
 	  return NULL;
 	}
 	d1 = dk;
@@ -596,16 +578,14 @@ Discrim discrim_bind_end(Term t, Discrim d, Plist *path_p)
 	for (i = ARITY(t) - 1; i >= 0; i--) {
 	  if (ttop >= tcap) {
 	    tcap *= 2;
-	    tstack = realloc(tstack, tcap * sizeof(Term));
-	    if (tstack == NULL)
-	      fatal_error("discrim_bind_end: realloc failed");
+	    tstack = safe_realloc(tstack, tcap * sizeof(Term));
 	  }
 	  tstack[ttop++] = ARG(t, i);
 	}
       }
     }
   }
-  free(tstack);
+  safe_free(tstack);
   return d1;
 }  /* discrim_bind_end */
 
