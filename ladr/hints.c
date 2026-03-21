@@ -333,10 +333,8 @@ void adjust_weight_with_hints(Topform c,
     /* Veroff's hint degradation strategy. */
 
     if (degrade) {
-      /* for now, add 1000 for each previous match */
-      int i;
-      for (i = 0; i < hint->weight; i++) 
-	c->weight = c->weight + 1000;
+      /* add 1000 for each previous match */
+      c->weight = c->weight + hint->weight * 1000;
     }
     c->matching_hint = hint;
     /* If/when c is eventually kept, the hint will have its weight

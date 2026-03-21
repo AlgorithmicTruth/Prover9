@@ -468,25 +468,35 @@ static void read_token(Lexer *lex, Token *tok)
     tptp_parse_error(lex, "unexpected '<' (expected <=>, <=, or <~>)");
   }
 
-  /* Single-quoted string */
+  /* Single-quoted string (TPTP convention: '' is escaped quote) */
   if (lex->ch == '\'') {
     int ti = 0;
     lexer_advance(lex);  /* skip opening quote */
-    while (lex->ch != -1 && lex->ch != '\'') {
-      if (lex->ch == '\\') {
+    while (lex->ch != -1) {
+      if (lex->ch == '\'') {
+        lexer_advance(lex);
+        if (lex->ch == '\'') {
+          /* Doubled quote '' -> literal ' (TPTP standard) */
+          if (ti < MAX_TOKEN_LEN - 1) tok->text[ti++] = '\'';
+          lexer_advance(lex);
+        }
+        else {
+          /* End of string (closing quote already consumed) */
+          break;
+        }
+      }
+      else if (lex->ch == '\\') {
+        /* Also accept backslash escaping for compatibility */
         lexer_advance(lex);
         if (lex->ch == -1) break;
         if (ti < MAX_TOKEN_LEN - 1) tok->text[ti++] = (char) lex->ch;
+        lexer_advance(lex);
       }
       else {
         if (ti < MAX_TOKEN_LEN - 1) tok->text[ti++] = (char) lex->ch;
+        lexer_advance(lex);
       }
-      lexer_advance(lex);
     }
-    if (lex->ch == '\'')
-      lexer_advance(lex);  /* skip closing quote */
-    else
-      tptp_parse_error(lex, "unterminated single-quoted string");
     tok->text[ti] = '\0';
     tok->type = TOK_QUOTED;
     return;
@@ -597,7 +607,8 @@ static void expect(Lexer *lex, Toktype type, const char *what)
  * ========================================================================= */
 
 /* Forward declarations */
-static Formula parse_fof_formula(Lexer *lex);
+#define MAX_PARSE_DEPTH 10000
+static Formula parse_fof_formula(Lexer *lex, int depth);
 static Formula parse_cnf_formula(Lexer *lex);
 static Term parse_term(Lexer *lex);
 static Formula parse_atom(Lexer *lex);
@@ -768,14 +779,17 @@ static Formula parse_atom(Lexer *lex)
  *   ~ (prefix) > = != > & > | > => <= > <=> <~> ~| ~&
  */
 
-static Formula parse_fof_unitary(Lexer *lex)
+static Formula parse_fof_unitary(Lexer *lex, int depth)
 {
   Token *t = peek(lex);
+
+  if (depth > MAX_PARSE_DEPTH)
+    tptp_parse_error(lex, "formula nesting too deep (limit %d)", MAX_PARSE_DEPTH);
 
   /* Parenthesized formula */
   if (t->type == TOK_LPAREN) {
     consume(lex);
-    Formula f = parse_fof_formula(lex);
+    Formula f = parse_fof_formula(lex, depth + 1);
     expect(lex, TOK_RPAREN, "')'");
     return f;
   }
@@ -783,7 +797,7 @@ static Formula parse_fof_unitary(Lexer *lex)
   /* Negation */
   if (t->type == TOK_TILDE) {
     consume(lex);
-    Formula sub = parse_fof_unitary(lex);
+    Formula sub = parse_fof_unitary(lex, depth + 1);
     return negate(sub);
   }
 
@@ -829,7 +843,7 @@ static Formula parse_fof_unitary(Lexer *lex)
     expect(lex, TOK_RBRACKET, "']'");
     expect(lex, TOK_COLON, "':'");
 
-    body = parse_fof_unitary(lex);
+    body = parse_fof_unitary(lex, depth + 1);
 
     /* Build nested ALL_FORM from right to left: ![X,Y]:F = all X (all Y F) */
     for (i = var_list_count - 1; i >= 0; i--) {
@@ -880,7 +894,7 @@ static Formula parse_fof_unitary(Lexer *lex)
     expect(lex, TOK_RBRACKET, "']'");
     expect(lex, TOK_COLON, "':'");
 
-    body = parse_fof_unitary(lex);
+    body = parse_fof_unitary(lex, depth + 1);
 
     for (i = var_list_count - 1; i >= 0; i--) {
       body = get_quant_form(EXISTS_FORM, var_list[i], body);
@@ -894,25 +908,25 @@ static Formula parse_fof_unitary(Lexer *lex)
   return parse_atom(lex);
 }
 
-static Formula parse_fof_and(Lexer *lex)
+static Formula parse_fof_and(Lexer *lex, int depth)
 {
-  Formula f = parse_fof_unitary(lex);
+  Formula f = parse_fof_unitary(lex, depth);
 
   while (peek(lex)->type == TOK_AMP) {
     consume(lex);
-    Formula rhs = parse_fof_unitary(lex);
+    Formula rhs = parse_fof_unitary(lex, depth);
     f = and(f, rhs);
   }
   return f;
 }
 
-static Formula parse_fof_or(Lexer *lex)
+static Formula parse_fof_or(Lexer *lex, int depth)
 {
-  Formula f = parse_fof_and(lex);
+  Formula f = parse_fof_and(lex, depth);
 
   while (peek(lex)->type == TOK_PIPE) {
     consume(lex);
-    Formula rhs = parse_fof_and(lex);
+    Formula rhs = parse_fof_and(lex, depth);
     f = or(f, rhs);
   }
   return f;
@@ -922,15 +936,15 @@ static Formula parse_fof_or(Lexer *lex)
  * Parse FOF formula: handle => <= (non-associative) and <=> <~> ~| ~& (also non-assoc)
  */
 
-static Formula parse_fof_formula(Lexer *lex)
+static Formula parse_fof_formula(Lexer *lex, int depth)
 {
-  Formula f = parse_fof_or(lex);
+  Formula f = parse_fof_or(lex, depth);
   Token *t = peek(lex);
 
   if (t->type == TOK_IFF) {
     Formula iff_f, rhs;
     consume(lex);
-    rhs = parse_fof_or(lex);
+    rhs = parse_fof_or(lex, depth);
     iff_f = formula_get(2, IFF_FORM);
     iff_f->kids[0] = f;
     iff_f->kids[1] = rhs;
@@ -939,19 +953,19 @@ static Formula parse_fof_formula(Lexer *lex)
   else if (t->type == TOK_IMPL) {
     Formula rhs;
     consume(lex);
-    rhs = parse_fof_or(lex);
+    rhs = parse_fof_or(lex, depth);
     return imp(f, rhs);
   }
   else if (t->type == TOK_IMPLBY) {
     Formula rhs;
     consume(lex);
-    rhs = parse_fof_or(lex);
+    rhs = parse_fof_or(lex, depth);
     return impby(f, rhs);
   }
   else if (t->type == TOK_XOR) {
     Formula rhs, iff_f;
     consume(lex);
-    rhs = parse_fof_or(lex);
+    rhs = parse_fof_or(lex, depth);
     /* a <~> b is equivalent to ~(a <=> b) */
     iff_f = formula_get(2, IFF_FORM);
     iff_f->kids[0] = f;
@@ -961,14 +975,14 @@ static Formula parse_fof_formula(Lexer *lex)
   else if (t->type == TOK_NOR) {
     Formula rhs;
     consume(lex);
-    rhs = parse_fof_or(lex);
+    rhs = parse_fof_or(lex, depth);
     /* a ~| b is equivalent to ~(a | b) */
     return negate(or(f, rhs));
   }
   else if (t->type == TOK_NAND) {
     Formula rhs;
     consume(lex);
-    rhs = parse_fof_or(lex);
+    rhs = parse_fof_or(lex, depth);
     /* a ~& b is equivalent to ~(a & b) */
     return negate(and(f, rhs));
   }
@@ -1264,7 +1278,7 @@ static void parse_tptp_input(Lexer *lex,
     /* Formula */
     Formula f;
     if (is_fof) {
-      f = parse_fof_formula(lex);
+      f = parse_fof_formula(lex, 0);
     }
     else {
       f = parse_cnf_top(lex);
@@ -1796,13 +1810,23 @@ static void scan_tptp_input(Lexer *lex,
 
         /* Save token text */
         if (t->type == TOK_QUOTED) {
-          /* Reconstruct single-quoted form for re-lexing */
+          /* Reconstruct single-quoted form for re-lexing.
+             Escape any ' in the text as '' (TPTP convention). */
+          const char *s;
+          int nquotes = 0;
           int qlen = strlen(t->text);
-          char *qbuf = safe_malloc(qlen + 3);
-          qbuf[0] = '\'';
-          memcpy(qbuf + 1, t->text, qlen);
-          qbuf[qlen + 1] = '\'';
-          qbuf[qlen + 2] = '\0';
+          char *qbuf, *d;
+          for (s = t->text; *s; s++)
+            if (*s == '\'') nquotes++;
+          qbuf = safe_malloc(qlen + nquotes + 3);
+          d = qbuf;
+          *d++ = '\'';
+          for (s = t->text; *s; s++) {
+            if (*s == '\'') *d++ = '\'';  /* double it */
+            *d++ = *s;
+          }
+          *d++ = '\'';
+          *d = '\0';
           body_buf_append(&bb, qbuf);
           /* Collect as symbol (not a variable name) */
           {
@@ -2000,7 +2024,7 @@ Tptp_input parse_scanned_formulas(Scan_result scan, BOOL *keep)
     lexer_init_string(&lex, e->body_text, e->body_len, e->name);
 
     if (e->is_fof)
-      f = parse_fof_formula(&lex);
+      f = parse_fof_formula(&lex, 0);
     else
       f = parse_cnf_top(&lex);
 

@@ -53,8 +53,8 @@ static BOOL adjacent(int n, int i, int j, BOOL *lt)
 static void upper_covers(Interp p, int lattice_number)
 {
   int n = interp_size(p);
-  BOOL *lt = safe_malloc(n * n * sizeof(BOOL *));
-  BOOL *uc = safe_malloc(n * n * sizeof(BOOL *));
+  BOOL *lt = safe_malloc(n * n * sizeof(BOOL));
+  BOOL *uc = safe_malloc(n * n * sizeof(BOOL));
   int i, j;
   int *a;
   a = interp_table(p, "^", 2);
