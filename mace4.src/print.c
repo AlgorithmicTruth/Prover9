@@ -521,7 +521,7 @@ void p_stats(void)
 	 Mstats.selections, Mstats.assignments, Mstats.propagations, Mstats.current_models);
   printf("Rewrite_terms=%u, rewrite_bools=%u, indexes=%u.\n",
 	 Mstats.rewrite_terms, Mstats.rewrite_bools, Mstats.indexes);
-  printf("Rules_from_neg_clauses=%u, cross_offs=%d.\n",
+  printf("Rules_from_neg_clauses=%u, cross_offs=%u.\n",
 	 Mstats.rules_from_neg, Mstats.cross_offs);
 #if 0
   printf("Negative propagation:\n");

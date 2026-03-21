@@ -214,7 +214,7 @@ void check_parent_pointers(Term t)
 	  printf("check_parent_pointers, bad link: "); p_term(t);
 	}
       }
-      set_parent_pointers(ARG(t,i));
+      check_parent_pointers(ARG(t,i));
     }
   }
 }  /* check_parent_pointers */

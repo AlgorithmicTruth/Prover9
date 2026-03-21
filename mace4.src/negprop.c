@@ -46,15 +46,15 @@ extern struct mace_stats Mstats;
 static
 int nterm_id(Term t)
 {
-  int id = Sn_to_mace_sn[SYMNUM(t)]->base;
-  int mult = 1;
+  long long id = Sn_to_mace_sn[SYMNUM(t)]->base;
+  long long mult = 1;
   int i;
   for (i = ARITY(t)-1; i >= 0; i--) {
     if (VARIABLE(ARG(t,i)))
       id += VARNUM(ARG(t,i)) * mult;
     mult *= Domain_size;
   }
-  return id;
+  return (int) id;
 }  /* nterm_id */
 
 /*************

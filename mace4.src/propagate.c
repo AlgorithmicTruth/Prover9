@@ -55,8 +55,8 @@ BOOL eterm(Term t, int *pid)
     return FALSE;
   else {
     int i;
-    int mult = 1;
-    int id = Sn_to_mace_sn[SYMNUM(t)]->base;
+    long long mult = 1;
+    long long id = Sn_to_mace_sn[SYMNUM(t)]->base;
     for (i = ARITY(t)-1; i >= 0; i--) {
       if (!VARIABLE(ARG(t,i)))
         return FALSE;
@@ -64,7 +64,7 @@ BOOL eterm(Term t, int *pid)
         id += VARNUM(ARG(t,i)) * mult;
       mult *= Domain_size;
     }
-    *pid = id;
+    *pid = (int) id;
     return TRUE;
   }
 }  /* eterm */

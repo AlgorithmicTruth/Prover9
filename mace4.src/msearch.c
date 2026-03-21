@@ -1359,8 +1359,11 @@ int next_domain_size(int n)
   else
     n += parm(Opt->increment);
 
-  while (!iterate_ok(n, stringparm1(Opt->iterate)))
+  while (!iterate_ok(n, stringparm1(Opt->iterate))) {
     n += parm(Opt->increment);
+    if (n > top)
+      return -1;
+  }
 
   return (n > top ? -1 : n);
 }  /* next_domain_size */
@@ -1645,55 +1648,10 @@ void write_mace4_checkpoint(Plist clauses)
   int d;
   int depth;
 
-  /* Compute current search depth: find deepest frame with a live stk,
-     or the frame currently being explored. */
-  depth = 0;
-  if (Search_stack != NULL) {
-    /* Walk up to find the current working depth.
-       The depth is the index of the deepest frame we've entered. */
-    int i;
-    for (i = 0; i < Search_stack_capacity; i++) {
-      if (Search_stack[i].cell_id == 0 && i > 0 &&
-          Search_stack[i].stk == NULL && Search_stack[i].last == 0)
-        break;  /* uninitialized frame */
-    }
-    /* Actually, we track depth via the search loop.
-       We need a way to know current depth. Store it statically. */
-  }
-
-  /* We'll use a different approach: save the Search_depth global which
-     we'll maintain in the search loops. For now, count frames with
-     cell_id >= 0 OR stk != NULL. But this is fragile.
-     Better: maintain a global depth counter. */
-
-  /* For the checkpoint, depth = number of active frames.
-     Active frames: depths 0..N-2 have live stk, depth N-1 is leaf. */
-
-  /* We approximate by scanning the stack for valid-looking frames.
-     Actually let's use a cleaner approach: maintain Search_depth
-     in the iterative search. We already store it in Search_depth. */
-
-  /* Since we don't track Search_depth globally in the current
-     implementation (it's a local var in the search functions),
-     we need to compute it from the stack contents. Count frames
-     from 0 until we find one with cell_id unset. Actually, we
-     initialize new frames before use, so stale frames may exist.
-
-     The safest approach: walk from depth 0 while the frame has
-     a live stk (meaning an assignment is in effect at that depth).
-     The leaf frame is the first one without a stk. */
-
-  depth = 0;
-  if (Search_stack != NULL) {
-    /* Count frames with live estacks -- those are assigned depths */
-    while (depth < Search_stack_capacity && Search_stack[depth].stk != NULL)
-      depth++;
-    /* depth now points to the leaf frame (the one being explored, no stk yet)
-       or past all frames if all have stks */
-    depth++;  /* total frames = assigned + 1 leaf */
-    if (depth > Search_stack_capacity)
-      depth = Search_stack_capacity;
-  }
+  /* Current_depth is maintained by the search loops (set to depth
+     during active search, -1 between searches).  Add 1 to include
+     the leaf frame currently being explored. */
+  depth = (Current_depth >= 0) ? Current_depth + 1 : 0;
 
   sprintf(dir_name, "mace4_%d_ckpt_%u", my_process_id(), Mstats.selections);
   sprintf(tmp_name, "%s.tmp", dir_name);

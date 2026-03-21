@@ -585,6 +585,9 @@ static Token *peek(Lexer *lex)
   if (!lex->has_token) {
     read_token(lex, &lex->current);
     lex->has_token = TRUE;
+    if (strlen(lex->current.text) >= MAX_TOKEN_LEN - 1)
+      fprintf(stderr, "WARNING: token truncated at %d chars (line %d)\n",
+              MAX_TOKEN_LEN - 1, lex->line);
   }
   return &lex->current;
 }
