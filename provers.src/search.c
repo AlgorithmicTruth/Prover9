@@ -195,6 +195,7 @@ Prover_options init_prover_options(void)
   p->back_demod_hints       = init_flag("back_demod_hints",        TRUE);
   p->collect_hint_labels    = init_flag("collect_hint_labels",    FALSE);
   p->hint_match_stats       = init_flag("hint_match_stats",       FALSE);
+  p->hint_match_once        = init_flag("hint_match_once",        FALSE);
   p->print_matched_hints    = init_flag("print_matched_hints",    FALSE);
   p->print_derivations      = init_flag("print_derivations",      FALSE);
   p->derivations_only       = init_flag("derivations_only",        TRUE);
@@ -659,10 +660,11 @@ void fprint_prover_stats(FILE *fp, struct prover_stats s, char *stats_level)
 	  comma_num(s.given), comma_num(s.generated),
 	  comma_num(s.kept), comma_num(s.proofs));
   fprintf(fp,"Usable=%s. Sos=%s. Demods=%s. Limbo=%s, "
-	  "Disabled=%s. Hints=%s.\n",
+	  "Disabled=%s. Hints=%s. Active_Hints=%s.\n",
 	  comma_num(s.usable_size), comma_num(s.sos_size),
 	  comma_num(s.demodulators_size), comma_num(s.limbo_size),
-	  comma_num(s.disabled_size), comma_num(s.hints_size));
+	  comma_num(s.disabled_size), comma_num(s.hints_size),
+	  comma_num(active_hints()));
 
   if (str_ident(stats_level, "lots") || str_ident(stats_level, "all")) {
 
@@ -3368,6 +3370,7 @@ void index_and_process_initial_clauses(void)
 	     parm(Opt->hints_fpa_depth),
 	     demodulate_clause);
   set_hint_match_stats(flag(Opt->hint_match_stats));
+  set_hint_match_once(flag(Opt->hint_match_once));
   init_semantics(Glob.interps, Clocks.semantics,
 		 stringparm1(Opt->multiple_interps),
 		 parm(Opt->eval_limit),
@@ -4919,6 +4922,7 @@ void resume_index_clauses(void)
              parm(Opt->hints_fpa_depth),
              demodulate_clause);
   set_hint_match_stats(flag(Opt->hint_match_stats));
+  set_hint_match_once(flag(Opt->hint_match_once));
   init_semantics(Glob.interps, Clocks.semantics,
                  stringparm1(Opt->multiple_interps),
                  parm(Opt->eval_limit),

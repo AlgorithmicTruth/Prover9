@@ -82,6 +82,7 @@ struct prover_options {
     back_demod_hints,
     collect_hint_labels,
     hint_match_stats,        // print hint match count stats at end of search
+    hint_match_once,         // unindex hint immediately after first match
     print_matched_hints,     // print matched/unmatched hints per proof
     print_derivations,       // print derivation for clauses in hitlist file
     derivations_only,        // exit after last hitlist derivation

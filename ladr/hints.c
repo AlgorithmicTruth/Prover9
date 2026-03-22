@@ -45,6 +45,7 @@ static unsigned long long Current_given_for_hints = 0;
    Controlled by set_hint_match_stats(TRUE). */
 
 static BOOL Hint_match_stats = FALSE;
+static BOOL Hint_match_once = FALSE;
 
 /* Re-match delta histogram: delta = current_given - last_matched_given.
    Only recorded on 2nd+ match (weight > 0 before increment). */
@@ -387,6 +388,18 @@ void keep_hint_matcher(Topform c)
 
   hint->weight++;
   hint->last_matched_given = Current_given_for_hints;
+
+  if (Hint_match_once) {
+    /* Remove from index immediately so it can't match again.
+       The hint struct stays alive (kept clauses hold matching_hint
+       pointers).  It remains in the hints clist for stats. */
+    lindex_update(Hints_idx, hint, DELETE);
+    if (Back_demod_hints) {
+      if (!(MATCH_HINTS_ANYCONST && hint_contains_anyconst(hint)))
+        index_clause_back_demod(hint, Back_demod_idx, DELETE);
+    }
+    Active_hints_count--;
+  }
 }  /* keep_hint_matcher */
 
 /*************
@@ -449,6 +462,18 @@ void set_hint_match_stats(BOOL on)
 {
   Hint_match_stats = on;
 }  /* set_hint_match_stats */
+
+/*************
+ *
+ *   set_hint_match_once()
+ *
+ *************/
+
+/* PUBLIC */
+void set_hint_match_once(BOOL on)
+{
+  Hint_match_once = on;
+}  /* set_hint_match_once */
 
 /*************
  *
@@ -548,7 +573,10 @@ void print_hint_match_stats(FILE *fp, Clist hint_list)
   }
 
   if (total == 0) {
-    fprintf(fp, "\n%% Hint match stats: no hints were matched.\n");
+    fprintf(fp,
+      "\nHint match stats: no hints were matched.\n"
+      "  total=%d, redundant=%d, active=%d\n",
+      n, Redundant_hints_count, active_hints());
     return;
   }
 
@@ -582,10 +610,11 @@ void print_hint_match_stats(FILE *fp, Clist hint_list)
   }
 
   fprintf(fp,
-    "\n%% Hint match stats (matched hints only):\n"
-    "%%   matched=%d, unmatched=%d, total=%d\n"
-    "%%   match counts: min=%.0f, mean=%.1f, median=%.0f, max=%.0f\n",
-    total, n, total + n, min_v, mean, median, max_v);
+    "\nHint match stats:\n"
+    "  total=%d, redundant=%d, active=%d, matched=%d\n"
+    "  match counts: min=%.0f, mean=%.1f, median=%.0f, max=%.0f\n",
+    total + n, Redundant_hints_count, active_hints(), total,
+    min_v, mean, median, max_v);
 
   /* Re-match delta histogram (only when hint_match_stats enabled) */
   if (Hint_match_stats && Delta_total > 0) {
@@ -596,12 +625,12 @@ void print_hint_match_stats(FILE *fp, Clist hint_list)
       "7501+"
     };
     fprintf(fp,
-      "%%   re-match deltas: n=%d, min=%llu, mean=%.1f, max=%llu\n"
-      "%%   delta histogram:\n",
+      "  re-match deltas: n=%d, min=%llu, mean=%.1f, max=%llu\n"
+      "  delta histogram:\n",
       Delta_total, Delta_min, Delta_sum / Delta_total, Delta_max);
     for (i = 0; i < DELTA_BUCKETS; i++) {
       if (Delta_bucket[i] > 0)
-        fprintf(fp, "%%     %10s: %d\n", labels[i], Delta_bucket[i]);
+        fprintf(fp, "      %10s: %d\n", labels[i], Delta_bucket[i]);
     }
   }
 
