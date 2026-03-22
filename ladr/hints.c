@@ -557,7 +557,7 @@ static int compare_doubles(const void *a, const void *b)
 /* PUBLIC */
 void print_hint_match_stats(FILE *fp, Clist hint_list)
 {
-  int total, n, i;
+  int total, n = 0, i;
   double *counts;
   double min_v, max_v, sum, mean, median;
   Clist_pos p;
@@ -576,7 +576,7 @@ void print_hint_match_stats(FILE *fp, Clist hint_list)
     fprintf(fp,
       "\nHint match stats: no hints were matched.\n"
       "  total=%d, redundant=%d, active=%d\n",
-      n, Redundant_hints_count, active_hints());
+      hint_list->length, Redundant_hints_count, active_hints());
     return;
   }
 
