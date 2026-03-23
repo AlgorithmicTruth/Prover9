@@ -304,6 +304,9 @@ current process has used so far.
 /* PUBLIC */
 unsigned user_time()
 {
+#ifdef PRIMITIVE_ENVIRONMENT
+  return (unsigned)(clock() / (CLOCKS_PER_SEC / 1000));
+#else
   struct rusage r;
   unsigned sec, usec;
 
@@ -312,6 +315,7 @@ unsigned user_time()
   usec = r.ru_utime.tv_usec;
 
   return((sec * 1000) + (usec / 1000));
+#endif
 }  /* user_time */
 
 /*************
@@ -328,6 +332,9 @@ current process has used so far.
 /* PUBLIC */
 double user_seconds()
 {
+#ifdef PRIMITIVE_ENVIRONMENT
+  return (double)clock() / CLOCKS_PER_SEC;
+#else
   struct rusage r;
   unsigned sec, usec;
 
@@ -336,6 +343,7 @@ double user_seconds()
   usec = r.ru_utime.tv_usec;
 
   return(sec + (usec / 1000000.0));
+#endif
 }  /* user_seconds */
 
 /*************
@@ -355,6 +363,9 @@ on behalf of the process.)
 /* PUBLIC */
 unsigned system_time()
 {
+#ifdef PRIMITIVE_ENVIRONMENT
+  return 0;  /* no system time in WASM */
+#else
   struct rusage r;
   unsigned sec, usec;
 
@@ -363,6 +374,7 @@ unsigned system_time()
   usec = r.ru_stime.tv_usec;
 
   return((sec * 1000) + (usec / 1000));
+#endif
 }  /* system_time */
 
 /*************
@@ -382,6 +394,9 @@ on behalf of the process.)
 /* PUBLIC */
 double system_seconds()
 {
+#ifdef PRIMITIVE_ENVIRONMENT
+  return 0.0;  /* no system time in WASM */
+#else
   struct rusage r;
   unsigned sec, usec;
 
@@ -390,6 +405,7 @@ double system_seconds()
   usec = r.ru_stime.tv_usec;
 
   return(sec + (usec / 1000000.0));
+#endif
 }  /* system_seconds */
 
 /*************
@@ -404,8 +420,12 @@ double system_seconds()
 /* PUBLIC */
 unsigned absolute_wallclock(void)
 {
+#ifdef PRIMITIVE_ENVIRONMENT
+  return (unsigned)(clock() / CLOCKS_PER_SEC);
+#else
   time_t t = time((time_t *) NULL);
   return (unsigned) t;
+#endif
 }  /* absolute_wallclock */
 
 /*************
