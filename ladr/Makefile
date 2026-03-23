@@ -70,7 +70,10 @@ else
     _BMODE = release
   endif
 endif
-CFLAGS = $(OPTFLAGS) -Wall -MMD -MP $(PLATFORM_FLAGS) $(XFLAGS)
+# Test whether -MMD -MP works with the platform flags.
+# Old Apple GCC (10.4/10.5) rejects -MMD with multiple -arch flags.
+MMD_TEST := $(shell rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d; echo 'int x;' | $(CC) $(PLATFORM_FLAGS) -MMD -MP -x c -c - -o /tmp/_mmd_test.o 2>/dev/null && echo "-MMD -MP"; rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d)
+CFLAGS = $(OPTFLAGS) -Wall $(MMD_TEST) $(PLATFORM_FLAGS) $(XFLAGS)
 
 # Build mode sentinel -- auto-clean when switching debug/release.
 # Without this, 'make all DEBUG=1' followed by 'make all' silently
@@ -141,4 +144,7 @@ tags:
 dio-solo:
 	$(CC) $(CFLAGS) -DSOLO -o dio dioph.c
 
--include $(wildcard *.d)
+DEPS := $(wildcard *.d)
+ifneq ($(DEPS),)
+-include $(DEPS)
+endif

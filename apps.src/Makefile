@@ -70,7 +70,8 @@ else
     _BMODE = release
   endif
 endif
-CFLAGS = $(OPTFLAGS) -Wall -MMD -MP $(PLATFORM_FLAGS) $(XFLAGS)
+MMD_TEST := $(shell rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d; echo 'int x;' | $(CC) $(PLATFORM_FLAGS) -MMD -MP -x c -c - -o /tmp/_mmd_test.o 2>/dev/null && echo "-MMD -MP"; rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d)
+CFLAGS = $(OPTFLAGS) -Wall $(MMD_TEST) $(PLATFORM_FLAGS) $(XFLAGS)
 
 # Build mode sentinel -- auto-clean when switching debug/release.
 .build_mode: FORCE
@@ -190,6 +191,9 @@ rewriter2: rewriter2.o
 gen_trc_defs: gen_trc_defs.o
 	$(CC) $(CFLAGS) -o gen_trc_defs gen_trc_defs.o ../ladr/libladr.a
 
--include $(wildcard *.d)
+DEPS := $(wildcard *.d)
+ifneq ($(DEPS),)
+-include $(DEPS)
+endif
 
 
