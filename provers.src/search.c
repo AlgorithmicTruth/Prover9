@@ -5144,8 +5144,10 @@ Prover_results search(Prover_input p)
 
       resume_load_clauses(p->resume_dir);       // load into Glob lists, no orient/index
       restore_fpa_ids(p->resume_dir);           // restore FPA_IDs for deterministic index order
+#ifndef PRIMITIVE_ENVIRONMENT
       restore_checkpoint_formulas(p->resume_dir); // restore goal formulas for proof ancestry
       restore_justifications(p->resume_dir);    // restore real justifications for proof output
+#endif
       resume_load_precedence(p->resume_dir);    // restore symbol ordering from checkpoint
       basic_clause_properties(Glob.sos, Glob.usable);
       init_search();                             // full init with clauses present
