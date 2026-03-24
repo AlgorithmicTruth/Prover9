@@ -123,7 +123,15 @@ static size_t Memstream_len = 0;
 static
 void child_exit(int code)
 {
-  set_no_kill();  /* protect exit output from signal truncation */
+  /* Block SIGALRM to prevent suspend timer from freezing us mid-write.
+     Also defer SIGTERM (set_no_kill) to protect proof output. */
+  {
+    sigset_t block;
+    sigemptyset(&block);
+    sigaddset(&block, SIGALRM);
+    sigprocmask(SIG_BLOCK, &block, NULL);
+  }
+  set_no_kill();
   print_exit_message(stdout, code);
 
   /* Flush open_memstream and copy captured output to shared memory.
