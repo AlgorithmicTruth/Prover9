@@ -609,14 +609,18 @@ pid_t spawn_child(int slot, int si, int order_idx, int slice_sec,
     }
 
     /* Set up shared-memory output buffer (unbuffered so _exit() loses
-       nothing; every fprintf/printf immediately invokes shm_write_fn) */
+       nothing; every fprintf/printf immediately invokes shm_write_fn).
+       Redirect stdout by closing it and re-assigning via freopen trick:
+       fclose the original, then make the shm FILE* the new stdout.
+       *stdout = *shm_fp doesn't work on Linux glibc (internal state). */
     if (output_shm) {
       my_output = &output_shm[order_idx];
       my_output->output_len = 0;
       shm_fp = shm_stdout_open(my_output);
       if (shm_fp) {
         setbuf(shm_fp, NULL);
-        *stdout = *shm_fp;
+        fclose(stdout);
+        stdout = shm_fp;
       }
     }
 
