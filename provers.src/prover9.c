@@ -68,7 +68,7 @@
 
 /* Sliding-window (-cores N) constants */
 #define CORES_MIN_SLICE   8   /* minimum seconds per child slice */
-#define CHILD_OUTPUT_BUFSZ  (16 * 1024 * 1024)   /* 16 MB per strategy */
+#define CHILD_OUTPUT_BUFSZ  (16 * 1024 * 1024)   /* 16 MB per slot */
 
 /* Suspended child record for sleep/wake scheduling */
 struct suspended_child {
@@ -565,7 +565,7 @@ pid_t spawn_child(int slot, int si, int order_idx, int slice_sec,
        child_exit() flushes and copies the buffer to shared memory. */
     if (output_shm) {
       FILE *memfp;
-      my_output = &output_shm[order_idx];
+      my_output = &output_shm[slot];
       my_output->output_len = 0;
       Memstream_buf = NULL;
       Memstream_len = 0;
@@ -946,7 +946,7 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
           n_suspended = 0;
 
           if (output_shm)
-            write_shm_to_fd(&output_shm[slot_oidx[i]], saved_stdout);
+            write_shm_to_fd(&output_shm[i], saved_stdout);
 
 #ifdef DEBUG
           fprintf(stderr, "%% Cores winner: slot %d (%s)\n",
@@ -1119,9 +1119,9 @@ void cores_search(Prover_input input, const short *ml_ranking,
   else
     memset(hints_shm, 0, phase1_limit * sizeof(struct child_hints));
 
-  /* Allocate shared-memory output buffers (1 MB per strategy) */
+  /* Allocate shared-memory output buffers (16 MB per slot, indexed by slot) */
   output_shm = (struct child_output *) mmap(NULL,
-      phase1_limit * sizeof(struct child_output),
+      N * sizeof(struct child_output),
       PROT_READ | PROT_WRITE,
       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
   if (output_shm == MAP_FAILED)
@@ -1152,7 +1152,7 @@ void cores_search(Prover_input input, const short *ml_ranking,
   if (hints_shm)
     munmap(hints_shm, phase1_limit * sizeof(struct child_hints));
   if (output_shm)
-    munmap(output_shm, phase1_limit * sizeof(struct child_output));
+    munmap(output_shm, N * sizeof(struct child_output));
 
   if (result == MAX_PROOFS_EXIT) {
     close(saved_stdout);
@@ -1256,9 +1256,9 @@ void cores_from_scan(Prover_scan_result psr, const short *ml_ranking,
   else
     memset(hints_shm, 0, phase1_limit * sizeof(struct child_hints));
 
-  /* Allocate shared-memory output buffers (1 MB per strategy) */
+  /* Allocate shared-memory output buffers (16 MB per slot, indexed by slot) */
   output_shm = (struct child_output *) mmap(NULL,
-      phase1_limit * sizeof(struct child_output),
+      N * sizeof(struct child_output),
       PROT_READ | PROT_WRITE,
       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
   if (output_shm == MAP_FAILED)
@@ -1289,7 +1289,7 @@ void cores_from_scan(Prover_scan_result psr, const short *ml_ranking,
   if (hints_shm)
     munmap(hints_shm, phase1_limit * sizeof(struct child_hints));
   if (output_shm)
-    munmap(output_shm, phase1_limit * sizeof(struct child_output));
+    munmap(output_shm, N * sizeof(struct child_output));
 
   if (result == MAX_PROOFS_EXIT) {
     close(saved_stdout);
