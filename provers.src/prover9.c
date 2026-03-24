@@ -68,7 +68,7 @@
 
 /* Sliding-window (-cores N) constants */
 #define CORES_MIN_SLICE   8   /* minimum seconds per child slice */
-#define CHILD_OUTPUT_BUFSZ  (1024 * 1024)   /* 1 MB per strategy */
+#define CHILD_OUTPUT_BUFSZ  (16 * 1024 * 1024)   /* 16 MB per strategy */
 
 /* Suspended child record for sleep/wake scheduling */
 struct suspended_child {
@@ -106,6 +106,10 @@ static volatile struct child_hints *my_hints = NULL;
 /* File-scope pointer to this child's output buffer (set in spawn_child) */
 static struct child_output *my_output = NULL;
 
+/* open_memstream buffer for child stdout capture */
+static char *Memstream_buf = NULL;
+static size_t Memstream_len = 0;
+
 /*************
  *
  *   child_exit()
@@ -121,6 +125,20 @@ void child_exit(int code)
 {
   set_no_kill();  /* protect exit output from signal truncation */
   print_exit_message(stdout, code);
+
+  /* Flush open_memstream and copy captured output to shared memory.
+     Parent reads the shm buffer for the winning child. */
+  if (my_output && Memstream_buf) {
+    int n;
+    fflush(stdout);
+    fclose(stdout);
+    n = (int) Memstream_len;
+    if (n > (int) sizeof(my_output->buf))
+      n = (int) sizeof(my_output->buf);
+    memcpy(my_output->buf, Memstream_buf, n);
+    my_output->output_len = n;
+  }
+
   _exit(code);
 }
 
@@ -226,71 +244,6 @@ void shm_progress_update(int stage, int given, int kept,
     my_hints->megs_used   = megs;
   }
 }  /* shm_progress_update */
-
-/*************
- *
- *   shm_write_fn()
- *
- *   Write callback for fwopen (macOS) / fopencookie (Linux).
- *   Copies data into the child's shared-memory output buffer.
- *   Silently stops copying when full, always returns len to
- *   prevent write errors in the child.
- *
- *************/
-
-#ifdef __APPLE__
-
-static
-int shm_write_fn(void *cookie, const char *data, int len)
-{
-  struct child_output *out = (struct child_output *) cookie;
-  int avail = (int) sizeof(out->buf) - out->output_len;
-  if (avail > 0) {
-    int n = len < avail ? len : avail;
-    memcpy(out->buf + out->output_len, data, n);
-    out->output_len += n;
-  }
-  return len;  /* always report success */
-}
-
-#else  /* Linux / glibc */
-
-static
-ssize_t shm_write_fn(void *cookie, const char *data, size_t len)
-{
-  struct child_output *out = (struct child_output *) cookie;
-  int avail = (int) sizeof(out->buf) - out->output_len;
-  if (avail > 0) {
-    int n = (int) len < avail ? (int) len : avail;
-    memcpy(out->buf + out->output_len, data, n);
-    out->output_len += n;
-  }
-  return (ssize_t) len;
-}
-
-#endif
-
-/*************
- *
- *   shm_stdout_open()
- *
- *   Create a write-only FILE* backed by the shared-memory output buffer.
- *   Portable: fwopen on macOS (BSD), fopencookie on Linux (glibc).
- *
- *************/
-
-static
-FILE *shm_stdout_open(struct child_output *out)
-{
-#ifdef __APPLE__
-  return fwopen(out, shm_write_fn);
-#else
-  cookie_io_functions_t fns;
-  memset(&fns, 0, sizeof(fns));
-  fns.write = shm_write_fn;
-  return fopencookie(out, "w", fns);
-#endif
-}
 
 /*************
  *
@@ -598,7 +551,6 @@ pid_t spawn_child(int slot, int si, int order_idx, int slice_sec,
   if (cpid == 0) {
     /* ---- Child process ---- */
     int devnull_fd;
-    FILE *shm_fp;
     close(saved_stdout);
 
     /* Redirect fd 1 to /dev/null as safety net for stray raw writes */
@@ -608,19 +560,19 @@ pid_t spawn_child(int slot, int si, int order_idx, int slice_sec,
       close(devnull_fd);
     }
 
-    /* Set up shared-memory output buffer (unbuffered so _exit() loses
-       nothing; every fprintf/printf immediately invokes shm_write_fn).
-       Redirect stdout by closing it and re-assigning via freopen trick:
-       fclose the original, then make the shm FILE* the new stdout.
-       *stdout = *shm_fp doesn't work on Linux glibc (internal state). */
+    /* Capture child stdout via open_memstream (POSIX).
+       All printf/fprintf(stdout) goes to a growable memory buffer.
+       child_exit() flushes and copies the buffer to shared memory. */
     if (output_shm) {
+      FILE *memfp;
       my_output = &output_shm[order_idx];
       my_output->output_len = 0;
-      shm_fp = shm_stdout_open(my_output);
-      if (shm_fp) {
-        setbuf(shm_fp, NULL);
+      Memstream_buf = NULL;
+      Memstream_len = 0;
+      memfp = open_memstream(&Memstream_buf, &Memstream_len);
+      if (memfp) {
         fclose(stdout);
-        stdout = shm_fp;
+        stdout = memfp;
       }
     }
 
