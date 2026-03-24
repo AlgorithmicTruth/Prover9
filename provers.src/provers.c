@@ -365,6 +365,10 @@ struct arg_options get_command_line_args(int argc, char **argv)
     int n = which_string_member("-f", argv, argc);
     if (n != -1 && n + 1 < argc)
       opts.tptp_file = argv[n + 1];
+    else {
+      fprintf(stderr, "Error: -f requires a filename argument.\n");
+      exit(1);
+    }
   }
 
   return opts;
@@ -469,6 +473,14 @@ void process_command_line_args_2(struct arg_options command_opt,
 static
 void prover_sig_handler(int condition)
 {
+  static volatile sig_atomic_t in_handler = 0;
+
+  /* Prevent recursive entry (e.g., SIGSEGV during SIGINT handler) */
+  if (in_handler) {
+    _exit(condition == SIGSEGV ? SIGSEGV_EXIT : 1);
+  }
+  in_handler = 1;
+
   if (condition == SIGUSR2)
     fprintf(stderr, "\nCheckpoint requested.\n");
   else
