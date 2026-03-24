@@ -72,6 +72,9 @@ else
 endif
 MMD_TEST := $(shell rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d; echo 'int x;' | $(CC) $(PLATFORM_FLAGS) -MMD -MP -x c -c - -o /tmp/_mmd_test.o 2>/dev/null && echo "-MMD -MP"; rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d)
 CFLAGS = $(OPTFLAGS) -Wall $(MMD_TEST) $(PLATFORM_FLAGS) $(XFLAGS)
+ifdef STATIC
+  LDFLAGS = -static
+endif
 
 # Build mode sentinel -- auto-clean when switching debug/release.
 .build_mode: FORCE
@@ -111,85 +114,85 @@ tags:
 apps: $(PROGRAMS)
 
 test: test.o
-	$(CC) $(CFLAGS) -o test test.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -otest test.o ../ladr/libladr.a
 
 interpformat: interpformat.o
-	$(CC) $(CFLAGS) -o interpformat interpformat.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -ointerpformat interpformat.o ../ladr/libladr.a
 
 prooftrans: prooftrans.o
-	$(CC) $(CFLAGS) -o prooftrans prooftrans.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -oprooftrans prooftrans.o ../ladr/libladr.a
 
 directproof: directproof.o
-	$(CC) $(CFLAGS) -o directproof directproof.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -odirectproof directproof.o ../ladr/libladr.a
 
 test_clause_eval: test_clause_eval.o
-	$(CC) $(CFLAGS) -o test_clause_eval test_clause_eval.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -otest_clause_eval test_clause_eval.o ../ladr/libladr.a
 
 test_complex: test_complex.o
-	$(CC) $(CFLAGS) -o test_complex test_complex.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -otest_complex test_complex.o ../ladr/libladr.a
 
 complex: complex.o
-	$(CC) $(CFLAGS) -o complex complex.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -ocomplex complex.o ../ladr/libladr.a
 
 latfilter: latfilter.o
-	$(CC) $(CFLAGS) -o latfilter latfilter.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -olatfilter latfilter.o ../ladr/libladr.a
 
 olfilter: olfilter.o
-	$(CC) $(CFLAGS) -o olfilter olfilter.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -oolfilter olfilter.o ../ladr/libladr.a
 
 unfast: unfast.o
-	$(CC) $(CFLAGS) -o unfast unfast.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -ounfast unfast.o ../ladr/libladr.a
 
 upper-covers: upper-covers.o
-	$(CC) $(CFLAGS) -o upper-covers upper-covers.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -oupper-covers upper-covers.o ../ladr/libladr.a
 
 miniscope: miniscope.o
-	$(CC) $(CFLAGS) -o miniscope miniscope.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -ominiscope miniscope.o ../ladr/libladr.a
 
 isofilter0: isofilter0.o
-	$(CC) $(CFLAGS) -o isofilter0 isofilter0.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -oisofilter0 isofilter0.o ../ladr/libladr.a
 
 isofilter: isofilter.o
-	$(CC) $(CFLAGS) -o isofilter isofilter.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -oisofilter isofilter.o ../ladr/libladr.a
 
 isofilter2: isofilter2.o
-	$(CC) $(CFLAGS) -o isofilter2 isofilter2.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -oisofilter2 isofilter2.o ../ladr/libladr.a
 
 dprofiles: dprofiles.o
-	$(CC) $(CFLAGS) -o dprofiles dprofiles.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -odprofiles dprofiles.o ../ladr/libladr.a
 
 renamer: renamer.o
-	$(CC) $(CFLAGS) -o renamer renamer.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -orenamer renamer.o ../ladr/libladr.a
 
 rewriter: rewriter.o
-	$(CC) $(CFLAGS) -o rewriter rewriter.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -orewriter rewriter.o ../ladr/libladr.a
 
 idfilter: idfilter.o
-	$(CC) $(CFLAGS) -o idfilter idfilter.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -oidfilter idfilter.o ../ladr/libladr.a
 
 clausefilter: clausefilter.o
-	$(CC) $(CFLAGS) -o clausefilter clausefilter.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -oclausefilter clausefilter.o ../ladr/libladr.a
 
 interpfilter: interpfilter.o
-	$(CC) $(CFLAGS) -o interpfilter interpfilter.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -ointerpfilter interpfilter.o ../ladr/libladr.a
 
 clausetester: clausetester.o
-	$(CC) $(CFLAGS) -o clausetester clausetester.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -oclausetester clausetester.o ../ladr/libladr.a
 
 mirror-flip: mirror-flip.o
-	$(CC) $(CFLAGS) -o mirror-flip mirror-flip.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -omirror-flip mirror-flip.o ../ladr/libladr.a
 
 perm3: perm3.o
-	$(CC) $(CFLAGS) -o perm3 perm3.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -operm3 perm3.o ../ladr/libladr.a
 
 sigtest: sigtest.o
-	$(CC) $(CFLAGS) -o sigtest sigtest.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -osigtest sigtest.o ../ladr/libladr.a
 
 rewriter2: rewriter2.o
-	$(CC) $(CFLAGS) -o rewriter2 rewriter2.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -orewriter2 rewriter2.o ../ladr/libladr.a
 
 gen_trc_defs: gen_trc_defs.o
-	$(CC) $(CFLAGS) -o gen_trc_defs gen_trc_defs.o ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -ogen_trc_defs gen_trc_defs.o ../ladr/libladr.a
 
 DEPS := $(wildcard *.d)
 ifneq ($(DEPS),)

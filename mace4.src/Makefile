@@ -72,6 +72,9 @@ else
 endif
 MMD_TEST := $(shell rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d; echo 'int x;' | $(CC) $(PLATFORM_FLAGS) -MMD -MP -x c -c - -o /tmp/_mmd_test.o 2>/dev/null && echo "-MMD -MP"; rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d)
 CFLAGS = $(OPTFLAGS) -Wall $(MMD_TEST) $(PLATFORM_FLAGS) $(XFLAGS)
+ifdef STATIC
+  LDFLAGS = -static
+endif
 
 # Build mode sentinel -- auto-clean when switching debug/release.
 .build_mode: FORCE
@@ -104,7 +107,7 @@ ladr:
 	cd ../ladr && $(MAKE) libladr.a
 
 mace4: libmace4.a mace4.o $(OBJECTS)
-	$(CC) $(CFLAGS) -o mace4 mace4.o libmace4.a ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -o mace4 mace4.o libmace4.a ../ladr/libladr.a
 
 tags:
 	etags *.c ../ladr/*.c

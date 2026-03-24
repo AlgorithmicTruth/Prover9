@@ -72,6 +72,9 @@ else
 endif
 MMD_TEST := $(shell rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d; echo 'int x;' | $(CC) $(PLATFORM_FLAGS) -MMD -MP -x c -c - -o /tmp/_mmd_test.o 2>/dev/null && echo "-MMD -MP"; rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d)
 CFLAGS = $(OPTFLAGS) -Wall $(MMD_TEST) $(PLATFORM_FLAGS) $(XFLAGS)
+ifdef STATIC
+  LDFLAGS = -static
+endif
 
 # Build mode sentinel -- auto-clean when switching debug/release.
 .build_mode: FORCE
@@ -140,34 +143,34 @@ prover:
 	$(MAKE) prover9
 
 prover9: .build_mode prover9.o $(OBJECTS) ../ladr/libladr.a
-	$(CC) $(CFLAGS) -o prover9 prover9.o $(OBJECTS) ../ladr/libladr.a -lm
+	$(CC) $(CFLAGS) $(LDFLAGS) -o prover9 prover9.o $(OBJECTS) ../ladr/libladr.a -lm
 
 fof-prover9: fof-prover9.o $(OBJECTS) ../ladr/libladr.a
-	$(CC) $(CFLAGS) -o fof-prover9 fof-prover9.o $(OBJECTS) ../ladr/libladr.a -lm
+	$(CC) $(CFLAGS) $(LDFLAGS) -o fof-prover9 fof-prover9.o $(OBJECTS) ../ladr/libladr.a -lm
 
 ladr_to_tptp: ladr_to_tptp.o $(OBJECTS) ../ladr/libladr.a
-	$(CC) $(CFLAGS) -o ladr_to_tptp ladr_to_tptp.o $(OBJECTS) ../ladr/libladr.a -lm
+	$(CC) $(CFLAGS) $(LDFLAGS) -o ladr_to_tptp ladr_to_tptp.o $(OBJECTS) ../ladr/libladr.a -lm
 
 tptp_to_ladr: tptp_to_ladr.o $(OBJECTS) ../ladr/libladr.a
-	$(CC) $(CFLAGS) -o tptp_to_ladr tptp_to_ladr.o $(OBJECTS) ../ladr/libladr.a -lm
+	$(CC) $(CFLAGS) $(LDFLAGS) -o tptp_to_ladr tptp_to_ladr.o $(OBJECTS) ../ladr/libladr.a -lm
 
 autosketches4: autosketches4.o $(OBJECTS) ../ladr/libladr.a
-	$(CC) $(CFLAGS) -o autosketches4 autosketches4.o $(OBJECTS) ../ladr/libladr.a -lm
+	$(CC) $(CFLAGS) $(LDFLAGS) -o autosketches4 autosketches4.o $(OBJECTS) ../ladr/libladr.a -lm
 
 newauto: newauto.o $(OBJECTS) ../ladr/libladr.a
-	$(CC) $(CFLAGS) -o newauto newauto.o $(OBJECTS) ../ladr/libladr.a -lm
+	$(CC) $(CFLAGS) $(LDFLAGS) -o newauto newauto.o $(OBJECTS) ../ladr/libladr.a -lm
 
 newsax: newsax.o $(OBJECTS) ../ladr/libladr.a
-	$(CC) $(CFLAGS) -o newsax newsax.o $(OBJECTS) ../ladr/libladr.a -lm
+	$(CC) $(CFLAGS) $(LDFLAGS) -o newsax newsax.o $(OBJECTS) ../ladr/libladr.a -lm
 
 cgrep: cgrep.o $(OBJECTS)
-	$(CC) $(CFLAGS) -o cgrep cgrep.o $(OBJECTS) ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -o cgrep cgrep.o $(OBJECTS) ../ladr/libladr.a
 
 mprover: mprover.o $(OBJECTS)
-	$(CC) $(CFLAGS) -o mprover mprover.o $(OBJECTS) ../ladr/libladr.a ../mace4.src/libmace4.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -o mprover mprover.o $(OBJECTS) ../ladr/libladr.a ../mace4.src/libmace4.a
 
 iterate4: iterate4.o $(OBJECTS)
-	$(CC) $(CFLAGS) -o iterate4 iterate4.o $(OBJECTS) ../ladr/libladr.a
+	$(CC) $(CFLAGS) $(LDFLAGS) -o iterate4 iterate4.o $(OBJECTS) ../ladr/libladr.a
 
 DEPS := $(wildcard *.d)
 ifneq ($(DEPS),)
