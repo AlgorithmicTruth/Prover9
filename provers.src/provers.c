@@ -211,6 +211,7 @@ static char Help_string[] =
 "  -cores N    Sliding-window scheduler: N concurrent children.\n"
 "  -comp n   Competition mode: -cores <cpus> -fastPE -t n.\n"
 "  -nomem    Disable memory limit (no max_megs callback).\n"
+"  -stdin    Read LADR option overrides from stdin (with -f).\n"
 "  file.p     Read TPTP input from file (auto-detected by .p extension).\n"
 "\n";
 
@@ -228,6 +229,7 @@ struct arg_options {
   BOOL ladr_out;      /* native Prover9 output on TPTP input */
   BOOL fast_pred_elim;  /* 5-second pred elim timeout */
   int  cores;              /* sliding-window cores (-1 = use parm default) */
+  BOOL read_stdin;         /* read LADR overrides from stdin (-stdin flag) */
 };
 
 /*************
@@ -246,7 +248,7 @@ struct arg_options get_command_line_args(int argc, char **argv)
   extern char *optarg;
   int c, i;
   struct arg_options opts = {FALSE, FALSE, INT_MAX, FALSE, FALSE, FALSE,
-                             NULL, FALSE, NULL, FALSE, FALSE, FALSE, -1};
+                             NULL, FALSE, NULL, FALSE, FALSE, FALSE, -1, FALSE};
 
   /* Pre-scan for -tptp, -tptp_out (long options) and positional .p files.
      getopt only handles single-char options, so we handle these manually. */
@@ -267,6 +269,10 @@ struct arg_options get_command_line_args(int argc, char **argv)
     else if (strcmp(argv[i], "-fastPE") == 0) {
       opts.fast_pred_elim = TRUE;
       argv[i] = "-_";  /* neutralize so getopt skips it */
+    }
+    else if (strcmp(argv[i], "-stdin") == 0) {
+      opts.read_stdin = TRUE;
+      argv[i] = "-_";
     }
     else if (strcmp(argv[i], "-cores") == 0) {
       if (i + 1 < argc) {
@@ -1446,9 +1452,9 @@ Prover_scan_result std_prover_init_and_scan(int argc, char **argv)
     printf("\n%% TPTP input mode: variables are uppercase (Prolog convention).\n");
   }
 
-  /* Read LADR option overrides from stdin when -f provides the TPTP file.
+  /* Read LADR option overrides from stdin when -stdin flag is given.
      This lets training scripts pipe set/clear/assign commands via stdin. */
-  if (opts.tptp_file != NULL && !isatty(fileno(stdin))) {
+  if (opts.tptp_file != NULL && opts.read_stdin) {
     char line[1024];
     while (fgets(line, sizeof(line), stdin) != NULL) {
       char *cp = line;
