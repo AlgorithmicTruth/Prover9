@@ -307,9 +307,10 @@ struct arg_options get_command_line_args(int argc, char **argv)
       }
     }
     else if (argv[i][0] != '-') {
-      /* Positional arg: check for .p extension */
+      /* Positional arg: check for .p or .tptp extension */
       int len = strlen(argv[i]);
-      if (len >= 2 && strcmp(argv[i] + len - 2, ".p") == 0) {
+      if ((len >= 2 && strcmp(argv[i] + len - 2, ".p") == 0) ||
+          (len >= 5 && strcmp(argv[i] + len - 5, ".tptp") == 0)) {
         opts.tptp_mode = TRUE;
         opts.tptp_file = argv[i];
         argv[i] = "-_";  /* neutralize */
@@ -358,14 +359,12 @@ struct arg_options get_command_line_args(int argc, char **argv)
     }
   }
 
-  /* If -tptp was given but no .p file, check -f args for .p files */
+  /* If -tptp was given but no file captured yet, use the -f argument.
+     Accept any extension (.p, .tptp, etc.) when -tptp is explicit. */
   if (opts.tptp_mode && opts.tptp_file == NULL && opts.files) {
     int n = which_string_member("-f", argv, argc);
-    if (n != -1 && n + 1 < argc) {
-      int len = strlen(argv[n + 1]);
-      if (len >= 2 && strcmp(argv[n + 1] + len - 2, ".p") == 0)
-        opts.tptp_file = argv[n + 1];
-    }
+    if (n != -1 && n + 1 < argc)
+      opts.tptp_file = argv[n + 1];
   }
 
   return opts;
@@ -504,6 +503,12 @@ void prover_sig_handler(int condition)
   case SIGUSR2:
     Checkpoint_requested = 1;
     break;
+#ifdef SIGXCPU
+  case SIGXCPU:
+    fprint_all_stats(stdout, "all");
+    exit_with_message(stdout, MAX_SECONDS_EXIT);
+    break;
+#endif
   default: fatal_error("prover_sig_handler, unknown signal");
   }
 }  /* prover_sig_handler */
@@ -609,6 +614,9 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
   }
 
   signal(SIGINT,  prover_sig_handler);
+#ifdef SIGXCPU
+  signal(SIGXCPU, prover_sig_handler);
+#endif
   signal(SIGUSR1, SIG_IGN);  /* ignore until search starts (Opt/Glob ready) */
   signal(SIGUSR2, SIG_IGN);  /* ignore until search starts (Opt/Glob ready) */
   /* Use sigaction for SIGSEGV/SIGBUS to enable SA_ONSTACK (alternate stack) */
@@ -1398,6 +1406,9 @@ Prover_scan_result std_prover_init_and_scan(int argc, char **argv)
   }
 
   signal(SIGINT,  prover_sig_handler);
+#ifdef SIGXCPU
+  signal(SIGXCPU, prover_sig_handler);
+#endif
   signal(SIGUSR1, SIG_IGN);
   signal(SIGUSR2, SIG_IGN);
   {
