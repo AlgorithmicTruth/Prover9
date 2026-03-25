@@ -568,9 +568,12 @@ pid_t spawn_child(int slot, int si, int order_idx, int slice_sec,
       close(devnull_fd);
     }
 
-    /* Capture child stdout via open_memstream (POSIX).
+    /* Capture child stdout via open_memstream (POSIX.1-2008).
        All printf/fprintf(stdout) goes to a growable memory buffer.
-       child_exit() flushes and copies the buffer to shared memory. */
+       child_exit() flushes and copies the buffer to shared memory.
+       On old systems without open_memstream, child output goes to
+       /dev/null and the parent emits only the SZS status line. */
+#ifndef NO_OPEN_MEMSTREAM
     if (output_shm) {
       FILE *memfp;
       my_output = &output_shm[slot];
@@ -583,6 +586,7 @@ pid_t spawn_child(int slot, int si, int order_idx, int slice_sec,
         stdout = memfp;
       }
     }
+#endif
 
     init_wallclock();
 
