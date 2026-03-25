@@ -358,6 +358,7 @@ struct arg_options get_command_line_args(int argc, char **argv)
         exit(1);
       }
       opts.cores = pc;
+      opts.tptp_mode = TRUE;
       opts.fast_pred_elim = TRUE;
       if (i + 1 < argc) {
         opts.max_seconds = atoi(argv[i + 1]);
