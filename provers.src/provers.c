@@ -273,7 +273,6 @@ int physical_cores(void)
 #else
   n = 4;
 #endif
-  if (n < 2) n = 2;
   if (n > 64) n = 64;
   return n;
 }  /* physical_cores */
@@ -313,6 +312,10 @@ struct arg_options get_command_line_args(int argc, char **argv)
     else if (strcmp(argv[i], "-cores") == 0) {
       if (i + 1 < argc) {
         int max_cores = physical_cores();
+        if (max_cores < 2) {
+          fprintf(stderr, "Error: -cores requires at least 2 physical cores.\n");
+          exit(1);
+        }
         opts.cores = atoi(argv[i + 1]);
         if (opts.cores < 2) opts.cores = 2;
         if (opts.cores > max_cores) opts.cores = max_cores;
@@ -325,7 +328,12 @@ struct arg_options get_command_line_args(int argc, char **argv)
       }
     }
     else if (strcmp(argv[i], "-comp") == 0) {
-      opts.cores = physical_cores();
+      int pc = physical_cores();
+      if (pc < 2) {
+        fprintf(stderr, "Error: -comp requires at least 2 physical cores.\n");
+        exit(1);
+      }
+      opts.cores = pc;
       opts.fast_pred_elim = TRUE;
       if (i + 1 < argc) {
         opts.max_seconds = atoi(argv[i + 1]);
