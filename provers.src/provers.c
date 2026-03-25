@@ -146,6 +146,14 @@ void setup_timeout_signal(int seconds)
 void set_no_kill(void)
 {
   No_kill = 1;
+#ifdef SIGXCPU
+  {
+    sigset_t block;
+    sigemptyset(&block);
+    sigaddset(&block, SIGXCPU);
+    sigprocmask(SIG_BLOCK, &block, NULL);
+  }
+#endif
 }  /* set_no_kill */
 
 /*************
@@ -162,6 +170,14 @@ void clear_no_kill_and_check(void)
 {
   int pk = Pending_kill;
   No_kill = 0;
+#ifdef SIGXCPU
+  {
+    sigset_t unblock;
+    sigemptyset(&unblock);
+    sigaddset(&unblock, SIGXCPU);
+    sigprocmask(SIG_UNBLOCK, &unblock, NULL);
+  }
+#endif
   if (pk == 2) {
     if (Tptp_mode_for_sig) {
       ssize_t wr = write(STDOUT_FILENO, "\n% SZS status User\n", 19);
