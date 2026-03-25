@@ -334,8 +334,15 @@ struct arg_options get_command_line_args(int argc, char **argv)
           exit(1);
         }
         opts.cores = atoi(argv[i + 1]);
-        if (opts.cores < 2) opts.cores = 2;
-        if (opts.cores > max_cores) opts.cores = max_cores;
+        if (opts.cores < 2) {
+          fprintf(stderr, "WARNING: -cores %d too small, using 2.\n", opts.cores);
+          opts.cores = 2;
+        }
+        if (opts.cores > max_cores) {
+          fprintf(stderr, "WARNING: -cores %d exceeds %d physical cores, using %d.\n",
+                  opts.cores, max_cores, max_cores);
+          opts.cores = max_cores;
+        }
         argv[i] = "-_";
         argv[i + 1] = "-_";
         i++;  /* skip value */
