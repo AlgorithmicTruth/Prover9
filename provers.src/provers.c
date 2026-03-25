@@ -299,13 +299,13 @@ struct arg_options get_command_line_args(int argc, char **argv)
 {
   extern char *optarg;
   int c, i;
-  BOOL has_comp = FALSE;
+  BOOL has_cores = FALSE;
   struct arg_options opts = {FALSE, FALSE, INT_MAX, FALSE, FALSE, FALSE,
                              NULL, FALSE, NULL, FALSE, FALSE, FALSE, -1, FALSE};
 
-  /* Pre-scan for -comp so -cores knows to defer */
+  /* Pre-scan: -cores overrides -comp's core count if both present */
   for (i = 1; i < argc; i++)
-    if (strcmp(argv[i], "-comp") == 0) { has_comp = TRUE; break; }
+    if (strcmp(argv[i], "-cores") == 0) { has_cores = TRUE; break; }
 
   /* Pre-scan for -tptp, -tptp_out (long options) and positional .p files.
      getopt only handles single-char options, so we handle these manually. */
@@ -333,22 +333,20 @@ struct arg_options get_command_line_args(int argc, char **argv)
     }
     else if (strcmp(argv[i], "-cores") == 0) {
       if (i + 1 < argc) {
-        if (!has_comp) {
-          int max_cores = physical_cores();
-          if (max_cores < 2) {
-            fprintf(stderr, "Error: -cores requires at least 2 physical cores.\n");
-            exit(1);
-          }
-          opts.cores = atoi(argv[i + 1]);
-          if (opts.cores < 2) {
-            fprintf(stderr, "%% WARNING: -cores %d too small, using 2.\n", opts.cores);
-            opts.cores = 2;
-          }
-          if (opts.cores > max_cores) {
-            fprintf(stderr, "%% WARNING: -cores %d exceeds %d physical cores, using %d.\n",
-                    opts.cores, max_cores, max_cores);
-            opts.cores = max_cores;
-          }
+        int max_cores = physical_cores();
+        if (max_cores < 2) {
+          fprintf(stderr, "Error: -cores requires at least 2 physical cores.\n");
+          exit(1);
+        }
+        opts.cores = atoi(argv[i + 1]);
+        if (opts.cores < 2) {
+          fprintf(stderr, "%% WARNING: -cores %d too small, using 2.\n", opts.cores);
+          opts.cores = 2;
+        }
+        if (opts.cores > max_cores) {
+          fprintf(stderr, "%% WARNING: -cores %d exceeds %d physical cores, using %d.\n",
+                  opts.cores, max_cores, max_cores);
+          opts.cores = max_cores;
         }
         argv[i] = "-_";
         argv[i + 1] = "-_";
@@ -359,12 +357,14 @@ struct arg_options get_command_line_args(int argc, char **argv)
       }
     }
     else if (strcmp(argv[i], "-comp") == 0) {
-      int pc = performance_cores();
-      if (pc < 2) {
-        fprintf(stderr, "Error: -comp requires at least 2 physical cores.\n");
-        exit(1);
+      if (!has_cores) {
+        int pc = performance_cores();
+        if (pc < 2) {
+          fprintf(stderr, "Error: -comp requires at least 2 physical cores.\n");
+          exit(1);
+        }
+        opts.cores = pc;
       }
-      opts.cores = pc;
       opts.tptp_mode = TRUE;
       opts.fast_pred_elim = TRUE;
       if (i + 1 < argc) {
