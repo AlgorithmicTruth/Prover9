@@ -39,10 +39,17 @@ static char *Dict[DICT_SIZE][2] = {{"0",  "zero_for_ivy"},
 static
 char *dict_lookup(char *key)
 {
+  static char numbuf[64];
   int i;
   for (i = 0; i < DICT_SIZE; i++) {
     if (str_ident(Dict[i][0], key))
       return Dict[i][1];
+  }
+  /* Ivy rejects bare numeric constants (2, 3, etc.).
+     Prefix them with "n" so "2" becomes "n2". */
+  if (key[0] >= '0' && key[0] <= '9') {
+    snprintf(numbuf, sizeof(numbuf), "n%s", key);
+    return numbuf;
   }
   return NULL;
 }  /* dict_lookup */
@@ -98,8 +105,12 @@ void sb_ivy_write_term(String_buf sb, Term t)
   }
   else {
     int i;
-    sb_append(sb, "(");
-    sb_append(sb, sn_to_str(SYMNUM(t)));
+    {
+      char *name = sn_to_str(SYMNUM(t));
+      char *mapped = dict_lookup(name);
+      sb_append(sb, "(");
+      sb_append(sb, mapped ? mapped : name);
+    }
     for (i = 0; i < ARITY(t); i++) {
       sb_append(sb, " ");
       sb_ivy_write_term(sb, ARG(t,i));
