@@ -23,6 +23,9 @@
 #include "../ladr/sine.h"
 
 #include <unistd.h>  /* for getopt */
+#ifdef __APPLE__
+#include <sys/sysctl.h>  /* for sysctlbyname (physical core count) */
+#endif
 #ifndef __EMSCRIPTEN__
 #include <signal.h>
 #include <sys/time.h>  /* for setitimer */
@@ -277,7 +280,7 @@ struct arg_options get_command_line_args(int argc, char **argv)
     else if (strcmp(argv[i], "-cores") == 0) {
       if (i + 1 < argc) {
         opts.cores = atoi(argv[i + 1]);
-        if (opts.cores < 1) opts.cores = 1;
+        if (opts.cores < 2) opts.cores = 2;
         if (opts.cores > 64) opts.cores = 64;
         argv[i] = "-_";
         argv[i + 1] = "-_";
@@ -288,12 +291,26 @@ struct arg_options get_command_line_args(int argc, char **argv)
       }
     }
     else if (strcmp(argv[i], "-comp") == 0) {
-#ifdef _SC_NPROCESSORS_ONLN
-      long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+      long ncpu;
+#ifdef __APPLE__
+      /* macOS: hw.physicalcpu gives physical cores (no hyperthreads) */
+      {
+        int phys = 0;
+        size_t sz = sizeof(phys);
+        if (sysctlbyname("hw.physicalcpu", &phys, &sz, NULL, 0) == 0 && phys > 0)
+          ncpu = phys;
+        else
+          ncpu = 4;
+      }
+#elif defined(_SC_NPROCESSORS_ONLN)
+      /* Linux: logical cores / 2 as approximation for physical cores.
+         Most server CPUs have 2 threads per core (SMT/HT). */
+      ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+      if (ncpu > 1) ncpu = ncpu / 2;
 #else
-      long ncpu = 1;
+      ncpu = 4;
 #endif
-      if (ncpu < 1) ncpu = 4;
+      if (ncpu < 2) ncpu = 2;
       if (ncpu > 64) ncpu = 64;
       opts.cores = (int) ncpu;
       opts.fast_pred_elim = TRUE;
