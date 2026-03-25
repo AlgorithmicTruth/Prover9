@@ -278,6 +278,23 @@ int physical_cores(void)
 }  /* physical_cores */
 
 static
+int performance_cores(void)
+{
+#ifdef __APPLE__
+  {
+    int perf = 0;
+    size_t sz = sizeof(perf);
+    /* hw.perflevel0.physicalcpu = P-cores on Apple Silicon.
+       Falls back to physical_cores() on Intel Macs (no perflevel). */
+    if (sysctlbyname("hw.perflevel0.physicalcpu", &perf, &sz, NULL, 0) == 0
+        && perf > 0)
+      return perf > 64 ? 64 : perf;
+  }
+#endif
+  return physical_cores();
+}  /* performance_cores */
+
+static
 struct arg_options get_command_line_args(int argc, char **argv)
 {
   extern char *optarg;
@@ -328,7 +345,7 @@ struct arg_options get_command_line_args(int argc, char **argv)
       }
     }
     else if (strcmp(argv[i], "-comp") == 0) {
-      int pc = physical_cores();
+      int pc = performance_cores();
       if (pc < 2) {
         fprintf(stderr, "Error: -comp requires at least 2 physical cores.\n");
         exit(1);
