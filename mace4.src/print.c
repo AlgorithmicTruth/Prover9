@@ -265,7 +265,7 @@ void print_model_tptp(FILE *fp)
   for (i = 0; i < Domain_size; i++) {
     if (i > 0)
       fprintf(fp, " | ");
-    fprintf(fp, "X = d%d", i);
+    fprintf(fp, "X = \"d%d\"", i);
   }
   fprintf(fp, " )).\n\n");
 
@@ -287,7 +287,7 @@ void print_model_tptp(FILE *fp)
             fprintf(fp, " &\n");
           fprintf(fp, "    ");
           if (s->arity == 0) {
-            fprintf(fp, "%s = d%d", name, val);
+            fprintf(fp, "%s = \"d%d\"", name, val);
           }
           else {
             /* Decode tuple index i into domain element arguments */
@@ -300,9 +300,9 @@ void print_model_tptp(FILE *fp)
             fprintf(fp, "%s(", name);
             for (j = 0; j < s->arity; j++) {
               if (j > 0) fprintf(fp, ",");
-              fprintf(fp, "d%d", args[j]);
+              fprintf(fp, "\"d%d\"", args[j]);
             }
-            fprintf(fp, ") = d%d", val);
+            fprintf(fp, ") = \"d%d\"", val);
           }
           conjunct_count++;
         }
@@ -344,7 +344,7 @@ void print_model_tptp(FILE *fp)
             fprintf(fp, "%s(", name);
             for (j = 0; j < s->arity; j++) {
               if (j > 0) fprintf(fp, ",");
-              fprintf(fp, "d%d", args[j]);
+              fprintf(fp, "\"d%d\"", args[j]);
             }
             fprintf(fp, ")");
           }
