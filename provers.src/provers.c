@@ -245,6 +245,39 @@ struct arg_options {
  *
  *************/
 
+/*************
+ *
+ *   physical_cores()
+ *
+ *   Return number of physical CPU cores (not hyperthreads).
+ *
+ *************/
+
+static
+int physical_cores(void)
+{
+  int n;
+#ifdef __APPLE__
+  {
+    int phys = 0;
+    size_t sz = sizeof(phys);
+    if (sysctlbyname("hw.physicalcpu", &phys, &sz, NULL, 0) == 0 && phys > 0)
+      n = phys;
+    else
+      n = 4;
+  }
+#elif defined(_SC_NPROCESSORS_ONLN)
+  /* Linux: logical / 2 as approximation (most CPUs have 2-way SMT) */
+  n = (int) sysconf(_SC_NPROCESSORS_ONLN);
+  if (n > 1) n = n / 2;
+#else
+  n = 4;
+#endif
+  if (n < 2) n = 2;
+  if (n > 64) n = 64;
+  return n;
+}  /* physical_cores */
+
 static
 struct arg_options get_command_line_args(int argc, char **argv)
 {
@@ -279,9 +312,10 @@ struct arg_options get_command_line_args(int argc, char **argv)
     }
     else if (strcmp(argv[i], "-cores") == 0) {
       if (i + 1 < argc) {
+        int max_cores = physical_cores();
         opts.cores = atoi(argv[i + 1]);
         if (opts.cores < 2) opts.cores = 2;
-        if (opts.cores > 64) opts.cores = 64;
+        if (opts.cores > max_cores) opts.cores = max_cores;
         argv[i] = "-_";
         argv[i + 1] = "-_";
         i++;  /* skip value */
@@ -291,28 +325,7 @@ struct arg_options get_command_line_args(int argc, char **argv)
       }
     }
     else if (strcmp(argv[i], "-comp") == 0) {
-      long ncpu;
-#ifdef __APPLE__
-      /* macOS: hw.physicalcpu gives physical cores (no hyperthreads) */
-      {
-        int phys = 0;
-        size_t sz = sizeof(phys);
-        if (sysctlbyname("hw.physicalcpu", &phys, &sz, NULL, 0) == 0 && phys > 0)
-          ncpu = phys;
-        else
-          ncpu = 4;
-      }
-#elif defined(_SC_NPROCESSORS_ONLN)
-      /* Linux: logical cores / 2 as approximation for physical cores.
-         Most server CPUs have 2 threads per core (SMT/HT). */
-      ncpu = sysconf(_SC_NPROCESSORS_ONLN);
-      if (ncpu > 1) ncpu = ncpu / 2;
-#else
-      ncpu = 4;
-#endif
-      if (ncpu < 2) ncpu = 2;
-      if (ncpu > 64) ncpu = 64;
-      opts.cores = (int) ncpu;
+      opts.cores = physical_cores();
       opts.fast_pred_elim = TRUE;
       if (i + 1 < argc) {
         opts.max_seconds = atoi(argv[i + 1]);
