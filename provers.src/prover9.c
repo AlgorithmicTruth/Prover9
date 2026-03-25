@@ -1526,6 +1526,7 @@ int main(int argc, char **argv)
       if (cmd_max_sec < 0)
         cmd_max_sec = parm(psr->options->max_seconds);
 
+#ifndef NO_OPEN_MEMSTREAM
       /* Sliding-window cores (from scan) for large inputs */
       if (force_strategy < 0 &&
           parm(psr->options->cores) > 0 &&
@@ -1537,11 +1538,13 @@ int main(int argc, char **argv)
         cores_from_scan(psr, ml_ranking, ml_ranking_len, max_strategies, slice_sec);
         /* Does not return on success. Falls through on fork failure. */
       }
+#endif
     }
 
     /* Single-strategy or small input: complete phase 2 normally. */
     input = std_prover_from_scan(psr, -1, -1, -1);
 
+#ifndef NO_OPEN_MEMSTREAM
     /* Sliding-window cores (post-clausify) for small inputs */
     if (force_strategy < 0 &&
         parm(input->options->cores) > 0 &&
@@ -1549,6 +1552,7 @@ int main(int argc, char **argv)
       cores_search(input, ml_ranking, ml_ranking_len, max_strategies, slice_sec);
       /* Does not return on success. */
     }
+#endif
 
     /* Single-strategy: apply forced or auto_default strategy. */
     apply_strategy(input->options,
@@ -1569,10 +1573,12 @@ int main(int argc, char **argv)
     if (nomem)
       disable_max_megs();
 
+#ifndef NO_OPEN_MEMSTREAM
     if (parm(input->options->cores) > 0 &&
         parm(input->options->max_seconds) > 0) {
       cores_search(input, NULL, 0, max_strategies, slice_sec);
     }
+#endif
   }
 
 #endif /* __EMSCRIPTEN__ */
