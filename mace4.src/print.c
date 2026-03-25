@@ -280,9 +280,7 @@ void print_model_tptp(FILE *fp)
         for (i = 0; i < n; i++) {
           int id = s->base + i;
           int val;
-          if (Cells[id].value == NULL)
-            continue;  /* incomplete -- skip */
-          val = VARNUM(Cells[id].value);
+          val = (Cells[id].value != NULL) ? VARNUM(Cells[id].value) : 0;
           if (conjunct_count > 0)
             fprintf(fp, " &\n");
           fprintf(fp, "    ");
@@ -322,13 +320,11 @@ void print_model_tptp(FILE *fp)
         for (i = 0; i < n; i++) {
           int id = s->base + i;
           int val;
-          if (Cells[id].value == NULL)
-            continue;
-          val = VARNUM(Cells[id].value);
+          val = (Cells[id].value != NULL) ? VARNUM(Cells[id].value) : 0;
           if (conjunct_count > 0)
             fprintf(fp, " &\n");
           fprintf(fp, "    ");
-          /* val: 1 = true, 0 = false */
+          /* val: 1 = true, 0 = false (unassigned defaults to false) */
           if (val == 0)
             fprintf(fp, "~");
           if (s->arity == 0) {
