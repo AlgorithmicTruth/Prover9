@@ -101,6 +101,11 @@ void mace4_sig_handler(int condition)
     Mace4_checkpoint_requested_flag = 1;
     signal(SIGUSR2, mace4_sig_handler);  /* re-arm */
     break;
+#ifdef SIGXCPU
+  case SIGXCPU:
+    mace4_exit(MAX_SEC_NO_EXIT);
+    break;
+#endif
   default: fatal_error("mace4_sig_handler, unknown signal");
   }
 }  /* mace4_sig_handler */
@@ -349,6 +354,9 @@ int main(int argc, char **argv)
   signal(SIGTERM, mace4_sig_handler);
   signal(SIGUSR1, mace4_sig_handler);
   signal(SIGSEGV, mace4_sig_handler);
+#ifdef SIGXCPU
+  signal(SIGXCPU, mace4_sig_handler);
+#endif
   signal(SIGUSR2, SIG_IGN);  /* ignore until search is ready */
 
   /* Arm wall-clock timeout via SIGALRM.
