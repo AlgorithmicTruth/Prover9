@@ -78,7 +78,9 @@ ifneq ($(HAS_OMS),yes)
 endif
 CFLAGS = $(OPTFLAGS) -Wall $(MMD_TEST) $(NO_OMS) $(PLATFORM_FLAGS) $(XFLAGS)
 ifdef STATIC
-  LDFLAGS = -static
+  ifneq ($(UNAME_S),Darwin)
+    LDFLAGS = -static
+  endif
 endif
 
 # Build mode sentinel -- auto-clean when switching debug/release.
