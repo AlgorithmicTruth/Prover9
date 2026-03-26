@@ -81,3 +81,6 @@ test_*.sh
 web-combo/
 web-prover9/
 web-mace4/
+
+# Private verification scripts (not for public release)
+verification/agmv_submit.py
