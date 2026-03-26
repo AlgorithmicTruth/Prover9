@@ -261,7 +261,7 @@ void print_model_tptp(FILE *fp)
     fprintf(fp, "%% SZS output start FiniteModel\n");
 
   /* Domain declaration */
-  fprintf(fp, "fof(interp_domain, fi_domain,\n    ! [X] : ( ");
+  fprintf(fp, "fof(interp_domain, interpretation-domains,\n    ! [X] : ( ");
   for (i = 0; i < Domain_size; i++) {
     if (i > 0)
       fprintf(fp, " | ");
@@ -271,7 +271,7 @@ void print_model_tptp(FILE *fp)
 
   /* Functions (fi_functors) */
   if (has_functions) {
-    fprintf(fp, "fof(interp_functions, fi_functors, (\n");
+    fprintf(fp, "fof(interp_functions, interpretation-mappings, (\n");
     conjunct_count = 0;
     for (s = Symbols; s != NULL; s = s->next) {
       if (s->attribute != EQUALITY_SYMBOL && s->type == FUNCTION) {
@@ -311,7 +311,7 @@ void print_model_tptp(FILE *fp)
 
   /* Relations (fi_predicates) */
   if (has_relations) {
-    fprintf(fp, "fof(interp_relations, fi_predicates, (\n");
+    fprintf(fp, "fof(interp_relations, interpretation-mappings, (\n");
     conjunct_count = 0;
     for (s = Symbols; s != NULL; s = s->next) {
       if (s->attribute != EQUALITY_SYMBOL && s->type == RELATION) {
