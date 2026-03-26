@@ -1035,8 +1035,10 @@ Plist process_input_formulas(Plist formulas, BOOL echo)
 	  set_fatal_exit_code(4);  /* MAX_SECONDS_EXIT */
 	  fatal_error("clausify_formula: CNF preprocessing timeout exceeded");
 	}
-	fatal_error("clausify_formula: CNF clause limit exceeded"
-		    " (exponential CNF blowup)");
+	if (cnf_limit_was_hit())
+	  fatal_error("clausify_formula: CNF clause limit exceeded"
+		      " (exponential CNF blowup)");
+	/* Otherwise the formula simplified to TRUE (0 clauses) -- skip it. */
       }
       for (p = clauses; p; p = p->next) {
 	Topform c = p->v;
@@ -1135,8 +1137,10 @@ Plist process_goal_formulas(Plist formulas, BOOL echo)
 	set_fatal_exit_code(4);  /* MAX_SECONDS_EXIT */
 	fatal_error("clausify_formula: CNF preprocessing timeout exceeded");
       }
-      fatal_error("clausify_formula: CNF clause limit exceeded"
-		  " (exponential CNF blowup)");
+      if (cnf_limit_was_hit())
+	fatal_error("clausify_formula: CNF clause limit exceeded"
+		    " (exponential CNF blowup)");
+      /* Otherwise the formula simplified to TRUE (0 clauses) -- skip it. */
     }
     assign_clause_id(tf);
     for (q = clauses; q; q = q->next) {
