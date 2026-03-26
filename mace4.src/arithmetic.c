@@ -606,8 +606,16 @@ BOOL arith_rel_quasi_eval(Term atom)
     zap_term(atom2);
     return val;
   }
-  else
+  else {
+    /* Inequality reached final check without being reduced during
+       propagation.  This is not expected -- propagation should evaluate
+       all inequalities when all cell values are assigned.  Log it so
+       we can investigate if it ever triggers. */
+    fprintf(stderr,
+            "WARNING: arith_rel_quasi_eval: unevaluated inequality "
+            "reached final check (sym=%d)\n", SYMNUM(atom));
     return FALSE;
+  }
 }  /* arith_rel_quasi_eval */
 
 /*************
