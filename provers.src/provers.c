@@ -1419,6 +1419,9 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
       else if (echo)
 	printf("\n%% Formulas that are not ordinary clauses: not echoed\n");
 
+      /* Clausify can hit max_vars -- report as GaveUp, not Error */
+      set_fatal_szs_status("GaveUp");
+
 #ifdef DEBUG
       fprintf(stderr, "%% Clausifying sos (%d formulas)...\n",
               plist_count(pi->sos));
@@ -1443,6 +1446,8 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
       fprintf(stderr, "%% Clausifying goals...\n");
 #endif
       denials    = process_goal_formulas(pi->goals, echo_clausify);
+
+      set_fatal_szs_status(NULL);  /* reset to default for search phase */
     }
 
     pi->goals = NULL;
@@ -2156,6 +2161,9 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
       else if (echo)
         printf("\n%% Formulas that are not ordinary clauses: not echoed\n");
 
+      /* Clausify can hit max_vars -- report as GaveUp, not Error */
+      set_fatal_szs_status("GaveUp");
+
 #ifdef DEBUG
       fprintf(stderr, "%% Clausifying sos (%d formulas)...\n",
               plist_count(pi->sos));
@@ -2177,6 +2185,8 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
       fprintf(stderr, "%% Clausifying goals...\n");
 #endif
       denials    = process_goal_formulas(pi->goals, echo_clausify);
+
+      set_fatal_szs_status(NULL);  /* reset to default for search phase */
     }
 
     pi->goals = NULL;

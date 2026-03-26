@@ -428,12 +428,19 @@ int main(int argc, char **argv)
     /* Phase 2: Parse all formulas (no SInE for mace4) */
     tptp = parse_scanned_formulas(scan, NULL);
 
+    /* Set up SZS error output before clausify (max_vars can fatal) */
+    set_fatal_tptp_mode(TRUE, problem_name);
+    set_fatal_szs_status("GaveUp");
+
     /* Clausify */
     assumptions = embed_formulas_in_topforms(tptp->assumptions, TRUE);
     goals_list = embed_formulas_in_topforms(tptp->goals, FALSE);
     assumptions = process_input_formulas(assumptions, FALSE);
     goals_list = process_goal_formulas(goals_list, FALSE);
     clauses = plist_cat(assumptions, goals_list);
+
+    /* Reset SZS status to default for search phase */
+    set_fatal_szs_status(NULL);
 
     /* Set remaining TPTP globals for msearch.c and print.c.
        Mace4_tptp_mode and Mace4_problem_name are set earlier (pre-scan). */
@@ -442,9 +449,6 @@ int main(int argc, char **argv)
 
     /* Apply command-line overrides (-t, -n, -N, etc.) */
     process_command_line_args(argc, argv, &opt);
-
-    /* Set up SZS error output */
-    set_fatal_tptp_mode(TRUE, problem_name);
 
     free_scan_result(scan);
     /* Note: tptp->assumptions and tptp->goals are consumed above */

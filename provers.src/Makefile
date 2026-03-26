@@ -72,7 +72,9 @@ else
 endif
 MMD_TEST := $(shell rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d; echo 'int x;' | $(CC) $(PLATFORM_FLAGS) -MMD -MP -x c -c - -o /tmp/_mmd_test.o 2>/dev/null && echo "-MMD -MP"; rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d)
 # Test for open_memstream (POSIX.1-2008; missing on macOS < 10.13)
-HAS_OMS := $(shell echo 'int main(){char*b;long l;void*open_memstream();open_memstream(&b,&l);return 0;}' | $(CC) $(PLATFORM_FLAGS) -x c - -o /tmp/_oms 2>/dev/null && echo yes; rm -f /tmp/_oms)
+# Omit PLATFORM_FLAGS: universal-binary -arch flags cause link failure
+# even when open_memstream is available natively.
+HAS_OMS := $(shell echo 'int main(){char*b;long l;void*open_memstream();open_memstream(&b,&l);return 0;}' | $(CC) -x c - -o /tmp/_oms 2>/dev/null && echo yes; rm -f /tmp/_oms)
 ifneq ($(HAS_OMS),yes)
   NO_OMS = -DNO_OPEN_MEMSTREAM
 endif
