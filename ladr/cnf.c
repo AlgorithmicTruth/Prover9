@@ -1836,6 +1836,12 @@ void set_cnf_clause_limit(int n)
 }
 
 /* PUBLIC */
+int cnf_clause_limit(void)
+{
+  return Cnf_clause_limit;
+}
+
+/* PUBLIC */
 BOOL cnf_limit_was_hit(void)
 {
   return Cnf_limit_hit;

@@ -55,6 +55,8 @@ int cnf_max_clauses(Formula f);
 
 void set_cnf_clause_limit(int n);
 
+int cnf_clause_limit(void);
+
 BOOL cnf_limit_was_hit(void);
 
 void set_cnf_timeout(int seconds);

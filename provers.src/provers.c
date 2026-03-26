@@ -1430,7 +1430,15 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
 #endif
       pi->usable = process_input_formulas(pi->usable, echo_clausify);
       pi->demods = process_demod_formulas(pi->demods, echo_clausify);
-      pi->hints  = process_input_formulas(pi->hints, echo_clausify);
+      {
+        /* Hints are auxiliary data, not the logical theory.  Temporarily
+           disable the CNF clause limit so complex hint formulas don't
+           trigger the blowup guard meant for the main input. */
+        int saved_limit = cnf_clause_limit();
+        set_cnf_clause_limit(0);
+        pi->hints  = process_input_formulas(pi->hints, echo_clausify);
+        set_cnf_clause_limit(saved_limit);
+      }
 #ifdef DEBUG
       fprintf(stderr, "%% Clausifying goals...\n");
 #endif
@@ -2159,7 +2167,12 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
 #endif
       pi->usable = process_input_formulas(pi->usable, echo_clausify);
       pi->demods = process_demod_formulas(pi->demods, echo_clausify);
-      pi->hints  = process_input_formulas(pi->hints, echo_clausify);
+      {
+        int saved_limit = cnf_clause_limit();
+        set_cnf_clause_limit(0);
+        pi->hints  = process_input_formulas(pi->hints, echo_clausify);
+        set_cnf_clause_limit(saved_limit);
+      }
 #ifdef DEBUG
       fprintf(stderr, "%% Clausifying goals...\n");
 #endif
