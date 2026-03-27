@@ -439,6 +439,22 @@ int main(int argc, char **argv)
     goals_list = process_goal_formulas(goals_list, FALSE);
     clauses = plist_cat(assumptions, goals_list);
 
+    /* Check for empty clauses ($false): trivially unsatisfiable */
+    {
+      Plist pp;
+      for (pp = clauses; pp; pp = pp->next) {
+        Topform tf = pp->v;
+        if (tf->literals == NULL) {
+          if (Mace4_problem_name)
+            printf("%% SZS status Unsatisfiable for %s\n", Mace4_problem_name);
+          else
+            printf("%% SZS status Unsatisfiable\n");
+          printf("\n%% Input contains the empty clause ($false).\n");
+          exit(0);
+        }
+      }
+    }
+
     /* Reset SZS status to default for search phase */
     set_fatal_szs_status(NULL);
 

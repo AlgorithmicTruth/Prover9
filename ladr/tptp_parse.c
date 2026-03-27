@@ -1839,6 +1839,15 @@ static void scan_tptp_input(Lexer *lex,
           safe_free(qbuf);
         }
         else {
+          if (t->type == TOK_DOLLAR_IDENT) {
+            /* Reconstruct "$name" for re-lexing (scanner strips the $) */
+            char *dbuf = safe_malloc(strlen(t->text) + 2);
+            dbuf[0] = '$';
+            strcpy(dbuf + 1, t->text);
+            body_buf_append(&bb, dbuf);
+            safe_free(dbuf);
+          }
+          else
           body_buf_append(&bb, t->text);
           /* Collect identifiers as symbols (skip vars, =, operators) */
           if (t->type == TOK_IDENT) {
