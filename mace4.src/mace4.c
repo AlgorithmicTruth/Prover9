@@ -428,6 +428,13 @@ int main(int argc, char **argv)
     /* Phase 2: Parse all formulas (no SInE for mace4) */
     tptp = parse_scanned_formulas(scan, NULL);
 
+    /* Inject distinct object inequality axioms */
+    {
+      Plist dobj = tptp_distinct_object_axioms(tptp->distinct_objects);
+      if (dobj)
+        tptp->assumptions = plist_cat(tptp->assumptions, dobj);
+    }
+
     /* Set up SZS error output before clausify (max_vars can fatal) */
     set_fatal_tptp_mode(TRUE, problem_name);
     set_fatal_szs_status("GaveUp");

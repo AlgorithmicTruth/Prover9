@@ -958,6 +958,13 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
         /* Phase 3: Parse only selected formulas from saved text */
         tptp = parse_scanned_formulas(scan, keep);
 
+        /* Inject distinct object inequality axioms */
+        {
+          Plist dobj = tptp_distinct_object_axioms(tptp->distinct_objects);
+          if (dobj)
+            tptp->assumptions = plist_cat(tptp->assumptions, dobj);
+        }
+
         /* Set sine_depth attributes on parsed assumptions.
            Parse order matches scan order for kept entries, so we walk
            assumptions in parallel with the scan entries. */
@@ -1046,6 +1053,13 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
           printf("%% Parsing all %d formulas from scan data\n\n",
                  scan->n_entries);
         tptp = parse_scanned_formulas(scan, NULL);  /* keep=NULL: parse all */
+
+        /* Inject distinct object inequality axioms */
+        {
+          Plist dobj = tptp_distinct_object_axioms(tptp->distinct_objects);
+          if (dobj)
+            tptp->assumptions = plist_cat(tptp->assumptions, dobj);
+        }
 
         pi->sos = tptp->assumptions;
         pi->goals = tptp->goals;
@@ -1886,6 +1900,13 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
 
       tptp = parse_scanned_formulas(scan, keep);
 
+      /* Inject distinct object inequality axioms */
+      {
+        Plist dobj = tptp_distinct_object_axioms(tptp->distinct_objects);
+        if (dobj)
+          tptp->assumptions = plist_cat(tptp->assumptions, dobj);
+      }
+
       /* Set sine_depth attributes on parsed assumptions */
       {
         Plist ap = tptp->assumptions;
@@ -1971,6 +1992,13 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
         printf("%% Parsing all %d formulas from scan data\n\n",
                scan->n_entries);
       tptp = parse_scanned_formulas(scan, NULL);
+
+      /* Inject distinct object inequality axioms */
+      {
+        Plist dobj = tptp_distinct_object_axioms(tptp->distinct_objects);
+        if (dobj)
+          tptp->assumptions = plist_cat(tptp->assumptions, dobj);
+      }
 
       pi->sos = tptp->assumptions;
       pi->goals = tptp->goals;

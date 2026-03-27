@@ -56,6 +56,7 @@ typedef enum {
   TOK_IDENT,        /* lowercase-start identifier */
   TOK_VAR,          /* uppercase-start or _ identifier */
   TOK_QUOTED,       /* single-quoted 'string' */
+  TOK_DISTINCT,     /* double-quoted "string" (TPTP distinct object) */
   TOK_INTEGER,      /* integer literal */
   TOK_LPAREN,       /* ( */
   TOK_RPAREN,       /* ) */
@@ -502,7 +503,7 @@ static void read_token(Lexer *lex, Token *tok)
     return;
   }
 
-  /* Double-quoted string (treated same as single-quoted for our purposes) */
+  /* Double-quoted string (TPTP distinct object) */
   if (lex->ch == '"') {
     int ti = 0;
     lexer_advance(lex);
@@ -522,7 +523,7 @@ static void read_token(Lexer *lex, Token *tok)
     else
       tptp_parse_error(lex, "unterminated double-quoted string");
     tok->text[ti] = '\0';
-    tok->type = TOK_QUOTED;
+    tok->type = TOK_DISTINCT;
     return;
   }
 
@@ -630,13 +631,35 @@ static void init_symbol_cache(void)
 }
 
 /*
+ * Distinct object collection.
+ * File-static list collects names during direct-parse path.
+ * Scan path uses an explicit Plist* parameter instead.
+ */
+
+static Plist Distinct_objects = NULL;
+
+static Plist add_distinct_name(Plist list, const char *name)
+{
+  Plist p;
+  for (p = list; p; p = p->next) {
+    if (strcmp((char *)p->v, name) == 0)
+      return list;  /* already present */
+  }
+  {
+    char *copy = safe_malloc(strlen(name) + 1);
+    strcpy(copy, name);
+    return plist_prepend(list, copy);
+  }
+}
+
+/*
  * Parse a name: ident, quoted, or integer (used for formula names)
  */
 
 static void parse_name(Lexer *lex, char *buf, int bufsize)
 {
   Token *t = peek(lex);
-  if (t->type == TOK_IDENT || t->type == TOK_QUOTED ||
+  if (t->type == TOK_IDENT || t->type == TOK_QUOTED || t->type == TOK_DISTINCT ||
       t->type == TOK_INTEGER || t->type == TOK_VAR) {
     snprintf(buf, bufsize, "%s", t->text);
     consume(lex);
@@ -664,10 +687,15 @@ static Term parse_term(Lexer *lex)
     return get_rigid_term(name, 0);
   }
 
-  if (t->type == TOK_IDENT || t->type == TOK_QUOTED) {
+  if (t->type == TOK_IDENT || t->type == TOK_QUOTED || t->type == TOK_DISTINCT) {
     char name[MAX_TOKEN_LEN];
+    BOOL is_distinct = (t->type == TOK_DISTINCT);
     strcpy(name, t->text);
     consume(lex);
+
+    /* Collect distinct object names for inequality axiom generation */
+    if (is_distinct)
+      Distinct_objects = add_distinct_name(Distinct_objects, name);
 
     t = peek(lex);
     if (t->type == TOK_LPAREN) {
@@ -1118,7 +1146,7 @@ static void parse_tptp_input(Lexer *lex,
       expect(lex, TOK_LPAREN, "'('");
 
       Token *qt = peek(lex);
-      if (qt->type != TOK_QUOTED)
+      if (qt->type != TOK_QUOTED && qt->type != TOK_DISTINCT)
         tptp_parse_error(lex, "expected quoted filename in include");
       char *include_name = strdup(qt->text);
       consume(lex);
@@ -1630,6 +1658,7 @@ static void scan_tptp_input(Lexer *lex,
                             int *n_axioms,
                             int *n_goals,
                             BOOL *has_neg_conj,
+                            Plist *distinct_objects,
                             int include_depth)
 {
   if (include_depth > MAX_INCLUDE_DEPTH)
@@ -1654,7 +1683,7 @@ static void scan_tptp_input(Lexer *lex,
       expect(lex, TOK_LPAREN, "'('");
 
       t = peek(lex);
-      if (t->type != TOK_QUOTED)
+      if (t->type != TOK_QUOTED && t->type != TOK_DISTINCT)
         tptp_parse_error(lex, "expected quoted filename in include");
       include_name = safe_malloc(strlen(t->text) + 1);
       strcpy(include_name, t->text);
@@ -1732,7 +1761,7 @@ static void scan_tptp_input(Lexer *lex,
       lexer_init(&inc_lex, inc_file, path);
       scan_tptp_input(&inc_lex, ht, eb, sa,
                        n_axioms, n_goals, has_neg_conj,
-                       include_depth + 1);
+                       distinct_objects, include_depth + 1);
 
       /* Propagate magic commands */
       lex->magic_commands = plist_cat(lex->magic_commands,
@@ -1812,7 +1841,10 @@ static void scan_tptp_input(Lexer *lex,
         if (t->type == TOK_TILDE)  tilde_cnt++;
 
         /* Save token text */
-        if (t->type == TOK_QUOTED) {
+        if (t->type == TOK_QUOTED || t->type == TOK_DISTINCT) {
+          /* Collect distinct object names */
+          if (t->type == TOK_DISTINCT)
+            *distinct_objects = add_distinct_name(*distinct_objects, t->text);
           /* Reconstruct single-quoted form for re-lexing.
              Escape any ' in the text as '' (TPTP convention). */
           const char *s;
@@ -1979,6 +2011,7 @@ Scan_result scan_tptp_stream(FILE *fin, const char *source_name)
   struct sym_acc sa;
   int n_axioms = 0, n_goals = 0;
   BOOL neg_conj = FALSE;
+  Plist dist_objs = NULL;
   Scan_result result;
 
   ht = safe_calloc(1, sizeof(struct scan_htable));
@@ -1987,7 +2020,7 @@ Scan_result scan_tptp_stream(FILE *fin, const char *source_name)
 
   lexer_init(&lex, fin, source_name);
   scan_tptp_input(&lex, ht, &eb, &sa,
-                   &n_axioms, &n_goals, &neg_conj, 0);
+                   &n_axioms, &n_goals, &neg_conj, &dist_objs, 0);
 
   result = safe_malloc(sizeof(struct scan_result));
   result->entries = eb.entries;
@@ -1997,6 +2030,7 @@ Scan_result scan_tptp_stream(FILE *fin, const char *source_name)
   result->n_symbols = ht->next_id;
   result->magic_commands = lex.magic_commands;
   result->has_neg_conj = neg_conj;
+  result->distinct_objects = dist_objs;
 
   sym_acc_safe_free(&sa);
   free_scan_htable(ht);
@@ -2056,6 +2090,8 @@ Tptp_input parse_scanned_formulas(Scan_result scan, BOOL *keep)
   result->magic_commands = scan->magic_commands;
   scan->magic_commands = NULL;  /* ownership transferred */
   result->has_neg_conj = neg_conj;
+  result->distinct_objects = scan->distinct_objects;
+  scan->distinct_objects = NULL;  /* ownership transferred */
 
   return result;
 }
@@ -2081,5 +2117,53 @@ void free_scan_result(Scan_result scan)
       safe_free(p->v);
     zap_plist(scan->magic_commands);
   }
+  if (scan->distinct_objects) {
+    Plist p;
+    for (p = scan->distinct_objects; p; p = p->next)
+      safe_free(p->v);
+    zap_plist(scan->distinct_objects);
+  }
   safe_free(scan);
+}
+
+/*************
+ *
+ *   tptp_distinct_object_axioms()
+ *
+ *************/
+
+/* DOCUMENTATION
+Generate pairwise inequality formulas for TPTP distinct objects.
+For each pair of names in the list, produce a Formula: name_i != name_j.
+Returns a Plist of Formula (caller owns).
+*/
+
+/* PUBLIC */
+Plist tptp_distinct_object_axioms(Plist distinct_names)
+{
+  Plist result = NULL;
+  Plist p, q;
+
+  if (distinct_names == NULL || distinct_names->next == NULL)
+    return NULL;  /* 0 or 1 distinct object: nothing to generate */
+
+  init_symbol_cache();
+
+  for (p = distinct_names; p; p = p->next) {
+    for (q = p->next; q; q = q->next) {
+      char *name_a = (char *) p->v;
+      char *name_b = (char *) q->v;
+      Term a = get_rigid_term(name_a, 0);
+      Term b = get_rigid_term(name_b, 0);
+      Term eq = get_rigid_term_dangerously(Eq_sn, 2);
+      Formula f_eq, f_neq;
+      ARG(eq, 0) = a;
+      ARG(eq, 1) = b;
+      f_eq = formula_get(0, ATOM_FORM);
+      f_eq->atom = eq;
+      f_neq = negate(f_eq);
+      result = plist_prepend(result, f_neq);
+    }
+  }
+  return result;
 }

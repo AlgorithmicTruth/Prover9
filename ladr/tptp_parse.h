@@ -38,6 +38,7 @@ struct tptp_input {
   Plist goals;          /* Plist of Formula (conjecture role) */
   Plist magic_commands; /* Plist of (char *) -- "% prover9:" option lines */
   BOOL  has_neg_conj;   /* TRUE if any cnf(negated_conjecture) was seen */
+  Plist distinct_objects; /* Plist of (char *) -- unique distinct object names */
 };
 
 /* Scan-pass data structures for SInE-before-parse optimization.
@@ -73,6 +74,7 @@ struct scan_result {
   int    n_symbols;      /* total unique symbol IDs assigned */
   Plist  magic_commands; /* collected "% prover9:" comments */
   BOOL   has_neg_conj;   /* any cnf(negated_conjecture) seen */
+  Plist  distinct_objects; /* Plist of (char *) -- unique distinct object names */
 };
 
 /* End of public definitions */
@@ -92,5 +94,7 @@ Scan_result scan_tptp_stream(FILE *fin, const char *source_name);
 Tptp_input parse_scanned_formulas(Scan_result scan, BOOL *keep);
 
 void free_scan_result(Scan_result scan);
+
+Plist tptp_distinct_object_axioms(Plist distinct_names);
 
 #endif  /* conditional compilation of whole file */
