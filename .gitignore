@@ -85,3 +85,4 @@ web-mace4/
 # Private verification scripts (not for public release)
 verification/agmv_submit.py
 verification/agmv_local.py
+verification/gdv_local.py
