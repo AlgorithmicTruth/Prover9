@@ -65,7 +65,7 @@ Literals formula_to_literals(Formula f)
   else if (f->type == OR_FORM) {
     int i;
     for (i = 0; i < f->arity; i++)
-      lits = append_literal(lits,formula_to_literal(f->kids[i]));
+      lits = append_literal(lits, formula_to_literals(f->kids[i]));
   }
   else {
     fatal_error("formula_to_literals, formula not ATOM, NOT, or OR");
