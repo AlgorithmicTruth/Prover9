@@ -41,6 +41,56 @@ extern struct mace_stats Mstats;
 
 /*************
  *
+ *   tptp_needs_quote() - check if a symbol name needs single-quoting
+ *   per TPTP syntax (must be a lower_word: starts with lowercase letter,
+ *   contains only [a-z A-Z 0-9 _]).
+ *
+ *************/
+
+static BOOL tptp_needs_quote(const char *name)
+{
+  const char *p;
+  if (name == NULL || name[0] == '\0')
+    return TRUE;
+  if (name[0] < 'a' || name[0] > 'z')
+    return TRUE;
+  for (p = name + 1; *p != '\0'; p++) {
+    if (!((*p >= 'a' && *p <= 'z') ||
+          (*p >= 'A' && *p <= 'Z') ||
+          (*p >= '0' && *p <= '9') ||
+          *p == '_'))
+      return TRUE;
+  }
+  return FALSE;
+}
+
+/*************
+ *
+ *   fprint_tptp_sym() - print a TPTP symbol, quoting if needed.
+ *   Internal single quotes are escaped as \'.
+ *
+ *************/
+
+static void fprint_tptp_sym(FILE *fp, const char *name)
+{
+  if (tptp_needs_quote(name)) {
+    const char *p;
+    fputc('\'', fp);
+    for (p = name; *p != '\0'; p++) {
+      if (*p == '\'')
+        fprintf(fp, "\\'");
+      else
+        fputc(*p, fp);
+    }
+    fputc('\'', fp);
+  }
+  else {
+    fprintf(fp, "%s", name);
+  }
+}
+
+/*************
+ *
  *   f[01234]_val()
  *
  *************/
@@ -285,7 +335,8 @@ void print_model_tptp(FILE *fp)
             fprintf(fp, " &\n");
           fprintf(fp, "    ");
           if (s->arity == 0) {
-            fprintf(fp, "%s = \"d%d\"", name, val);
+            fprint_tptp_sym(fp, name);
+            fprintf(fp, " = \"d%d\"", val);
           }
           else {
             /* Decode tuple index i into domain element arguments */
@@ -295,7 +346,8 @@ void print_model_tptp(FILE *fp)
               args[j] = rem % Domain_size;
               rem = rem / Domain_size;
             }
-            fprintf(fp, "%s(", name);
+            fprint_tptp_sym(fp, name);
+            fprintf(fp, "(");
             for (j = 0; j < s->arity; j++) {
               if (j > 0) fprintf(fp, ",");
               fprintf(fp, "\"d%d\"", args[j]);
@@ -328,7 +380,7 @@ void print_model_tptp(FILE *fp)
           if (val == 0)
             fprintf(fp, "~");
           if (s->arity == 0) {
-            fprintf(fp, "%s", name);
+            fprint_tptp_sym(fp, name);
           }
           else {
             int args[16];
@@ -337,7 +389,8 @@ void print_model_tptp(FILE *fp)
               args[j] = rem % Domain_size;
               rem = rem / Domain_size;
             }
-            fprintf(fp, "%s(", name);
+            fprint_tptp_sym(fp, name);
+            fprintf(fp, "(");
             for (j = 0; j < s->arity; j++) {
               if (j > 0) fprintf(fp, ",");
               fprintf(fp, "\"d%d\"", args[j]);

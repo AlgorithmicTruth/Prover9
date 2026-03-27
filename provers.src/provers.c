@@ -392,6 +392,20 @@ struct arg_options get_command_line_args(int argc, char **argv)
         argv[i] = "-_";
       }
     }
+    else if (strcmp(argv[i], "-casc") == 0) {
+      /* CASC competition mode: -comp T -cores 8 */
+      opts.cores = 8;
+      has_cores = TRUE;
+      opts.tptp_mode = TRUE;
+      opts.fast_pred_elim = TRUE;
+      if (i + 1 < argc) {
+        opts.max_seconds = atoi(argv[i + 1]);
+        argv[i] = "-t";
+      }
+      else {
+        argv[i] = "-_";
+      }
+    }
     else if (argv[i][0] != '-') {
       /* Positional arg: check for .p or .tptp extension */
       int len = strlen(argv[i]);
