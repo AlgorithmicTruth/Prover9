@@ -242,6 +242,10 @@ Ilist skolem_symbols(void);
 
 BOOL is_skolem(int symnum);
 
+void set_quoted(int symnum);
+
+BOOL is_quoted(int symnum);
+
 void skolem_reset(void);
 
 void decommission_skolem_symbols(void);

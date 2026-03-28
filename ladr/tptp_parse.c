@@ -690,6 +690,7 @@ static Term parse_term(Lexer *lex)
   if (t->type == TOK_IDENT || t->type == TOK_QUOTED || t->type == TOK_DISTINCT) {
     char name[MAX_TOKEN_LEN];
     BOOL is_distinct = (t->type == TOK_DISTINCT);
+    BOOL is_quoted_tok = (t->type == TOK_QUOTED || t->type == TOK_DISTINCT);
     strcpy(name, t->text);
     consume(lex);
 
@@ -719,6 +720,7 @@ static Term parse_term(Lexer *lex)
       expect(lex, TOK_RPAREN, "')'");
 
       Term term = get_rigid_term(name, arity);
+      if (is_quoted_tok) set_quoted(SYMNUM(term));
       int i;
       for (i = 0; i < arity; i++)
         ARG(term, i) = args[i];
@@ -727,7 +729,9 @@ static Term parse_term(Lexer *lex)
     }
     else {
       /* constant */
-      return get_rigid_term(name, 0);
+      Term term = get_rigid_term(name, 0);
+      if (is_quoted_tok) set_quoted(SYMNUM(term));
+      return term;
     }
   }
 
@@ -1846,18 +1850,23 @@ static void scan_tptp_input(Lexer *lex,
           if (t->type == TOK_DISTINCT)
             *distinct_objects = add_distinct_name(*distinct_objects, t->text);
           /* Reconstruct single-quoted form for re-lexing.
-             Escape any ' in the text as '' (TPTP convention). */
+             Escape ' as '' (TPTP convention), and \ and " with
+             backslash (these have special meaning in the lexer). */
           const char *s;
-          int nquotes = 0;
+          int extra = 0;
           int qlen = strlen(t->text);
           char *qbuf, *d;
-          for (s = t->text; *s; s++)
-            if (*s == '\'') nquotes++;
-          qbuf = safe_malloc(qlen + nquotes + 3);
+          for (s = t->text; *s; s++) {
+            if (*s == '\'') extra++;
+            else if (*s == '\\' || *s == '"') extra++;
+          }
+          qbuf = safe_malloc(qlen + extra + 3);
           d = qbuf;
           *d++ = '\'';
           for (s = t->text; *s; s++) {
-            if (*s == '\'') *d++ = '\'';  /* double it */
+            if (*s == '\'') *d++ = '\'';      /* double it */
+            else if (*s == '\\') *d++ = '\\'; /* backslash-escape */
+            else if (*s == '"') *d++ = '\\';  /* backslash-escape */
             *d++ = *s;
           }
           *d++ = '\'';

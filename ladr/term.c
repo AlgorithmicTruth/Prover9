@@ -1082,10 +1082,12 @@ int occurrences(Term t, Term target)
 static
 Term trm_set_vars_recurse(Term t, char **varnames, int max_vars)
 {
-  /* Handle root being a constant that becomes a variable */
+  /* Handle root being a constant that becomes a variable.
+     Skip symbols marked as quoted (from TPTP quoted atoms or
+     distinct objects — these are constants regardless of case). */
   if (CONSTANT(t)) {
     char *name = sn_to_str(SYMNUM(t));
-    if (variable_name(name)) {
+    if (variable_name(name) && !is_quoted(SYMNUM(t))) {
       int i = 0;
       while (i < max_vars && varnames[i] != NULL && varnames[i] != name)
 	i++;
@@ -1115,7 +1117,7 @@ Term trm_set_vars_recurse(Term t, char **varnames, int max_vars)
       Term child = ARG(s,c);
       if (CONSTANT(child)) {
         char *name = sn_to_str(SYMNUM(child));
-        if (variable_name(name)) {
+        if (variable_name(name) && !is_quoted(SYMNUM(child))) {
           int i = 0;
           while (i < max_vars && varnames[i] != NULL && varnames[i] != name)
             i++;
@@ -1617,10 +1619,11 @@ given term is itself becomes a variable.
 /* PUBLIC */
 Term set_vars_recurse(Term t, char *vnames[], int max_vars)
 {
-  /* Handle root constant becoming a variable */
+  /* Handle root constant becoming a variable.
+     Skip symbols marked as quoted (TPTP quoted/distinct objects). */
   if (CONSTANT(t)) {
     char *name = sn_to_str(SYMNUM(t));
-    if (variable_name(name)) {
+    if (variable_name(name) && !is_quoted(SYMNUM(t))) {
       int i = 0;
       while (i < max_vars && vnames[i] != NULL && vnames[i] != name)
 	i++;
@@ -1650,7 +1653,7 @@ Term set_vars_recurse(Term t, char *vnames[], int max_vars)
       Term child = ARG(s,c);
       if (CONSTANT(child)) {
         char *name = sn_to_str(SYMNUM(child));
-        if (variable_name(name)) {
+        if (variable_name(name) && !is_quoted(SYMNUM(child))) {
           int i = 0;
           while (i < max_vars && vnames[i] != NULL && vnames[i] != name)
             i++;

@@ -36,6 +36,7 @@ struct symbol {
   int         kb_weight;        /* for Knuth-Bendix ordering */
   Lrpo_status lrpo_status;      /* for LRPO, LPO, RPO */
   BOOL        skolem;
+  BOOL        quoted;           /* from quoted/distinct token — never a variable */
   BOOL        unfold;
   BOOL        auxiliary;        /* not part of theory, e.g., in hints only */
 
@@ -444,6 +445,7 @@ Symbol get_symbol(void)
   p->kb_weight = 1;
   p->type = UNSPECIFIED_SYMBOL;
   p->skolem = FALSE;
+  p->quoted = FALSE;
   p->unfold = FALSE;
   p->auxiliary = FALSE;
   return(p);
@@ -1961,6 +1963,30 @@ BOOL is_skolem(int symnum)
   Symbol p = lookup_by_id(symnum);
   return p->skolem;
 }  /* is_skolem */
+
+/*************
+ *
+ *   set_quoted() / is_quoted()
+ *
+ *   Mark a symbol as originating from a quoted/distinct token.
+ *   Such symbols are never variables, even if their name starts
+ *   with uppercase.
+ *
+ *************/
+
+/* PUBLIC */
+void set_quoted(int symnum)
+{
+  Symbol p = lookup_by_id(symnum);
+  p->quoted = TRUE;
+}  /* set_quoted */
+
+/* PUBLIC */
+BOOL is_quoted(int symnum)
+{
+  Symbol p = lookup_by_id(symnum);
+  return p->quoted;
+}  /* is_quoted */
 
 /*************
  *
