@@ -135,15 +135,7 @@ All programs accept "help" as an argument for a synopsis.
 Documentation
 -------------
 
-User guides (in this directory):
-
-  Command-Line-Reference.txt Command-line options for all programs.
-  Prover9-TPTP-HOWTO.txt     Prover9 TPTP/TSTP mode.
-  Mace4-TPTP-HOWTO.txt       Mace4 TPTP mode.
-  SinE-Premise-Selection.txt SinE premise selection for large inputs.
-  Strategy-Scheduling.txt    Parallel strategy scheduling.
-  Checkpoint-Resume.txt      Prover9 checkpoint and resume.
-  Proof-Verification.txt     Ivy and GDV proof verification.
+Online manual:  https://prover9.org/manual-2026/
 
 Change logs:
 

@@ -68,7 +68,7 @@ sets to relevant subsets before the search begins.
 ML Strategy Portfolio (3B)
 ---------------------------
 
-Machine-learned strategy portfolio with 139 trained strategies (138
+Machine-learned strategy portfolio with 96 trained strategies (95
 specialists + auto_default). Strategies are selected by a decision
 tree classifier based on syntactic features of the input problem.
 
