@@ -100,6 +100,10 @@ struct child_hints {
   int pad[25];                   /* pad to 128 bytes (32 ints x 4 = 128) */
 };
 
+#ifndef NO_OPEN_MEMSTREAM
+/* The sliding-window scheduler and its helpers require fork/mmap/signals
+   and open_memstream.  Compiled out on older macOS (NO_OPEN_MEMSTREAM). */
+
 /* File-scope pointer to this child's mmap slot (set in spawn_child) */
 static volatile struct child_hints *my_hints = NULL;
 
@@ -321,6 +325,8 @@ int pick_best_suspended(struct suspended_child *pool, int n,
   return best;
 }  /* pick_best_suspended */
 
+#endif /* !NO_OPEN_MEMSTREAM  (cores-only helpers above) */
+
 /*************
  *
  *   apply_strategy()
@@ -458,6 +464,8 @@ const short *ml_rank(Scan_result scan, const char *filename, int *out_len)
    strategy_schedule_search, strategy_schedule_from_scan, sweep_search,
    sweep_from_scan -- superseded by -cores N sliding-window scheduler] */
 
+#ifndef NO_OPEN_MEMSTREAM
+/* Cores-only: sliding-window scheduler and helpers (through cores_from_scan) */
 
 /*************
  *
@@ -1312,6 +1320,7 @@ void cores_from_scan(Prover_scan_result psr, const short *ml_ranking,
   /* Does not return */
 }  /* cores_from_scan */
 
+#endif /* !NO_OPEN_MEMSTREAM */
 #endif /* !__EMSCRIPTEN__ */
 
 /*************

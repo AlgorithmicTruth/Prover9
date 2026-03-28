@@ -108,7 +108,7 @@ lib libmace4:
 ladr:
 	cd ../ladr && $(MAKE) libladr.a
 
-mace4: libmace4.a mace4.o $(OBJECTS)
+mace4: libmace4.a mace4.o $(OBJECTS) ../ladr/libladr.a
 	$(CC) $(CFLAGS) $(LDFLAGS) -o mace4 mace4.o libmace4.a ../ladr/libladr.a
 
 tags:
