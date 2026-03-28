@@ -21,6 +21,15 @@
 extern Symbol_data Symbols;
 extern int Domain_size;
 
+/* Integer-named constants (e.g. TPTP '0', '1') that Mace4 treats as
+   fixed domain elements.  We record their names and symbol numbers so
+   print_model_tptp can emit explicit mappings like '0' = "d0". */
+
+#define MAX_DOMAIN_CONSTANTS 256
+int Domain_constant_sn[MAX_DOMAIN_CONSTANTS];
+int Domain_constant_val[MAX_DOMAIN_CONSTANTS];
+int Num_domain_constants = 0;
+
 extern struct cell *Cells;
 
 /*************
@@ -123,11 +132,19 @@ int collect_mace4_syms(Plist clauses, BOOL arithmetic)
 
   lex_order(fsyms, rsyms, NULL, NULL, lex_compare_arity_0123);
 
+  Num_domain_constants = 0;
+
   for (p = fsyms; p; p = p->next) {
     int sn = p->i;
     int dom = natural_string(sn_to_str(sn));
-    if (dom >= 0)
+    if (dom >= 0) {
       max_domain = MAX(dom, max_domain);
+      if (Num_domain_constants < MAX_DOMAIN_CONSTANTS) {
+        Domain_constant_sn[Num_domain_constants] = sn;
+        Domain_constant_val[Num_domain_constants] = dom;
+        Num_domain_constants++;
+      }
+    }
     else if (arithmetic && arith_op_sn(sn))
       ;  /* don't insert */
     else

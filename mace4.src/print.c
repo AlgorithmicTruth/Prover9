@@ -28,6 +28,11 @@ extern struct cell *Cells;
 extern Term *Domain;
 extern int Domain_size;
 
+/* From syms.c: integer-named constants treated as domain elements. */
+extern int Domain_constant_sn[];
+extern int Domain_constant_val[];
+extern int Num_domain_constants;
+
 extern int Negation_flag;
 extern int Eq_sn;
 
@@ -320,9 +325,23 @@ void print_model_tptp(FILE *fp)
   fprintf(fp, " )).\n\n");
 
   /* Functions (fi_functors) */
-  if (has_functions) {
+  if (has_functions || Num_domain_constants > 0) {
     fprintf(fp, "fof(interp_functions, interpretation-mappings, (\n");
     conjunct_count = 0;
+
+    /* Integer-named constants (e.g. TPTP '0', '1') are domain elements.
+       Output their fixed mappings so the model is self-contained. */
+    for (i = 0; i < Num_domain_constants; i++) {
+      char *name = sn_to_str(Domain_constant_sn[i]);
+      int val = Domain_constant_val[i];
+      if (conjunct_count > 0)
+        fprintf(fp, " &\n");
+      fprintf(fp, "    ");
+      fprint_tptp_sym(fp, name);
+      fprintf(fp, " = \"d%d\"", val);
+      conjunct_count++;
+    }
+
     for (s = Symbols; s != NULL; s = s->next) {
       if (s->attribute != EQUALITY_SYMBOL && s->type == FUNCTION) {
         int n = int_power(Domain_size, s->arity);
