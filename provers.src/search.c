@@ -70,6 +70,7 @@ static int  Resume_high_selector_count = 0;
 /* Saved hint_match data for restoring matching_hint pointers */
 static struct clause_meta *Resume_meta = NULL;
 static int Resume_meta_count = 0;
+static BOOL Resuming = FALSE;  /* TRUE during resume_index_clauses */
 
 /* Periodic automatic checkpoint state */
 static time_t Last_auto_ckpt_time = 0;       // wall-clock of last auto checkpoint
@@ -5329,10 +5330,12 @@ void resume_index_clauses(void)
                  parm(Opt->eval_limit),
                  parm(Opt->eval_var_limit));
 
-  /* Index usable clauses (orient before marking, matching cl_process order) */
+  /* Index usable clauses.  On resume, clauses were saved in oriented
+     form with normalized variables -- skip orient_equalities to avoid
+     secondary ordering decisions that may differ from the original run. */
   for (p = Glob.usable->first; p != NULL; p = p->next) {
     Topform c = p->c;
-    orient_equalities(c, TRUE);
+    orient_equalities(c, !Resuming);  /* mark only on resume (no flips) */
     mark_maximal_literals(c->literals);
     mark_selected_literals(c->literals, stringparm1(Opt->literal_selection));
     index_literals(c, INSERT, Clocks.index, FALSE);
@@ -5344,7 +5347,7 @@ void resume_index_clauses(void)
   for (p = Glob.demods->first; p != NULL; p = p->next) {
     Topform c = p->c;
     if (pos_eq_unit(c->literals)) {
-      orient_equalities(c, TRUE);
+      orient_equalities(c, !Resuming);
       {
         int type = demodulator_type(c,
                      parm(Opt->lex_dep_demod_lim),
@@ -5358,14 +5361,16 @@ void resume_index_clauses(void)
   if (flag(Opt->eval_rewrite))
     init_dollar_eval(Glob.demods);
 
-  /* Index hints */
+  /* Index hints.  On resume, skip orient/renumber -- hints were saved
+     in their final form. */
   {
     int hint_id_number = 1;
     for (p = Glob.hints->first; p != NULL; p = p->next) {
       Topform h = p->c;
       h->id = hint_id_number++;
-      orient_equalities(h, TRUE);
-      renumber_variables(h, MAX_VARS);
+      orient_equalities(h, !Resuming);  /* mark only on resume */
+      if (!Resuming)
+        renumber_variables(h, MAX_VARS);
       index_hint(h);
     }
   }
@@ -5409,7 +5414,7 @@ void resume_index_clauses(void)
      it when moving clauses to SOS/usable. */
   for (p = Glob.limbo->first; p != NULL; p = p->next) {
     Topform c = p->c;
-    orient_equalities(c, TRUE);
+    orient_equalities(c, !Resuming);  /* mark only on resume */
     mark_maximal_literals(c->literals);
     mark_selected_literals(c->literals, stringparm1(Opt->literal_selection));
     index_literals(c, INSERT, Clocks.index, FALSE);
@@ -5424,7 +5429,7 @@ void resume_index_clauses(void)
   }
   for (p = temp_sos->first; p != NULL; p = p->next) {
     Topform c = p->c;
-    orient_equalities(c, TRUE);
+    orient_equalities(c, !Resuming);  /* mark only on resume */
     mark_maximal_literals(c->literals);
     mark_selected_literals(c->literals, stringparm1(Opt->literal_selection));
     index_literals(c, INSERT, Clocks.index, FALSE);
@@ -5594,7 +5599,9 @@ Prover_results search(Prover_input p)
       resume_load_precedence(p->resume_dir);    // restore symbol ordering from checkpoint
       basic_clause_properties(Glob.sos, Glob.usable);
       init_search();                             // full init with clauses present
-      resume_index_clauses();                    // orient, index, insert into SOS
+      Resuming = TRUE;
+      resume_index_clauses();                    // index (skip orient -- already done)
+      Resuming = FALSE;
       /* Restore selector cycle positions for deterministic given selection */
       if (Resume_low_selector_name[0] != '\0')
         set_low_selector_state(Resume_low_selector_name,
@@ -5695,6 +5702,12 @@ Prover_results search(Prover_input p)
        Prevents indefinite hangs inside hyper/UR/binary resolution. */
     if (parm(Opt->max_seconds) >= 0)
       set_clash_deadline(time(NULL) + (time_t)parm(Opt->max_seconds));
+
+    // On resume, process limbo clauses first.  The checkpoint was written
+    // after make_inferences() but before limbo_process().  The original
+    // run's next action was limbo_process(); we must do the same.
+    if (p->resume_dir && !clist_empty(Glob.limbo))
+      limbo_process(FALSE);
 
     // ****************************** Main Loop ******************************
 
