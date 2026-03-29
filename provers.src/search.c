@@ -3915,8 +3915,11 @@ void restore_fpa_ids(const char *dir)
     while (fscanf(fp, " %llu", &clause_id) == 1) {
       Topform c = find_clause_by_id(clause_id);
       Literals lit;
-      if (c == NULL)
+      if (c == NULL) {
+        fprintf(stderr, "restore_fpa_ids: clause %llu not found in ID table\n",
+                clause_id);
         fatal_error("restore_fpa_ids: clause not found");
+      }
       for (lit = c->literals; lit; lit = lit->next)
         read_term_fpa_ids(fp, lit->atom);
     }
@@ -5286,6 +5289,8 @@ Prover_results search(Prover_input p)
           snprintf(auto_dir, sizeof(auto_dir),
                    "prover9_%d_ckpt_%llu", getpid(), Stats.given);
           record_auto_checkpoint(auto_dir);
+          if (flag(Opt->checkpoint_exit))
+            done_with_search(CHECKPOINT_EXIT);
         }
       }
 
