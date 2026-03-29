@@ -64,6 +64,12 @@ static double Wasm_deadline_ms = 0;
 /* Saved selector state from checkpoint (used during resume) */
 static char Resume_low_selector_name[32] = "";
 static int  Resume_low_selector_count = 0;
+static char Resume_high_selector_name[32] = "";
+static int  Resume_high_selector_count = 0;
+
+/* Saved hint_match data for restoring matching_hint pointers */
+static struct clause_meta *Resume_meta = NULL;
+static int Resume_meta_count = 0;
 
 /* Periodic automatic checkpoint state */
 static time_t Last_auto_ckpt_time = 0;       // wall-clock of last auto checkpoint
@@ -3771,7 +3777,8 @@ void basic_clause_properties(Clist sos, Clist usable)
 
 static
 int write_clist_bare(FILE *clause_fp, FILE *data_fp,
-                     Clist lst, const char *list_name)
+                     Clist lst, const char *list_name,
+                     Plist *seen_tab, int seen_tab_size)
 {
   Clist_pos p;
   int pos = 0;
@@ -3779,9 +3786,27 @@ int write_clist_bare(FILE *clause_fp, FILE *data_fp,
     Topform c = p->c;
     if (c->id == 0)
       continue;  /* skip clauses without IDs (e.g. unprocessed disabled) */
-    fwrite_clause(clause_fp, c, CL_FORM_BARE);
-    fprintf(data_fp, "%s %d %llu %.6f %d\n", list_name, pos, c->id, c->weight,
-            (int)c->initial);
+    /* Write-side dedup: if clause was already written to another list,
+       mark as shared in clause_data and skip the clause text. */
+    {
+      int is_shared = (seen_tab != NULL && clause_plist_member(
+              seen_tab[c->id % seen_tab_size], c, TRUE));
+      if (!is_shared) {
+        if (seen_tab != NULL)
+          seen_tab[c->id % seen_tab_size] =
+              insert_clause_into_plist(
+                  seen_tab[c->id % seen_tab_size], c, TRUE);
+        fwrite_clause(clause_fp, c, CL_FORM_BARE);
+      }
+      fprintf(data_fp, "%s %d %llu %.17g %d", list_name, pos, c->id,
+              c->weight, (int)c->initial);
+      if (is_shared)
+        fprintf(data_fp, " shared");
+      /* Save matched hint position (1-based) for selector restoration */
+      if (c->matching_hint != NULL)
+        fprintf(data_fp, " hint_match %d", (int)c->matching_hint->id);
+      fprintf(data_fp, "\n");
+    }
     pos++;
   }
   fprintf(clause_fp, "end_of_list.\n");
@@ -3812,8 +3837,11 @@ int write_term_fpa_ids(FILE *fp, Term t)
  *   write_fpa_ids()
  *
  *   Write FPA_IDs for all terms in the given clause lists to a file.
- *   Format: first line is "fpa_id_count <N>", then one line per clause:
- *   "<clause_id> <n_ids> <id1> <id2> ... <idN>"
+ *   Section-based format keyed by list position (not clause ID):
+ *     fpa_id_count <N>
+ *     LIST <name> <count>
+ *     <term_count> <id1> <id2> ... <idN>
+ *     ...
  *
  *************/
 
@@ -3823,8 +3851,6 @@ void write_fpa_ids(const char *dir)
   char path[600];
   FILE *fp;
   Clist_pos p;
-  Clist lists[5];
-  int nlist = 0, i;
 
   snprintf(path, sizeof(path), "%s/fpa_ids.txt", dir);
   fp = fopen(path, "w");
@@ -3836,21 +3862,25 @@ void write_fpa_ids(const char *dir)
   fprintf(fp, "fpa_id_count %u\n", get_fpa_id_count());
 
   /* Save FPA_IDs for all FPA-indexed clause lists:
-     usable, sos, hints, limbo (demods use DISCRIM, not FPA) */
-  lists[nlist++] = Glob.usable;
-  lists[nlist++] = Glob.sos;
-  lists[nlist++] = Glob.hints;
-  lists[nlist++] = Glob.limbo;
-
-  for (i = 0; i < nlist; i++) {
-    for (p = lists[i]->first; p != NULL; p = p->next) {
-      Topform c = p->c;
-      Literals lit;
-      /* Clause ID followed by FPA_IDs; reader walks same DFS structure. */
-      fprintf(fp, "%llu", c->id);
-      for (lit = c->literals; lit; lit = lit->next)
-        write_term_fpa_ids(fp, lit->atom);
-      fprintf(fp, "\n");
+     usable, sos, hints, limbo (demods use DISCRIM, not FPA).
+     Section-based: reader iterates by list position, not clause ID. */
+  {
+    const char *names[] = {"usable", "sos", "hints", "limbo"};
+    Clist lists[] = {Glob.usable, Glob.sos, Glob.hints, Glob.limbo};
+    int nlist = 4, i;
+    for (i = 0; i < nlist; i++) {
+      fprintf(fp, "LIST %s %d\n", names[i], lists[i]->length);
+      for (p = lists[i]->first; p != NULL; p = p->next) {
+        Topform c = p->c;
+        Literals lit;
+        int term_count = 0;
+        for (lit = c->literals; lit; lit = lit->next)
+          term_count += symbol_count(lit->atom);
+        fprintf(fp, "%d", term_count);
+        for (lit = c->literals; lit; lit = lit->next)
+          write_term_fpa_ids(fp, lit->atom);
+        fprintf(fp, "\n");
+      }
     }
   }
 
@@ -3884,6 +3914,7 @@ int read_term_fpa_ids(FILE *fp, Term t)
  *   restore_fpa_ids()
  *
  *   Read FPA_IDs from checkpoint directory and assign them to terms.
+ *   Section-based format: iterates by list position, not clause ID.
  *   Must be called after resume_load_clauses() but before resume_index_clauses().
  *
  *************/
@@ -3891,15 +3922,16 @@ int read_term_fpa_ids(FILE *fp, Term t)
 static
 void restore_fpa_ids(const char *dir)
 {
-  char path[600], buf[64];
+  char path[600], buf[64], list_name[32];
   FILE *fp;
   unsigned saved_count;
+  int section_count, restored = 0, skipped = 0;
 
   snprintf(path, sizeof(path), "%s/fpa_ids.txt", dir);
   fp = fopen(path, "r");
   if (!fp) {
-    fprintf(stderr, "NOTE: no fpa_ids.txt in checkpoint (old format); "
-            "FPA ordering may differ slightly.\n");
+    fprintf(stderr, "NOTE: no fpa_ids.txt in checkpoint; "
+            "FPA ordering may differ.\n");
     return;
   }
 
@@ -3909,27 +3941,75 @@ void restore_fpa_ids(const char *dir)
     fatal_error("restore_fpa_ids: bad header in fpa_ids.txt");
   set_fpa_id_count(saved_count);
 
-  /* Read per-clause FPA_IDs */
-  {
-    unsigned long long clause_id;
-    while (fscanf(fp, " %llu", &clause_id) == 1) {
-      Topform c = find_clause_by_id(clause_id);
-      Literals lit;
-      if (c == NULL) {
-        fprintf(stderr, "WARNING: restore_fpa_ids: clause %llu not found, "
-                "skipping FPA ID restoration.\n", clause_id);
-        fclose(fp);
-        return;
+  /* Read section-based FPA_IDs (new format: LIST <name> <count>) */
+  while (fscanf(fp, " %63s", buf) == 1) {
+    Clist lst;
+    Clist_pos cp;
+    int i;
+
+    if (strcmp(buf, "LIST") != 0)
+      break;  /* not a section header -- old format or corruption */
+    if (fscanf(fp, " %31s %d", list_name, &section_count) != 2)
+      break;
+
+    /* Match list name to Glob list */
+    lst = NULL;
+    if (strcmp(list_name, "usable") == 0) lst = Glob.usable;
+    else if (strcmp(list_name, "sos") == 0) lst = Glob.sos;
+    else if (strcmp(list_name, "hints") == 0) lst = Glob.hints;
+    else if (strcmp(list_name, "limbo") == 0) lst = Glob.limbo;
+
+    if (lst == NULL || lst->length != section_count) {
+      /* List mismatch -- skip this section's data */
+      for (i = 0; i < section_count; i++) {
+        int term_count, j;
+        unsigned dummy;
+        if (fscanf(fp, " %d", &term_count) != 1) break;
+        for (j = 0; j < term_count; j++)
+          fscanf(fp, " %u", &dummy);
       }
+      skipped += section_count;
+      continue;
+    }
+
+    /* Walk list by position, read FPA IDs for each clause */
+    cp = lst->first;
+    for (i = 0; i < section_count && cp != NULL; i++, cp = cp->next) {
+      Topform c = cp->c;
+      Literals lit;
+      int term_count, actual_count;
+
+      if (fscanf(fp, " %d", &term_count) != 1) break;
+
+      /* Verify DFS node count matches */
+      actual_count = 0;
+      for (lit = c->literals; lit; lit = lit->next)
+        actual_count += symbol_count(lit->atom);
+
+      if (actual_count != term_count) {
+        /* Term structure mismatch -- skip this clause's FPA IDs */
+        int j;
+        unsigned dummy;
+        for (j = 0; j < term_count; j++)
+          fscanf(fp, " %u", &dummy);
+        skipped++;
+        continue;
+      }
+
       for (lit = c->literals; lit; lit = lit->next)
         read_term_fpa_ids(fp, lit->atom);
+      restored++;
     }
   }
 
   fclose(fp);
 
-  printf("%% Restored FPA_IDs from checkpoint (fpa_id_count=%u).\n",
-         saved_count);
+  if (restored > 0)
+    printf("%% Restored FPA_IDs for %d clauses (fpa_id_count=%u).\n",
+           restored, saved_count);
+  if (skipped > 0)
+    printf("%% WARNING: skipped FPA_IDs for %d clauses (list mismatch).\n",
+           skipped);
   fflush(stdout);
 }  /* restore_fpa_ids */
 
@@ -4334,6 +4414,7 @@ void write_checkpoint(void)
     fp = fopen(path, "w");
     if (!fp) { fprintf(stderr, "ERROR: cannot write %s\n", path); return; }
 
+    fprintf(fp, "checkpoint_format 2\n");
     fprintf(fp, "version %s\n", PROGRAM_VERSION);
     fprintf(fp, "date %s\n", PROGRAM_DATE);
     fprintf(fp, "max_clause_id %llu\n", clause_ids_assigned());
@@ -4368,6 +4449,9 @@ void write_checkpoint(void)
       get_low_selector_state(&sel_name, &sel_count);
       fprintf(fp, "low_selector %s\n", sel_name);
       fprintf(fp, "low_selector_count %d\n", sel_count);
+      get_high_selector_state(&sel_name, &sel_count);
+      fprintf(fp, "high_selector %s\n", sel_name);
+      fprintf(fp, "high_selector_count %d\n", sel_count);
     }
     fclose(fp);
   }
@@ -4386,11 +4470,20 @@ void write_checkpoint(void)
       return;
     }
 
+    /* Write-side dedup: track clause IDs already written to any .clauses
+       file.  When demods writes a clause already in usable/sos, it marks
+       the clause_data entry as "shared" and skips the clause text. */
+#define SEEN_TAB_SIZE 50000
+    {
+      Plist seen_tab[SEEN_TAB_SIZE];
+      memset(seen_tab, 0, sizeof(seen_tab));
+
     /* SOS */
     snprintf(cpath, sizeof(cpath), "%s/sos.clauses", tmpdir);
     fp = fopen(cpath, "w");
     if (fp) {
-      total_clauses += write_clist_bare(fp, data_fp, Glob.sos, "sos");
+      total_clauses += write_clist_bare(fp, data_fp, Glob.sos, "sos",
+                                        seen_tab, SEEN_TAB_SIZE);
       fclose(fp);
     }
 
@@ -4398,24 +4491,28 @@ void write_checkpoint(void)
     snprintf(cpath, sizeof(cpath), "%s/usable.clauses", tmpdir);
     fp = fopen(cpath, "w");
     if (fp) {
-      total_clauses += write_clist_bare(fp, data_fp, Glob.usable, "usable");
+      total_clauses += write_clist_bare(fp, data_fp, Glob.usable, "usable",
+                                        seen_tab, SEEN_TAB_SIZE);
       fclose(fp);
     }
 
-    /* Demodulators */
+    /* Demodulators — uses seen_tab to detect shared clauses */
     snprintf(cpath, sizeof(cpath), "%s/demods.clauses", tmpdir);
     fp = fopen(cpath, "w");
     if (fp) {
-      total_clauses += write_clist_bare(fp, data_fp, Glob.demods, "demodulators");
+      total_clauses += write_clist_bare(fp, data_fp, Glob.demods,
+                                        "demodulators",
+                                        seen_tab, SEEN_TAB_SIZE);
       fclose(fp);
     }
 
-    /* Hints */
+    /* Hints — no dedup needed (separate ID namespace) */
     if (Glob.hints->length > 0) {
       snprintf(cpath, sizeof(cpath), "%s/hints.clauses", tmpdir);
       fp = fopen(cpath, "w");
       if (fp) {
-        total_clauses += write_clist_bare(fp, data_fp, Glob.hints, "hints");
+        total_clauses += write_clist_bare(fp, data_fp, Glob.hints, "hints",
+                                          NULL, 0);
         fclose(fp);
       }
     }
@@ -4425,7 +4522,8 @@ void write_checkpoint(void)
       snprintf(cpath, sizeof(cpath), "%s/limbo.clauses", tmpdir);
       fp = fopen(cpath, "w");
       if (fp) {
-        total_clauses += write_clist_bare(fp, data_fp, Glob.limbo, "limbo");
+        total_clauses += write_clist_bare(fp, data_fp, Glob.limbo, "limbo",
+                                          NULL, 0);
         fclose(fp);
       }
     }
@@ -4435,10 +4533,13 @@ void write_checkpoint(void)
       snprintf(cpath, sizeof(cpath), "%s/disabled.clauses", tmpdir);
       fp = fopen(cpath, "w");
       if (fp) {
-        total_clauses += write_clist_bare(fp, data_fp, Glob.disabled, "disabled");
+        total_clauses += write_clist_bare(fp, data_fp, Glob.disabled,
+                                          "disabled", NULL, 0);
         fclose(fp);
       }
     }
+
+    }  /* end seen_tab scope */
 
     fclose(data_fp);
 
@@ -4566,12 +4667,14 @@ struct clause_meta {
   unsigned long long id;
   double weight;
   int initial;    /* c->initial flag (0 or 1) */
+  int shared;     /* 1 if clause is shared with another list (dedup) */
+  int hint_match; /* matched hint ID (1-based), 0 if none */
 };
 
 static
 int load_clause_data(const char *dir, struct clause_meta **out)
 {
-  char path[600];
+  char path[600], line[512];
   FILE *fp;
   int capacity = 4096, count = 0;
   struct clause_meta *arr;
@@ -4583,14 +4686,24 @@ int load_clause_data(const char *dir, struct clause_meta **out)
 
   arr = safe_malloc(capacity * sizeof(struct clause_meta));
 
-  while (fscanf(fp, "%31s %d %llu %lf %d",
-                arr[count].list_name, &arr[count].position,
-                &arr[count].id, &arr[count].weight,
-                &arr[count].initial) == 5) {
-    count++;
-    if (count >= capacity) {
-      capacity *= 2;
-      arr = safe_realloc(arr, capacity * sizeof(struct clause_meta));
+  while (fgets(line, sizeof(line), fp)) {
+    struct clause_meta *m = &arr[count];
+    char *p;
+    m->shared = 0;
+    m->hint_match = 0;
+    if (sscanf(line, "%31s %d %llu %lf %d",
+               m->list_name, &m->position,
+               &m->id, &m->weight, &m->initial) == 5) {
+      if (strstr(line, "shared") != NULL)
+        m->shared = 1;
+      p = strstr(line, "hint_match");
+      if (p != NULL)
+        sscanf(p, "hint_match %d", &m->hint_match);
+      count++;
+      if (count >= capacity) {
+        capacity *= 2;
+        arr = safe_realloc(arr, capacity * sizeof(struct clause_meta));
+      }
     }
   }
   fclose(fp);
@@ -4611,7 +4724,7 @@ static
 Clist load_clauses_from_file(const char *dir, const char *filename,
                              const char *list_name,
                              struct clause_meta *meta, int meta_count,
-                             int *meta_offset)
+                             int *meta_offset, BOOL skip_register)
 {
   char path[600];
   FILE *fp;
@@ -4621,7 +4734,7 @@ Clist load_clauses_from_file(const char *dir, const char *filename,
   snprintf(path, sizeof(path), "%s/%s", dir, filename);
   fp = fopen(path, "r");
   if (!fp)
-    return NULL;  /* file doesn't exist — ok for optional lists */
+    return NULL;  /* file doesn't exist -- ok for optional lists */
 
   lst = read_clause_clist(fp, stderr, (char *)list_name, FALSE);
   fclose(fp);
@@ -4638,7 +4751,8 @@ Clist load_clauses_from_file(const char *dir, const char *filename,
         c->id = meta[i].id;
         c->weight = meta[i].weight;
         c->initial = meta[i].initial;
-        register_clause_with_id(c);
+        if (!skip_register)
+          register_clause_with_id(c);
       }
       else {
         /* Fallback: search metadata for this list+pos */
@@ -4649,14 +4763,16 @@ Clist load_clauses_from_file(const char *dir, const char *filename,
             c->id = meta[j].id;
             c->weight = meta[j].weight;
             c->initial = meta[j].initial;
-            register_clause_with_id(c);
+            if (!skip_register)
+              register_clause_with_id(c);
             break;
           }
         }
         if (c->id == 0) {
           fprintf(stderr, "WARNING: no metadata for %s clause %d\n",
                   list_name, pos);
-          assign_clause_id(c);
+          if (!skip_register)
+            assign_clause_id(c);
         }
       }
       pos++;
@@ -4763,7 +4879,17 @@ void resume_load_clauses(const char *dir)
   if (!fp)
     fatal_error("resume: cannot open metadata.txt");
 
-  /* Read max_clause_id — we need to seek to the right key */
+  /* Check checkpoint format version */
+  {
+    unsigned long long fmt = read_metadata_ull(fp, "checkpoint_format");
+    if (fmt != 0 && fmt != 2)
+      fatal_error("resume: unsupported checkpoint format");
+    if (fmt == 0)
+      fprintf(stderr, "NOTE: old checkpoint format (pre-3R). "
+              "Search may not be fully deterministic.\n");
+  }
+
+  /* Read max_clause_id */
   rewind(fp);
   max_clause_id = read_metadata_ull(fp, "max_clause_id");
 
@@ -4799,26 +4925,40 @@ void resume_load_clauses(const char *dir)
     Resume_low_selector_name[0] = '\0';
   rewind(fp);
   Resume_low_selector_count = (int) read_metadata_ull(fp, "low_selector_count");
+  rewind(fp);
+  if (!read_metadata_str(fp, "high_selector", Resume_high_selector_name,
+                          sizeof(Resume_high_selector_name)))
+    Resume_high_selector_name[0] = '\0';
+  rewind(fp);
+  Resume_high_selector_count = (int) read_metadata_ull(fp, "high_selector_count");
   fclose(fp);
 
   /* 2. Load clause_data */
   meta_count = load_clause_data(dir, &meta);
 
-  /* 3. Load clause files into Glob lists (no orient/index yet) */
+  /* 3. Load clause files into Glob lists (no orient/index yet).
+     Hints use skip_register=TRUE (separate ID namespace). */
   meta_offset = 0;
   loaded_sos = load_clauses_from_file(dir, "sos.clauses", "sos",
-                                       meta, meta_count, &meta_offset);
+                                       meta, meta_count, &meta_offset,
+                                       FALSE);
   loaded_usable = load_clauses_from_file(dir, "usable.clauses", "usable",
-                                          meta, meta_count, &meta_offset);
-  loaded_demods = load_clauses_from_file(dir, "demods.clauses", "demodulators",
-                                          meta, meta_count, &meta_offset);
+                                          meta, meta_count, &meta_offset,
+                                          FALSE);
+  loaded_demods = load_clauses_from_file(dir, "demods.clauses",
+                                          "demodulators",
+                                          meta, meta_count, &meta_offset,
+                                          FALSE);
   loaded_hints = load_clauses_from_file(dir, "hints.clauses", "hints",
-                                         meta, meta_count, &meta_offset);
+                                         meta, meta_count, &meta_offset,
+                                         TRUE);  /* skip register */
   loaded_limbo = load_clauses_from_file(dir, "limbo.clauses", "limbo",
-                                         meta, meta_count, &meta_offset);
-  loaded_disabled = load_clauses_from_file(dir, "disabled.clauses", "disabled",
-                                            meta, meta_count, &meta_offset);
-  safe_free(meta);
+                                         meta, meta_count, &meta_offset,
+                                         FALSE);
+  loaded_disabled = load_clauses_from_file(dir, "disabled.clauses",
+                                            "disabled",
+                                            meta, meta_count, &meta_offset,
+                                            FALSE);
 
   /* 4. Set clause ID counter past all loaded IDs */
   set_clause_id_count(max_clause_id);
@@ -4840,13 +4980,41 @@ void resume_load_clauses(const char *dir)
     }
     clist_zap(loaded_usable);
   }
-  if (loaded_demods) {
-    while (loaded_demods->first) {
-      Topform c = loaded_demods->first->c;
-      clist_remove(c, loaded_demods);
-      clist_append(c, Glob.demods);
+  /* Demods: interleave shared and non-shared in original list order.
+     Shared clauses (in both demods and usable/sos) were not written to
+     demods.clauses; resolve them by ID from already-loaded lists. */
+  {
+    int shared_count = 0, i;
+    Clist_pos next_loaded = loaded_demods ? loaded_demods->first : NULL;
+    for (i = 0; i < meta_count; i++) {
+      if (strcmp(meta[i].list_name, "demodulators") != 0)
+        continue;
+      if (meta[i].shared) {
+        Topform existing = find_clause_by_id(meta[i].id);
+        if (existing != NULL) {
+          clist_append(existing, Glob.demods);
+          shared_count++;
+        }
+      }
+      else if (next_loaded != NULL) {
+        Topform c = next_loaded->c;
+        next_loaded = next_loaded->next;
+        clist_remove(c, loaded_demods);
+        clist_append(c, Glob.demods);
+      }
     }
-    clist_zap(loaded_demods);
+    /* Append any remaining loaded demods (safety) */
+    if (loaded_demods) {
+      while (loaded_demods->first) {
+        Topform c = loaded_demods->first->c;
+        clist_remove(c, loaded_demods);
+        clist_append(c, Glob.demods);
+      }
+      clist_zap(loaded_demods);
+    }
+    if (shared_count > 0)
+      printf("%%   (%d shared demods resolved from usable/sos)\n",
+             shared_count);
   }
   if (loaded_hints) {
     while (loaded_hints->first) {
@@ -4872,6 +5040,9 @@ void resume_load_clauses(const char *dir)
     }
     clist_zap(loaded_disabled);
   }
+  /* Keep meta for hint_match restoration in resume_index_clauses */
+  Resume_meta = meta;
+  Resume_meta_count = meta_count;
 
   printf("\n%% Loaded from checkpoint: %s\n", dir);
   printf("%%   sos=%d, usable=%d, demods=%d, hints=%d, limbo=%d, disabled=%d\n",
@@ -4971,6 +5142,39 @@ void resume_index_clauses(void)
       renumber_variables(h, MAX_VARS);
       index_hint(h);
     }
+  }
+
+  /* Restore matching_hint pointers from checkpoint metadata.
+     Hint IDs are now 1..N (assigned above).  For each clause with a
+     saved hint_match, walk the hints list to the matching position. */
+  if (Resume_meta != NULL) {
+    int i, restored = 0;
+    /* Build hint array for O(1) lookup by ID */
+    Topform *hint_arr = NULL;
+    int hint_count = Glob.hints->length;
+    if (hint_count > 0) {
+      hint_arr = (Topform *) safe_malloc((hint_count + 1) * sizeof(Topform));
+      for (p = Glob.hints->first; p != NULL; p = p->next) {
+        Topform h = p->c;
+        if (h->id >= 1 && h->id <= (unsigned long long)hint_count)
+          hint_arr[h->id] = h;
+      }
+    }
+    for (i = 0; i < Resume_meta_count; i++) {
+      if (Resume_meta[i].hint_match > 0 && hint_arr != NULL &&
+          Resume_meta[i].hint_match <= hint_count) {
+        Topform c = find_clause_by_id(Resume_meta[i].id);
+        if (c != NULL) {
+          c->matching_hint = hint_arr[Resume_meta[i].hint_match];
+          restored++;
+        }
+      }
+    }
+    if (hint_arr) safe_free(hint_arr);
+    safe_free(Resume_meta);
+    Resume_meta = NULL;
+    if (restored > 0)
+      printf("%%   Restored %d hint matches from checkpoint.\n", restored);
   }
 
   /* Index limbo clauses (they were cl_processed in the original run,
@@ -5156,10 +5360,13 @@ Prover_results search(Prover_input p)
       basic_clause_properties(Glob.sos, Glob.usable);
       init_search();                             // full init with clauses present
       resume_index_clauses();                    // orient, index, insert into SOS
-      /* Restore Low selector cycle position for deterministic given selection */
+      /* Restore selector cycle positions for deterministic given selection */
       if (Resume_low_selector_name[0] != '\0')
         set_low_selector_state(Resume_low_selector_name,
                                Resume_low_selector_count);
+      if (Resume_high_selector_name[0] != '\0')
+        set_high_selector_state(Resume_high_selector_name,
+                                Resume_high_selector_count);
       if (flag(Opt->print_derivations))
 	get_hit_list();
     }

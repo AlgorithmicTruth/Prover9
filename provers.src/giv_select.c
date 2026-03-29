@@ -633,6 +633,46 @@ void set_low_selector_state(const char *name, int count)
 
 /*************
  *
+ *   get_high_selector_state()
+ *
+ *************/
+
+/* PUBLIC */
+void get_high_selector_state(const char **name, int *count)
+{
+  if (High.current) {
+    Giv_select gs = High.current->v;
+    *name = gs->name;
+    *count = High.count;
+  }
+  else {
+    *name = "";
+    *count = 0;
+  }
+}  /* get_high_selector_state */
+
+/*************
+ *
+ *   set_high_selector_state()
+ *
+ *************/
+
+/* PUBLIC */
+void set_high_selector_state(const char *name, int count)
+{
+  Plist p;
+  for (p = High.selectors; p; p = p->next) {
+    Giv_select gs = p->v;
+    if (strcmp(gs->name, name) == 0) {
+      High.current = p;
+      High.count = count;
+      return;
+    }
+  }
+}  /* set_high_selector_state */
+
+/*************
+ *
  *   selector_report()
  *
  *************/

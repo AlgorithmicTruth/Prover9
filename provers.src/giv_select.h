@@ -53,6 +53,10 @@ void get_low_selector_state(const char **name, int *count);
 
 void set_low_selector_state(const char *name, int count);
 
+void get_high_selector_state(const char **name, int *count);
+
+void set_high_selector_state(const char *name, int count);
+
 Term selector_rule_term(char *name, char *priority,
 			char *order, char *rule, int part);
 
