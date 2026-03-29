@@ -3916,9 +3916,10 @@ void restore_fpa_ids(const char *dir)
       Topform c = find_clause_by_id(clause_id);
       Literals lit;
       if (c == NULL) {
-        fprintf(stderr, "restore_fpa_ids: clause %llu not found in ID table\n",
-                clause_id);
-        fatal_error("restore_fpa_ids: clause not found");
+        fprintf(stderr, "WARNING: restore_fpa_ids: clause %llu not found, "
+                "skipping FPA ID restoration.\n", clause_id);
+        fclose(fp);
+        return;
       }
       for (lit = c->literals; lit; lit = lit->next)
         read_term_fpa_ids(fp, lit->atom);
@@ -5146,7 +5147,7 @@ Prover_results search(Prover_input p)
       //   4. Orient, index, and insert clauses
 
       resume_load_clauses(p->resume_dir);       // load into Glob lists, no orient/index
-      restore_fpa_ids(p->resume_dir);           // restore FPA_IDs for deterministic index order
+      restore_fpa_ids(p->resume_dir);           // restore FPA_IDs (best-effort, before orient)
 #ifndef PRIMITIVE_ENVIRONMENT
       restore_checkpoint_formulas(p->resume_dir); // restore goal formulas for proof ancestry
       restore_justifications(p->resume_dir);    // restore real justifications for proof output
@@ -5237,10 +5238,10 @@ Prover_results search(Prover_input p)
 
     if (parm(Opt->checkpoint_minutes) > 0) {
       int mins = parm(Opt->checkpoint_minutes);
-      if (mins < 15) {
+      if (mins < 1) {
         fprintf(stderr,
-          "WARNING: checkpoint_minutes=%d too small, using 15.\n", mins);
-        assign_parm(Opt->checkpoint_minutes, 15, TRUE);
+          "WARNING: checkpoint_minutes=%d too small, using 1.\n", mins);
+        assign_parm(Opt->checkpoint_minutes, 1, TRUE);
       }
       Last_auto_ckpt_time = time(NULL);
     }
