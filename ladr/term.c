@@ -213,6 +213,23 @@ Term get_variable_term(int var_num)
 
 /*************
  *
+ *   get_variable_term_if_exists()
+ *
+ *   Return the shared variable term for var_num, or NULL if not yet created.
+ *   Does NOT allocate.
+ *
+ *************/
+
+/* PUBLIC */
+Term get_variable_term_if_exists(int var_num)
+{
+  if (var_num < 0 || var_num >= MAX_VNUM)
+    return NULL;
+  return Shared_variables[var_num];
+}  /* get_variable_term_if_exists */
+
+/*************
+ *
  *   get_rigid_term_like()
  *
  *************/

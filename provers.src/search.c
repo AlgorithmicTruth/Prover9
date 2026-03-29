@@ -3782,7 +3782,8 @@ int write_clist_bare(FILE *clause_fp, FILE *data_fp,
                      Plist *seen_tab, int seen_tab_size)
 {
   Clist_pos p;
-  int pos = 0;
+  int file_pos = 0;  /* position in .clauses file (non-shared only) */
+  int list_pos = 0;  /* position in original list (all entries) */
   for (p = lst->first; p != NULL; p = p->next) {
     Topform c = p->c;
     if (c->id == 0)
@@ -3799,19 +3800,23 @@ int write_clist_bare(FILE *clause_fp, FILE *data_fp,
                   seen_tab[c->id % seen_tab_size], c, TRUE);
         fwrite_clause(clause_fp, c, CL_FORM_BARE);
       }
-      fprintf(data_fp, "%s %d %llu %.17g %d", list_name, pos, c->id,
-              c->weight, (int)c->initial);
+      /* Position field: file_pos for non-shared (matches .clauses file),
+         list_pos for shared (used by interleaving logic on restore). */
+      fprintf(data_fp, "%s %d %llu %.17g %d", list_name,
+              is_shared ? list_pos : file_pos,
+              c->id, c->weight, (int)c->initial);
       if (is_shared)
         fprintf(data_fp, " shared");
-      /* Save matched hint position (1-based) for selector restoration */
       if (c->matching_hint != NULL)
         fprintf(data_fp, " hint_match %d", (int)c->matching_hint->id);
       fprintf(data_fp, "\n");
+      if (!is_shared)
+        file_pos++;
     }
-    pos++;
+    list_pos++;
   }
   fprintf(clause_fp, "end_of_list.\n");
-  return pos;
+  return list_pos;
 }  /* write_clist_bare */
 
 /*************
@@ -3844,14 +3849,18 @@ unsigned long long hash_clist_fpa_ids(Clist lst)
   for (p = lst->first; p != NULL; p = p->next) {
     Literals lit;
     for (lit = p->c->literals; lit; lit = lit->next) {
-      /* Walk atom DFS, hash FPA_IDs */
+      /* Walk atom DFS, hash FPA_IDs (skip variables -- shared objects) */
       Term stack[1000];
       int top = 0;
       stack[top++] = lit->atom;
       while (top > 0) {
         Term t = stack[--top];
         int i;
-        h ^= (unsigned long long) FPA_ID(t);
+        /* Only hash non-zero FPA_IDs (root atoms that were FPA-indexed).
+           Variables and subterms keep FPA_ID=0 and may change due to
+           shared variable replacement during hint renumbering. */
+        if (FPA_ID(t) != 0)
+          h ^= (unsigned long long) FPA_ID(t);
         h = (h << 5) | (h >> 59);
         for (i = ARITY(t) - 1; i >= 0; i--)
           stack[top++] = ARG(t, i);
@@ -3990,7 +3999,9 @@ static
 int write_term_fpa_ids(FILE *fp, Term t)
 {
   int i, count = 1;
-  fprintf(fp, " %u", (unsigned) FPA_ID(t));
+  /* Skip variables: they are shared objects whose FPA_ID depends on
+     indexing order, not on individual clause state.  Write 0 for vars. */
+  fprintf(fp, " %u", VARIABLE(t) ? 0 : (unsigned) FPA_ID(t));
   for (i = 0; i < ARITY(t); i++)
     count += write_term_fpa_ids(fp, ARG(t, i));
   return count;
@@ -4024,6 +4035,21 @@ void write_fpa_ids(const char *dir)
   }
 
   fprintf(fp, "fpa_id_count %u\n", get_fpa_id_count());
+
+  /* Save shared variable FPA_IDs.  Variables are shared across all
+     clauses, so their FPA_IDs must be saved/restored separately. */
+  {
+    int i, nvar = 0;
+    for (i = 0; i < MAX_VNUM; i++)
+      if (get_variable_term_if_exists(i) != NULL)
+        nvar = i + 1;
+    fprintf(fp, "VARS %d\n", nvar);
+    for (i = 0; i < nvar; i++) {
+      Term v = get_variable_term_if_exists(i);
+      fprintf(fp, " %u", v != NULL ? (unsigned) FPA_ID(v) : 0);
+    }
+    fprintf(fp, "\n");
+  }
 
   /* Save FPA_IDs for all FPA-indexed clause lists:
      usable, sos, hints, limbo (demods use DISCRIM, not FPA).
@@ -4067,7 +4093,9 @@ int read_term_fpa_ids(FILE *fp, Term t)
   int i, count = 1;
   if (fscanf(fp, " %u", &id) != 1)
     fatal_error("restore_fpa_ids: unexpected end of data");
-  FPA_ID(t) = id;
+  /* Skip variables: they are shared objects.  Don't write to them. */
+  if (!VARIABLE(t))
+    FPA_ID(t) = id;
   for (i = 0; i < ARITY(t); i++)
     count += read_term_fpa_ids(fp, ARG(t, i));
   return count;
@@ -4105,11 +4133,26 @@ void restore_fpa_ids(const char *dir)
     fatal_error("restore_fpa_ids: bad header in fpa_ids.txt");
   set_fpa_id_count(saved_count);
 
-  /* Read section-based FPA_IDs (new format: LIST <name> <count>) */
+  /* Read sections (VARS or LIST) */
   while (fscanf(fp, " %63s", buf) == 1) {
     Clist lst;
     Clist_pos cp;
     int i;
+
+    /* Restore shared variable FPA_IDs */
+    if (strcmp(buf, "VARS") == 0) {
+      int nvar;
+      if (fscanf(fp, " %d", &nvar) != 1) break;
+      for (i = 0; i < nvar; i++) {
+        unsigned id;
+        if (fscanf(fp, " %u", &id) != 1) break;
+        if (id != 0) {
+          Term v = get_variable_term(i);
+          FPA_ID(v) = id;
+        }
+      }
+      continue;
+    }
 
     if (strcmp(buf, "LIST") != 0)
       break;  /* not a section header -- old format or corruption */
@@ -4907,27 +4950,39 @@ Clist load_clauses_from_file(const char *dir, const char *filename,
   lst = read_clause_clist(fp, stderr, (char *)list_name, FALSE);
   fclose(fp);
 
-  /* Now assign IDs and weights from metadata */
+  /* Now assign IDs and weights from metadata.
+     Skip shared entries (they don't appear in the .clauses file). */
   {
     Clist_pos cp;
+    int meta_pos = *meta_offset;
+
+    /* Advance meta_pos past shared entries to find first non-shared */
     for (cp = lst->first; cp != NULL; cp = cp->next) {
       Topform c = cp->c;
-      int i = *meta_offset + pos;
-      if (i < meta_count &&
-          strcmp(meta[i].list_name, list_name) == 0 &&
-          meta[i].position == pos) {
-        c->id = meta[i].id;
-        c->weight = meta[i].weight;
-        c->initial = meta[i].initial;
+
+      /* Skip shared metadata entries for this list */
+      while (meta_pos < meta_count &&
+             strcmp(meta[meta_pos].list_name, list_name) == 0 &&
+             meta[meta_pos].shared)
+        meta_pos++;
+
+      if (meta_pos < meta_count &&
+          strcmp(meta[meta_pos].list_name, list_name) == 0 &&
+          !meta[meta_pos].shared &&
+          meta[meta_pos].position == pos) {
+        c->id = meta[meta_pos].id;
+        c->weight = meta[meta_pos].weight;
+        c->initial = meta[meta_pos].initial;
         if (!skip_register)
           register_clause_with_id(c);
+        meta_pos++;
       }
       else {
-        /* Fallback: search metadata for this list+pos */
+        /* Fallback: search all non-shared entries for this list+pos */
         int j;
         for (j = 0; j < meta_count; j++) {
           if (strcmp(meta[j].list_name, list_name) == 0 &&
-              meta[j].position == pos) {
+              !meta[j].shared && meta[j].position == pos) {
             c->id = meta[j].id;
             c->weight = meta[j].weight;
             c->initial = meta[j].initial;
@@ -4946,7 +5001,10 @@ Clist load_clauses_from_file(const char *dir, const char *filename,
       pos++;
     }
   }
-  *meta_offset += pos;
+  /* Advance meta_offset past ALL entries for this list (shared + non-shared) */
+  while (*meta_offset < meta_count &&
+         strcmp(meta[*meta_offset].list_name, list_name) == 0)
+    (*meta_offset)++;
   return lst;
 }  /* load_clauses_from_file */
 
@@ -5520,6 +5578,15 @@ Prover_results search(Prover_input p)
 
       resume_load_clauses(p->resume_dir);       // load into Glob lists, no orient/index
       restore_fpa_ids(p->resume_dir);           // restore FPA_IDs (best-effort, before orient)
+      /* Diagnostic: verify FPA IDs immediately after restore, before indexing */
+      if (flag(Opt->checkpoint_verify)) {
+        printf("\n%% FPA hash check (after restore, before index):\n");
+        printf("%%   sos_fpa_pre:    %llu\n", hash_clist_fpa_ids(Glob.sos));
+        printf("%%   usable_fpa_pre: %llu\n", hash_clist_fpa_ids(Glob.usable));
+        printf("%%   hints_fpa_pre:  %llu\n", hash_clist_fpa_ids(Glob.hints));
+        printf("%%   limbo_fpa_pre:  %llu\n", hash_clist_fpa_ids(Glob.limbo));
+        fflush(stdout);
+      }
 #ifndef PRIMITIVE_ENVIRONMENT
       restore_checkpoint_formulas(p->resume_dir); // restore goal formulas for proof ancestry
       restore_justifications(p->resume_dir);    // restore real justifications for proof output

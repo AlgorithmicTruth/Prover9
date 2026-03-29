@@ -133,6 +133,8 @@ void p_term_mem(void);
 
 Term get_variable_term(int var_num);
 
+Term get_variable_term_if_exists(int var_num);
+
 Term get_rigid_term_like(Term t);
 
 Term get_rigid_term(char *sym, int arity);
