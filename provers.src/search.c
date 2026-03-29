@@ -250,6 +250,7 @@ Prover_options init_prover_options(void)
 
   p->checkpoint_exit        = init_flag("checkpoint_exit",        FALSE);
   p->checkpoint_ancestors   = init_flag("checkpoint_ancestors",    TRUE);
+  p->checkpoint_verify      = init_flag("checkpoint_verify",      FALSE);
   p->tptp_output            = init_flag("tptp_output",            FALSE);
   p->multi_order_trial      = init_flag("multi_order_trial",      FALSE);
   p->fast_pred_elim         = init_flag("fast_pred_elim",         FALSE);
@@ -3815,6 +3816,169 @@ int write_clist_bare(FILE *clause_fp, FILE *data_fp,
 
 /*************
  *
+ *   Checkpoint verification hashes.
+ *
+ *   XOR-rotate hash of clause IDs in list order.  Two lists with the
+ *   same clauses in the same order produce the same hash.  Used by
+ *   set(checkpoint_verify) to detect restore divergence.
+ *
+ *************/
+
+static
+unsigned long long hash_clist_ids(Clist lst)
+{
+  unsigned long long h = 0;
+  Clist_pos p;
+  for (p = lst->first; p != NULL; p = p->next) {
+    h ^= p->c->id;
+    h = (h << 7) | (h >> 57);  /* rotate left 7 */
+  }
+  return h;
+}
+
+static
+unsigned long long hash_clist_fpa_ids(Clist lst)
+{
+  unsigned long long h = 0;
+  Clist_pos p;
+  for (p = lst->first; p != NULL; p = p->next) {
+    Literals lit;
+    for (lit = p->c->literals; lit; lit = lit->next) {
+      /* Walk atom DFS, hash FPA_IDs */
+      Term stack[1000];
+      int top = 0;
+      stack[top++] = lit->atom;
+      while (top > 0) {
+        Term t = stack[--top];
+        int i;
+        h ^= (unsigned long long) FPA_ID(t);
+        h = (h << 5) | (h >> 59);
+        for (i = ARITY(t) - 1; i >= 0; i--)
+          stack[top++] = ARG(t, i);
+      }
+    }
+  }
+  return h;
+}
+
+static
+unsigned long long hash_clist_hint_matches(Clist lst)
+{
+  unsigned long long h = 0;
+  Clist_pos p;
+  for (p = lst->first; p != NULL; p = p->next) {
+    unsigned long long hint_id = p->c->matching_hint
+        ? p->c->matching_hint->id : 0;
+    h ^= (p->c->id * 2654435761ULL) ^ hint_id;
+    h = (h << 11) | (h >> 53);
+  }
+  return h;
+}
+
+static
+void write_checkpoint_hashes(const char *dir)
+{
+  char path[600];
+  FILE *fp;
+
+  snprintf(path, sizeof(path), "%s/verify.txt", dir);
+  fp = fopen(path, "w");
+  if (!fp) return;
+
+  fprintf(fp, "sos_ids %llu\n",       hash_clist_ids(Glob.sos));
+  fprintf(fp, "usable_ids %llu\n",    hash_clist_ids(Glob.usable));
+  fprintf(fp, "demods_ids %llu\n",    hash_clist_ids(Glob.demods));
+  fprintf(fp, "hints_ids %llu\n",     hash_clist_ids(Glob.hints));
+  fprintf(fp, "limbo_ids %llu\n",     hash_clist_ids(Glob.limbo));
+  fprintf(fp, "sos_fpa %llu\n",       hash_clist_fpa_ids(Glob.sos));
+  fprintf(fp, "usable_fpa %llu\n",    hash_clist_fpa_ids(Glob.usable));
+  fprintf(fp, "hints_fpa %llu\n",     hash_clist_fpa_ids(Glob.hints));
+  fprintf(fp, "limbo_fpa %llu\n",     hash_clist_fpa_ids(Glob.limbo));
+  fprintf(fp, "sos_hints %llu\n",     hash_clist_hint_matches(Glob.sos));
+  fprintf(fp, "usable_hints %llu\n",  hash_clist_hint_matches(Glob.usable));
+  fprintf(fp, "sos_count %d\n",       Glob.sos->length);
+  fprintf(fp, "usable_count %d\n",    Glob.usable->length);
+  fprintf(fp, "demods_count %d\n",    Glob.demods->length);
+  fprintf(fp, "hints_count %d\n",     Glob.hints->length);
+  fprintf(fp, "limbo_count %d\n",     Glob.limbo->length);
+
+  fclose(fp);
+}
+
+static
+void verify_checkpoint_hashes(const char *dir)
+{
+  char path[600], key[64];
+  unsigned long long val;
+  FILE *fp;
+  int pass = 0, fail = 0;
+
+  snprintf(path, sizeof(path), "%s/verify.txt", dir);
+  fp = fopen(path, "r");
+  if (!fp) {
+    printf("%% checkpoint_verify: no verify.txt in checkpoint.\n");
+    return;
+  }
+
+  printf("\n%% Checkpoint verification:\n");
+  while (fscanf(fp, " %63s %llu", key, &val) == 2) {
+    unsigned long long actual = 0;
+    const char *status;
+
+    if (strcmp(key, "sos_ids") == 0)
+      actual = hash_clist_ids(Glob.sos);
+    else if (strcmp(key, "usable_ids") == 0)
+      actual = hash_clist_ids(Glob.usable);
+    else if (strcmp(key, "demods_ids") == 0)
+      actual = hash_clist_ids(Glob.demods);
+    else if (strcmp(key, "hints_ids") == 0)
+      actual = hash_clist_ids(Glob.hints);
+    else if (strcmp(key, "limbo_ids") == 0)
+      actual = hash_clist_ids(Glob.limbo);
+    else if (strcmp(key, "sos_fpa") == 0)
+      actual = hash_clist_fpa_ids(Glob.sos);
+    else if (strcmp(key, "usable_fpa") == 0)
+      actual = hash_clist_fpa_ids(Glob.usable);
+    else if (strcmp(key, "hints_fpa") == 0)
+      actual = hash_clist_fpa_ids(Glob.hints);
+    else if (strcmp(key, "limbo_fpa") == 0)
+      actual = hash_clist_fpa_ids(Glob.limbo);
+    else if (strcmp(key, "sos_hints") == 0)
+      actual = hash_clist_hint_matches(Glob.sos);
+    else if (strcmp(key, "usable_hints") == 0)
+      actual = hash_clist_hint_matches(Glob.usable);
+    else if (strcmp(key, "sos_count") == 0)
+      actual = (unsigned long long) Glob.sos->length;
+    else if (strcmp(key, "usable_count") == 0)
+      actual = (unsigned long long) Glob.usable->length;
+    else if (strcmp(key, "demods_count") == 0)
+      actual = (unsigned long long) Glob.demods->length;
+    else if (strcmp(key, "hints_count") == 0)
+      actual = (unsigned long long) Glob.hints->length;
+    else if (strcmp(key, "limbo_count") == 0)
+      actual = (unsigned long long) Glob.limbo->length;
+    else
+      continue;
+
+    status = (actual == val) ? "OK" : "MISMATCH";
+    if (actual != val) {
+      printf("%%   %s: %s (expected %llu, got %llu)\n",
+             key, status, val, actual);
+      fail++;
+    }
+    else {
+      printf("%%   %s: %s\n", key, status);
+      pass++;
+    }
+  }
+  fclose(fp);
+
+  printf("%%   Verification: %d passed, %d failed.\n", pass, fail);
+  fflush(stdout);
+}
+
+/*************
+ *
  *   write_term_fpa_ids()
  *
  *   Write FPA_ID for a term and all subterms (pre-order DFS).
@@ -4581,6 +4745,10 @@ void write_checkpoint(void)
 
     /* 3f. Write saved_input.txt for self-contained resume */
     write_checkpoint_input(tmpdir);
+
+    /* 3g. Write verification hashes (if checkpoint_verify enabled) */
+    if (flag(Opt->checkpoint_verify))
+      write_checkpoint_hashes(tmpdir);
 
     /* 4. Rename temp dir to final name */
     if (rename(tmpdir, finaldir) != 0) {
@@ -5367,6 +5535,9 @@ Prover_results search(Prover_input p)
       if (Resume_high_selector_name[0] != '\0')
         set_high_selector_state(Resume_high_selector_name,
                                 Resume_high_selector_count);
+      /* Verify checkpoint hashes if enabled */
+      if (flag(Opt->checkpoint_verify))
+        verify_checkpoint_hashes(p->resume_dir);
       if (flag(Opt->print_derivations))
 	get_hit_list();
     }

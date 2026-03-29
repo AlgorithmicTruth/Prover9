@@ -133,6 +133,7 @@ struct prover_options {
 
     checkpoint_exit,      // exit after writing checkpoint
     checkpoint_ancestors, // include disabled list in checkpoint
+    checkpoint_verify,    // verify data structure hashes on resume
     tptp_output,          // TPTP/TSTP output mode
     multi_order_trial,    // try multiple symbol orderings, pick best
     fast_pred_elim;       // 5-second timeout on predicate elimination
