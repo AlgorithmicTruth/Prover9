@@ -3813,6 +3813,13 @@ int write_clist_bare(FILE *clause_fp, FILE *data_fp,
         fprintf(data_fp, " shared");
       if (c->matching_hint != NULL)
         fprintf(data_fp, " hint_match %d", (int)c->matching_hint->id);
+      /* Save atom private_flags for each literal (carries oriented_eq,
+         renamable_flip, maximal, selected marks — lost in text round-trip) */
+      {
+        Literals lit;
+        for (lit = c->literals; lit != NULL; lit = lit->next)
+          fprintf(data_fp, " aflags %u", (unsigned)lit->atom->private_flags);
+      }
       fprintf(data_fp, "\n");
       if (!is_shared)
         file_pos++;
@@ -4788,6 +4795,27 @@ void write_checkpoint(void)
       fclose(fp);
     }
 
+    /* 3b2. Write symbol table (symnum assignments) for deterministic
+       term_compare_vcp on resume.  The secondary ordering for
+       NOT_COMPARABLE equations uses raw SYMNUM, not lex_val. */
+    {
+      char spath[600];
+      FILE *sfp;
+      int sn;
+      snprintf(spath, sizeof(spath), "%s/symbols.txt", tmpdir);
+      sfp = fopen(spath, "w");
+      if (sfp) {
+        int max_sn = greatest_symnum();
+        fprintf(sfp, "%d\n", max_sn);
+        for (sn = 1; sn <= max_sn; sn++) {
+          char *name = sn_to_str(sn);
+          if (name != NULL)
+            fprintf(sfp, "%d %d %s\n", sn, sn_to_arity(sn), name);
+        }
+        fclose(sfp);
+      }
+    }
+
     /* 3c. Write FPA_IDs for deterministic FPA leaf ordering on resume */
     write_fpa_ids(tmpdir);
 
@@ -4896,6 +4924,8 @@ struct clause_meta {
   int initial;    /* c->initial flag (0 or 1) */
   int shared;     /* 1 if clause is shared with another list (dedup) */
   int hint_match; /* matched hint ID (1-based), 0 if none */
+  unsigned aflags[10]; /* atom private_flags per literal (max 10 lits) */
+  int aflags_count;    /* number of aflags entries */
 };
 
 static
@@ -4918,6 +4948,7 @@ int load_clause_data(const char *dir, struct clause_meta **out)
     char *p;
     m->shared = 0;
     m->hint_match = 0;
+    m->aflags_count = 0;
     if (sscanf(line, "%31s %d %llu %lf %d",
                m->list_name, &m->position,
                &m->id, &m->weight, &m->initial) == 5) {
@@ -4926,6 +4957,14 @@ int load_clause_data(const char *dir, struct clause_meta **out)
       p = strstr(line, "hint_match");
       if (p != NULL)
         sscanf(p, "hint_match %d", &m->hint_match);
+      /* Parse atom private_flags: "aflags N [aflags N ...]" */
+      p = strstr(line, "aflags");
+      while (p != NULL && m->aflags_count < 10) {
+        unsigned fval;
+        if (sscanf(p, "aflags %u", &fval) == 1)
+          m->aflags[m->aflags_count++] = fval;
+        p = strstr(p + 6, "aflags");
+      }
       count++;
       if (count >= capacity) {
         capacity *= 2;
@@ -5331,7 +5370,35 @@ void load_checkpoint_into_loop(void)
   int fpa_depth;
   Clist temp_sos;
 
-  /* 1. Clear Glob lists (may contain setup-phase clauses from saved_input) */
+  /* 0. Restore symbol table (symnum assignments) BEFORE any clause loading.
+     Ensures str_to_sn assigns the same symnums as the original run, which
+     is critical for term_compare_vcp secondary ordering. */
+  {
+    char spath[600];
+    FILE *sfp;
+    snprintf(spath, sizeof(spath), "%s/symbols.txt", Resume_dir);
+    sfp = fopen(spath, "r");
+    if (sfp) {
+      int max_sn, sn, arity, restored = 0;
+      char name[512];
+      if (fscanf(sfp, "%d", &max_sn) == 1) {
+        while (fscanf(sfp, "%d %d %511s", &sn, &arity, name) == 3) {
+          int actual_sn = str_to_sn(name, arity);
+          if (actual_sn != sn)
+            fprintf(stderr, "WARNING: symbol %s/%d: expected sn=%d, got %d\n",
+                    name, arity, sn, actual_sn);
+          restored++;
+        }
+      }
+      fclose(sfp);
+      printf("%%   Restored %d symbols from checkpoint (%d max)\n",
+             restored, greatest_symnum());
+    }
+  }
+
+  /* 1. Clear Glob lists and selector AVL trees.  Selectors are rebuilt
+     from scratch via insert_into_sos2 later in this function. */
+  reset_selector_indexes();
   while (Glob.sos->first)
     clist_remove(Glob.sos->first->c, Glob.sos);
   while (Glob.usable->first)
@@ -5350,12 +5417,40 @@ void load_checkpoint_into_loop(void)
 #endif
   resume_load_precedence(Resume_dir);
 
+  /* 2b. Restore atom private_flags (oriented_eq, renamable_flip, maximal,
+     selected marks) from checkpoint metadata.  These flags are stored in
+     term->private_flags and are lost during text serialization. */
+  if (Resume_meta != NULL) {
+    int i, restored = 0, not_found = 0;
+    for (i = 0; i < Resume_meta_count; i++) {
+      if (Resume_meta[i].aflags_count > 0) {
+        Topform c = find_clause_by_id(Resume_meta[i].id);
+        if (c != NULL) {
+          Literals lit;
+          int j = 0;
+          for (lit = c->literals; lit != NULL && j < Resume_meta[i].aflags_count;
+               lit = lit->next, j++) {
+            lit->atom->private_flags = (FLAGS_TYPE) Resume_meta[i].aflags[j];
+          }
+          restored++;
+        }
+        else
+          not_found++;
+      }
+    }
+    printf("%%   Restored aflags: %d clauses (%d not found)\n",
+           restored, not_found);
+  }
+
   /* Convert preliminary precedence to actual lex_val ordering.
      symbol_order uses the preliminary precedence + clause symbols
      to assign lex_val (the actual precedence used by term ordering). */
   symbol_order(Glob.usable, Glob.sos, Glob.demods, !flag(Opt->quiet));
 
-  /* 3. Initialize indexes */
+  /* 3. Re-initialize indexes (old indexes are leaked — acceptable for
+     in-process save+reload testing and cross-process resume alike) */
+
+  /* Initialize indexes */
   Glob.use_clash_idx = (flag(Opt->binary_resolution) ||
                         flag(Opt->neg_binary_resolution) ||
                         flag(Opt->pos_hyper_resolution) ||
@@ -5421,10 +5516,11 @@ void load_checkpoint_into_loop(void)
       }
       for (idx = 0; idx < n_all; idx++) {
         Topform c = all_clauses[idx];
-        orient_equalities(c, FALSE);  /* mark-only (already oriented) */
+        /* Skip orient_equalities and mark_maximal/selected — the atom
+           private_flags (aflags) were restored from checkpoint metadata.
+           Re-computing would overwrite with potentially different results
+           due to cross-process state differences. */
         upward_clause_links(c);       /* set container pointers */
-        mark_maximal_literals(c->literals);
-        mark_selected_literals(c->literals, stringparm1(Opt->literal_selection));
         index_literals_fpa_only(c, INSERT, Clocks.index, FALSE);
         index_back_demod(c, INSERT, Clocks.index, flag(Opt->back_demod));
         if (is_usable[idx])
@@ -5434,13 +5530,11 @@ void load_checkpoint_into_loop(void)
     }
     safe_free(all_clauses);
 
-    /* Orient demodulators and set up container links (needed for
-       demod index serialization which navigates term→clause) */
-    for (p = Glob.demods->first; p != NULL; p = p->next) {
-      Topform c = p->c;
-      orient_equalities(c, FALSE);
-      upward_clause_links(c);
-    }
+    /* Set up container links for demodulators (needed for demod index
+       serialization which navigates term→clause).  Skip orient_equalities
+       — atom flags restored from aflags in checkpoint metadata. */
+    for (p = Glob.demods->first; p != NULL; p = p->next)
+      upward_clause_links(p->c);
 
     /* Restore DISCRIM index leaf orderings from serialized data.
        This preserves the exact leaf-list order from the original run,
@@ -5805,6 +5899,7 @@ Prover_results search(Prover_input p)
           if (flag(Opt->checkpoint_exit))
             done_with_search(CHECKPOINT_EXIT);
         }
+
 
       }  /* !Load_checkpoint */
 #endif /* !__EMSCRIPTEN__ */

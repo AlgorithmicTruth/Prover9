@@ -45,6 +45,8 @@ BOOL sos_keep2(Topform c, Clist sos, Prover_options opt);
 
 void sos_displace2(void (*disable_proc) (Topform), BOOL quiet);
 
+void reset_selector_indexes(void);
+
 void zap_given_selectors(void);
 
 void selector_report(void);

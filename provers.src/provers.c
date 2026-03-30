@@ -1217,6 +1217,26 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
     }
   }
 
+  /* Pre-populate symbol table from checkpoint BEFORE input parsing.
+     This ensures str_to_sn assigns the same symnums as the original run.
+     The secondary ordering (term_compare_vcp) uses raw SYMNUM, so symnums
+     must match exactly for deterministic checkpoint/resume. */
+  if (opts.resume && opts.resume_dir) {
+    char spath[1024];
+    FILE *sfp;
+    snprintf(spath, sizeof(spath), "%s/symbols.txt", opts.resume_dir);
+    sfp = fopen(spath, "r");
+    if (sfp) {
+      int max_sn, sn, arity;
+      char name[512];
+      if (fscanf(sfp, "%d", &max_sn) == 1) {
+        while (fscanf(sfp, "%d %d %511s", &sn, &arity, name) == 3)
+          str_to_sn(name, arity);  /* creates symbol with sequential symnum */
+      }
+      fclose(sfp);
+    }
+  }
+
   read_all_input(argc, argv, stdout, echo, unknown_action);
 
   // Update echo: set(tptp_output) in input may have suppressed echo_input

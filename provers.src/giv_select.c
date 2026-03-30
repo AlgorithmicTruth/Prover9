@@ -117,6 +117,34 @@ int current_cycle_size(Select_state s)
 
 /*************
  *
+ *   reset_selector_indexes()
+ *
+ *   Clear all selector AVL trees and counters.  Used by checkpoint
+ *   restore to discard stale entries before reinserting from checkpoint.
+ *
+ *************/
+
+/* PUBLIC */
+void reset_selector_indexes(void)
+{
+  Plist p;
+  for (p = High.selectors; p; p = p->next) {
+    Giv_select gs = p->v;
+    gs->idx = NULL;  /* leak old AVL nodes (small, one-time) */
+    gs->selected = 0;
+  }
+  High.occurrences = 0;
+  for (p = Low.selectors; p; p = p->next) {
+    Giv_select gs = p->v;
+    gs->idx = NULL;
+    gs->selected = 0;
+  }
+  Low.occurrences = 0;
+  Sos_size = 0;
+}  /* reset_selector_indexes */
+
+/*************
+ *
  *   init_giv_select()
  *
  *************/
