@@ -5644,6 +5644,11 @@ void load_checkpoint_into_loop(void)
   if (Resume_meta != NULL) {
     int i, restored = 0, not_found = 0;
     for (i = 0; i < Resume_meta_count; i++) {
+      /* Skip hint entries — hints use a separate ID namespace (1..N)
+         that collides with regular clause IDs.  Hint aflags would
+         corrupt regular clauses found by find_clause_by_id. */
+      if (strcmp(Resume_meta[i].list_name, "hints") == 0)
+        continue;
       if (Resume_meta[i].aflags_count > 0) {
         Topform c = find_clause_by_id(Resume_meta[i].id);
         if (c != NULL) {
