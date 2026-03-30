@@ -3845,6 +3845,8 @@ int write_clist_bare(FILE *clause_fp, FILE *data_fp,
         fprintf(data_fp, " used");
       if (c->was_given)
         fprintf(data_fp, " was_given");
+      if (c->last_matched_given > 0)
+        fprintf(data_fp, " last_matched %llu", c->last_matched_given);
       /* Save atom private_flags for each literal (carries oriented_eq,
          renamable_flip, maximal, selected marks — lost in text round-trip) */
       {
@@ -5042,6 +5044,7 @@ struct clause_meta {
   int hint_match; /* matched hint ID (1-based), 0 if none */
   int used;       /* c->used flag */
   int was_given;  /* c->was_given flag */
+  unsigned long long last_matched; /* hint last_matched_given (for expiry) */
   unsigned aflags[10]; /* atom private_flags per literal (max 10 lits) */
   int aflags_count;    /* number of aflags entries */
 };
@@ -5068,6 +5071,7 @@ int load_clause_data(const char *dir, struct clause_meta **out)
     m->hint_match = 0;
     m->used = 0;
     m->was_given = 0;
+    m->last_matched = 0;
     m->aflags_count = 0;
     if (sscanf(line, "%31s %d %llu %lf %d",
                m->list_name, &m->position,
@@ -5081,6 +5085,9 @@ int load_clause_data(const char *dir, struct clause_meta **out)
         m->used = 1;
       if (strstr(line, "was_given") != NULL)
         m->was_given = 1;
+      p = strstr(line, "last_matched");
+      if (p != NULL)
+        sscanf(p, "last_matched %llu", &m->last_matched);
       /* Parse atom private_flags: "aflags N [aflags N ...]" */
       p = strstr(line, "aflags");
       while (p != NULL && m->aflags_count < 10) {
@@ -5853,21 +5860,24 @@ void load_checkpoint_into_loop(void)
       }
     }
 
-    /* Restore hint degradation weights from checkpoint metadata.
-       index_hint zeroes h->weight, so we must re-apply the saved values.
-       Hints are matched by position in the "hints" section of clause_data. */
+    /* Restore hint degradation weights and last_matched_given from
+       checkpoint metadata.  index_hint zeroes h->weight, so we must
+       re-apply the saved values.  last_matched_given drives hint expiry
+       and re-match statistics.  Hints matched by position. */
     {
       int hint_pos = 0, restored = 0;
       int i;
       for (i = 0; i < Resume_meta_count; i++) {
         if (strcmp(Resume_meta[i].list_name, "hints") == 0) {
-          if (Resume_meta[i].weight != 0.0) {
-            /* Find hint by position (IDs are 1-based, sequential) */
+          if (Resume_meta[i].weight != 0.0 || Resume_meta[i].last_matched != 0) {
             int hid = hint_pos + 1;
             Clist_pos hp;
             for (hp = Glob.hints->first; hp != NULL; hp = hp->next) {
               if (hp->c->id == (unsigned long long)hid) {
-                hp->c->weight = Resume_meta[i].weight;
+                if (Resume_meta[i].weight != 0.0)
+                  hp->c->weight = Resume_meta[i].weight;
+                if (Resume_meta[i].last_matched != 0)
+                  hp->c->last_matched_given = Resume_meta[i].last_matched;
                 restored++;
                 break;
               }
