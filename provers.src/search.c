@@ -4027,6 +4027,11 @@ void verify_checkpoint_hashes(const char *dir)
 
   printf("%%   Verification: %d passed, %d failed.\n", pass, fail);
   fflush(stdout);
+  if (fail > 0) {
+    fprintf(stderr, "FATAL: checkpoint verification failed (%d mismatches).\n"
+            "The checkpoint data does not match the restored state.\n", fail);
+    fatal_error("checkpoint_verify: verification failed");
+  }
 }
 
 /*************
