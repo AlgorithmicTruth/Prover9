@@ -4103,11 +4103,9 @@ void write_fpa_ids(const char *dir)
      usable, sos, hints, limbo (demods use DISCRIM, not FPA).
      Section-based: reader iterates by list position, not clause ID. */
   {
-    /* Don't save hints: hint FPA IDs are assigned fresh on resume
-       (hints are indexed first, before usable/SOS). */
-    const char *names[] = {"usable", "sos", "limbo"};
-    Clist lists[] = {Glob.usable, Glob.sos, Glob.limbo};
-    int nlist = 3, i;
+    const char *names[] = {"usable", "sos", "hints", "limbo"};
+    Clist lists[] = {Glob.usable, Glob.sos, Glob.hints, Glob.limbo};
+    int nlist = 4, i;
     for (i = 0; i < nlist; i++) {
       fprintf(fp, "LIST %s %d\n", names[i], lists[i]->length);
       for (p = lists[i]->first; p != NULL; p = p->next) {
@@ -4213,7 +4211,7 @@ void restore_fpa_ids(const char *dir)
     lst = NULL;
     if (strcmp(list_name, "usable") == 0) lst = Glob.usable;
     else if (strcmp(list_name, "sos") == 0) lst = Glob.sos;
-    else if (strcmp(list_name, "hints") == 0) lst = NULL;  /* skip: fresh IDs */
+    else if (strcmp(list_name, "hints") == 0) lst = Glob.hints;
     else if (strcmp(list_name, "limbo") == 0) lst = Glob.limbo;
 
     if (lst == NULL || lst->length != section_count) {
@@ -5851,8 +5849,35 @@ void load_checkpoint_into_loop(void)
         h->id = hint_id_number++;
         orient_equalities(h, FALSE);
         renumber_variables(h, MAX_VARS);
-        index_hint(h);
+        index_hint(h);  /* NOTE: this zeroes h->weight (degradation counter) */
       }
+    }
+
+    /* Restore hint degradation weights from checkpoint metadata.
+       index_hint zeroes h->weight, so we must re-apply the saved values.
+       Hints are matched by position in the "hints" section of clause_data. */
+    {
+      int hint_pos = 0, restored = 0;
+      int i;
+      for (i = 0; i < Resume_meta_count; i++) {
+        if (strcmp(Resume_meta[i].list_name, "hints") == 0) {
+          if (Resume_meta[i].weight != 0.0) {
+            /* Find hint by position (IDs are 1-based, sequential) */
+            int hid = hint_pos + 1;
+            Clist_pos hp;
+            for (hp = Glob.hints->first; hp != NULL; hp = hp->next) {
+              if (hp->c->id == (unsigned long long)hid) {
+                hp->c->weight = Resume_meta[i].weight;
+                restored++;
+                break;
+              }
+            }
+          }
+          hint_pos++;
+        }
+      }
+      if (restored > 0)
+        printf("%%   Restored %d hint degradation weights.\n", restored);
     }
 
     /* Restore matching_hint pointers from checkpoint metadata */
@@ -6202,6 +6227,7 @@ Prover_results search(Prover_input p)
 
       }  /* !Load_checkpoint */
 #endif /* !__EMSCRIPTEN__ */
+
 
       // Checkpoint load (resume — first iteration only).
       if (Load_checkpoint) {
