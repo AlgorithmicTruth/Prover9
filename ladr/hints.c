@@ -124,6 +124,42 @@ int redundant_hints(void)
 
 /*************
  *
+ *   hint_is_redundant()
+ *
+ *************/
+
+/* DOCUMENTATION
+Check if a hint is in the redundant hints list.
+*/
+
+/* PUBLIC */
+BOOL hint_is_redundant(Topform c)
+{
+  return clist_member(c, Redundant_hints);
+}  /* hint_is_redundant */
+
+/*************
+ *
+ *   index_hint_as_redundant()
+ *
+ *************/
+
+/* DOCUMENTATION
+Mark a hint as redundant without checking subsumption.
+Used during checkpoint resume to preserve the original
+redundant/active partition.
+*/
+
+/* PUBLIC */
+void index_hint_as_redundant(Topform c)
+{
+  c->weight = 0;
+  clist_append(c, Redundant_hints);
+  Redundant_hints_count++;
+}  /* index_hint_as_redundant */
+
+/*************
+ *
  *   find_equivalent_hint()
  *
  *************/

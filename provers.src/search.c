@@ -3847,6 +3847,8 @@ int write_clist_bare(FILE *clause_fp, FILE *data_fp,
         fprintf(data_fp, " was_given");
       if (c->last_matched_given > 0)
         fprintf(data_fp, " last_matched %llu", c->last_matched_given);
+      if (strcmp(list_name, "hints") == 0 && hint_is_redundant(c))
+        fprintf(data_fp, " redundant_hint");
       /* Save atom private_flags for each literal (carries oriented_eq,
          renamable_flip, maximal, selected marks — lost in text round-trip) */
       {
@@ -5045,6 +5047,7 @@ struct clause_meta {
   int used;       /* c->used flag */
   int was_given;  /* c->was_given flag */
   unsigned long long last_matched; /* hint last_matched_given (for expiry) */
+  int redundant_hint; /* hint was in Redundant_hints at checkpoint time */
   unsigned aflags[10]; /* atom private_flags per literal (max 10 lits) */
   int aflags_count;    /* number of aflags entries */
 };
@@ -5072,6 +5075,7 @@ int load_clause_data(const char *dir, struct clause_meta **out)
     m->used = 0;
     m->was_given = 0;
     m->last_matched = 0;
+    m->redundant_hint = 0;
     m->aflags_count = 0;
     if (sscanf(line, "%31s %d %llu %lf %d",
                m->list_name, &m->position,
@@ -5088,6 +5092,8 @@ int load_clause_data(const char *dir, struct clause_meta **out)
       p = strstr(line, "last_matched");
       if (p != NULL)
         sscanf(p, "last_matched %llu", &m->last_matched);
+      if (strstr(line, "redundant_hint") != NULL)
+        m->redundant_hint = 1;
       /* Parse atom private_flags: "aflags N [aflags N ...]" */
       p = strstr(line, "aflags");
       while (p != NULL && m->aflags_count < 10) {
@@ -5848,15 +5854,35 @@ void load_checkpoint_into_loop(void)
     if (flag(Opt->eval_rewrite))
       init_dollar_eval(Glob.demods);
 
-    /* Index hints (these have their own ID namespace 1..N, order preserved) */
+    /* Index hints, preserving the redundant/active partition from the
+       original run.  Hints marked redundant_hint in clause_data are put
+       directly into Redundant_hints without the subsumption check that
+       index_hint normally performs (which gives different results when
+       back-demodulated hints are re-indexed from scratch). */
     {
       int hint_id_number = 1;
+      int meta_hint_pos = 0;  /* tracks position in Resume_meta hints section */
       for (p = Glob.hints->first; p != NULL; p = p->next) {
         Topform h = p->c;
+        int is_redundant = 0;
+
+        /* Find this hint's redundant status from metadata */
+        if (Resume_meta != NULL) {
+          while (meta_hint_pos < Resume_meta_count &&
+                 strcmp(Resume_meta[meta_hint_pos].list_name, "hints") != 0)
+            meta_hint_pos++;
+          if (meta_hint_pos < Resume_meta_count)
+            is_redundant = Resume_meta[meta_hint_pos].redundant_hint;
+          meta_hint_pos++;
+        }
+
         h->id = hint_id_number++;
         orient_equalities(h, FALSE);
         renumber_variables(h, MAX_VARS);
-        index_hint(h);  /* NOTE: this zeroes h->weight (degradation counter) */
+        if (is_redundant)
+          index_hint_as_redundant(h);
+        else
+          index_hint(h);  /* NOTE: this zeroes h->weight */
       }
     }
 

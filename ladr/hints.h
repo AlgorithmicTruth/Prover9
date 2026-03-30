@@ -44,6 +44,10 @@ void done_with_hints(void);
 
 int redundant_hints(void);
 
+BOOL hint_is_redundant(Topform c);
+
+void index_hint_as_redundant(Topform c);
+
 void index_hint(Topform c);
 
 void unindex_hint(Topform c);
