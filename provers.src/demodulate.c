@@ -94,6 +94,149 @@ void index_back_demod(Topform c, Indexop operation, Clock clock, BOOL enabled)
 
 /*************
  *
+ *   write_discrim_leaves() -- iterative DFS walk of DISCRIM tree
+ *
+ *   Uses the same n-counter logic as zap_discrim_tree in discrim.c:
+ *   n tracks remaining symbols in the flattened term representation.
+ *   When n==0, the node is a leaf with u.data (Plist of entries).
+ *
+ *************/
+
+static
+void write_discrim_leaves(FILE *fp, Discrim root)
+{
+  struct frame { Discrim node; int n; };
+  int cap = 256, top = 0;
+  struct frame *stack = (struct frame *) safe_malloc(cap * sizeof(struct frame));
+
+  stack[top].node = root;
+  stack[top].n = 1;
+  top++;
+
+  while (top > 0) {
+    Discrim cur;
+    int cur_n;
+
+    top--;
+    cur = stack[top].node;
+    cur_n = stack[top].n;
+
+    if (cur_n == 0) {
+      /* Leaf node: write entries in Plist order */
+      Plist p;
+      for (p = cur->u.data; p != NULL; p = p->next) {
+        Term t = (Term) p->v;
+        Topform c = (Topform) t->container;
+        int side = (t == ARG(c->literals->atom, 0)) ? 0 : 1;
+        fprintf(fp, "%llu %d\n", c->id, side);
+      }
+    }
+    else {
+      /* Internal node: push children in REVERSE order (so first child
+         is processed first when popped from stack) */
+      Discrim k;
+      Discrim *kids = NULL;
+      int n_kids = 0, i;
+
+      for (k = cur->u.kids; k != NULL; k = k->next)
+        n_kids++;
+      if (n_kids > 0) {
+        kids = (Discrim *) safe_malloc(n_kids * sizeof(Discrim));
+        i = 0;
+        for (k = cur->u.kids; k != NULL; k = k->next)
+          kids[i++] = k;
+        for (i = n_kids - 1; i >= 0; i--) {
+          int arity;
+          k = kids[i];
+          if (k->type == AC_ARG_TYPE || k->type == AC_NV_ARG_TYPE)
+            arity = 0;
+          else if (DVAR(k))
+            arity = 0;
+          else
+            arity = sn_to_arity(k->symbol);
+          if (top >= cap) {
+            cap *= 2;
+            stack = (struct frame *) safe_realloc(stack,
+                                                  cap * sizeof(struct frame));
+          }
+          stack[top].node = k;
+          stack[top].n = cur_n + arity - 1;
+          top++;
+        }
+        safe_free(kids);
+      }
+    }
+  }
+  safe_free(stack);
+}
+
+/*************
+ *
+ *   write_demod_index() -- serialize demod DISCRIM tree leaf ordering
+ *
+ *************/
+
+/* PUBLIC */
+void write_demod_index(const char *dir)
+{
+  char path[600];
+  FILE *fp;
+  Discrim root;
+
+  if (Demod_idx == NULL || Demod_idx->discrim_tree == NULL)
+    return;
+
+  snprintf(path, sizeof(path), "%s/demod_index.txt", dir);
+  fp = fopen(path, "w");
+  if (!fp)
+    return;
+
+  root = Demod_idx->discrim_tree;
+  write_discrim_leaves(fp, root);
+  fclose(fp);
+}  /* write_demod_index */
+
+/*************
+ *
+ *   restore_demod_index() -- rebuild demod index in saved leaf-list order
+ *
+ *   Reads (clause_id, side) pairs from demod_index.txt and inserts the
+ *   corresponding terms into the demod DISCRIM tree in exactly the
+ *   saved order, reproducing the original leaf-list ordering.
+ *
+ *************/
+
+/* PUBLIC */
+void restore_demod_index(const char *dir, Clock clock)
+{
+  char path[600];
+  FILE *fp;
+  unsigned long long clause_id;
+  int side;
+
+  snprintf(path, sizeof(path), "%s/demod_index.txt", dir);
+  fp = fopen(path, "r");
+  if (!fp)
+    return;  /* no saved index — fall back to default insertion order */
+
+  {
+    int count = 0;
+    while (fscanf(fp, "%llu %d", &clause_id, &side) == 2) {
+      Topform c = find_clause_by_id(clause_id);
+      if (c != NULL && c->literals != NULL) {
+        Term t = ARG(c->literals->atom, side);
+        mindex_update(Demod_idx, t, INSERT);
+        count++;
+      }
+    }
+    printf("%%   Restored demod index: %d entries from %s\n", count,
+           path);
+  }
+  fclose(fp);
+}  /* restore_demod_index */
+
+/*************
+ *
  *   destroy_demodulation_index()
  *
  *************/

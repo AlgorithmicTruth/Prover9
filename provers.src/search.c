@@ -70,7 +70,10 @@ static int  Resume_high_selector_count = 0;
 /* Saved hint_match data for restoring matching_hint pointers */
 static struct clause_meta *Resume_meta = NULL;
 static int Resume_meta_count = 0;
-static BOOL Resuming = FALSE;  /* TRUE during resume_index_clauses */
+
+/* In-loop checkpoint loading state */
+static BOOL Load_checkpoint = FALSE;  /* TRUE on first loop iteration during resume */
+static const char *Resume_dir = NULL; /* checkpoint directory for in-loop loading */
 
 /* Periodic automatic checkpoint state */
 static time_t Last_auto_ckpt_time = 0;       // wall-clock of last auto checkpoint
@@ -4056,9 +4059,11 @@ void write_fpa_ids(const char *dir)
      usable, sos, hints, limbo (demods use DISCRIM, not FPA).
      Section-based: reader iterates by list position, not clause ID. */
   {
-    const char *names[] = {"usable", "sos", "hints", "limbo"};
-    Clist lists[] = {Glob.usable, Glob.sos, Glob.hints, Glob.limbo};
-    int nlist = 4, i;
+    /* Don't save hints: hint FPA IDs are assigned fresh on resume
+       (hints are indexed first, before usable/SOS). */
+    const char *names[] = {"usable", "sos", "limbo"};
+    Clist lists[] = {Glob.usable, Glob.sos, Glob.limbo};
+    int nlist = 3, i;
     for (i = 0; i < nlist; i++) {
       fprintf(fp, "LIST %s %d\n", names[i], lists[i]->length);
       for (p = lists[i]->first; p != NULL; p = p->next) {
@@ -4164,7 +4169,7 @@ void restore_fpa_ids(const char *dir)
     lst = NULL;
     if (strcmp(list_name, "usable") == 0) lst = Glob.usable;
     else if (strcmp(list_name, "sos") == 0) lst = Glob.sos;
-    else if (strcmp(list_name, "hints") == 0) lst = Glob.hints;
+    else if (strcmp(list_name, "hints") == 0) lst = NULL;  /* skip: fresh IDs */
     else if (strcmp(list_name, "limbo") == 0) lst = Glob.limbo;
 
     if (lst == NULL || lst->length != section_count) {
@@ -4562,6 +4567,11 @@ void write_checkpoint_input(const char *dir)
      fwrite_options_input writes parseable set()/clear()/assign() commands
      without the banner line (which would confuse the LADR parser). */
   fwrite_options_input(fp);
+  /* Auto-mode flags have already been resolved at checkpoint time.
+     Prevent re-running auto_inference/auto_process on resume, which
+     would make incorrect decisions with different (empty) clause lists. */
+  fprintf(fp, "clear(auto_inference).\n");
+  fprintf(fp, "clear(auto_process).\n");
   fprintf(fp, "\n");
 
   /* Configuration lists — only write non-empty ones.
@@ -4622,7 +4632,7 @@ void write_checkpoint(void)
     fp = fopen(path, "w");
     if (!fp) { fprintf(stderr, "ERROR: cannot write %s\n", path); return; }
 
-    fprintf(fp, "checkpoint_format 2\n");
+    fprintf(fp, "checkpoint_format 3\n");
     fprintf(fp, "version %s\n", PROGRAM_VERSION);
     fprintf(fp, "date %s\n", PROGRAM_DATE);
     fprintf(fp, "max_clause_id %llu\n", clause_ids_assigned());
@@ -4780,6 +4790,11 @@ void write_checkpoint(void)
 
     /* 3c. Write FPA_IDs for deterministic FPA leaf ordering on resume */
     write_fpa_ids(tmpdir);
+
+    /* 3c2. Write DISCRIM index leaf orderings for deterministic
+       forward demodulation and forward subsumption on resume */
+    write_demod_index(tmpdir);
+    write_unit_discrim_index(tmpdir);
 
     /* 3d. Write justifications for proof reconstruction on resume */
     write_justifications(tmpdir);
@@ -5109,11 +5124,11 @@ void resume_load_clauses(const char *dir)
   /* Check checkpoint format version */
   {
     unsigned long long fmt = read_metadata_ull(fp, "checkpoint_format");
-    if (fmt != 0 && fmt != 2)
+    if (fmt != 3) {
+      fprintf(stderr, "resume: checkpoint format %llu not supported "
+              "(this version requires format 3)\n", (unsigned long long)fmt);
       fatal_error("resume: unsupported checkpoint format");
-    if (fmt == 0)
-      fprintf(stderr, "NOTE: old checkpoint format (pre-3R). "
-              "Search may not be fully deterministic.\n");
+    }
   }
 
   /* Read max_clause_id */
@@ -5283,25 +5298,64 @@ void resume_load_clauses(const char *dir)
 
 /*************
  *
- *   resume_index_clauses()
- *
- *   Phase 2 of resume: orient, index, and insert clauses.
- *   Called AFTER init_search() has set up term ordering, inference
- *   rules, and given-clause selection.
+ *   topform_id_qsort_compare() -- qsort wrapper for sorting by clause ID
  *
  *************/
 
 static
-void resume_index_clauses(void)
+int topform_id_qsort_compare(const void *a, const void *b)
+{
+  Topform ca = *(Topform *)a;
+  Topform cb = *(Topform *)b;
+  if (ca->id < cb->id) return -1;
+  if (ca->id > cb->id) return  1;
+  return 0;
+}
+
+/*************
+ *
+ *   load_checkpoint_into_loop()
+ *
+ *   Load checkpoint data and rebuild indexes INSIDE the main search loop.
+ *   Called at the same program point as the checkpoint save (before
+ *   make_inferences, after limbo_process from the previous iteration).
+ *   This ensures save and restore happen at the same loop location,
+ *   producing bit-identical state.
+ *
+ *************/
+
+static
+void load_checkpoint_into_loop(void)
 {
   Clist_pos p;
   int fpa_depth;
-  /* Temporary list: move SOS clauses out, orient/index, then insert back
-     via insert_into_sos2 for weight-ordered given-clause selection. */
-  Clist temp_sos = clist_init("temp_sos");
+  Clist temp_sos;
 
-  /* Determine which indexes are needed (after auto_inference has
-     potentially changed inference rule flags) */
+  /* 1. Clear Glob lists (may contain setup-phase clauses from saved_input) */
+  while (Glob.sos->first)
+    clist_remove(Glob.sos->first->c, Glob.sos);
+  while (Glob.usable->first)
+    clist_remove(Glob.usable->first->c, Glob.usable);
+  while (Glob.demods->first)
+    clist_remove(Glob.demods->first->c, Glob.demods);
+  while (Glob.hints->first)
+    clist_remove(Glob.hints->first->c, Glob.hints);
+
+  /* 2. Load checkpoint data */
+  resume_load_clauses(Resume_dir);
+  restore_fpa_ids(Resume_dir);
+#ifndef PRIMITIVE_ENVIRONMENT
+  restore_checkpoint_formulas(Resume_dir);
+  restore_justifications(Resume_dir);
+#endif
+  resume_load_precedence(Resume_dir);
+
+  /* Convert preliminary precedence to actual lex_val ordering.
+     symbol_order uses the preliminary precedence + clause symbols
+     to assign lex_val (the actual precedence used by term ordering). */
+  symbol_order(Glob.usable, Glob.sos, Glob.demods, !flag(Opt->quiet));
+
+  /* 3. Initialize indexes */
   Glob.use_clash_idx = (flag(Opt->binary_resolution) ||
                         flag(Opt->neg_binary_resolution) ||
                         flag(Opt->pos_hyper_resolution) ||
@@ -5330,127 +5384,152 @@ void resume_index_clauses(void)
                  parm(Opt->eval_limit),
                  parm(Opt->eval_var_limit));
 
-  /* Index usable clauses.  On resume, clauses were saved in oriented
-     form with normalized variables -- skip orient_equalities to avoid
-     secondary ordering decisions that may differ from the original run. */
-  for (p = Glob.usable->first; p != NULL; p = p->next) {
-    Topform c = p->c;
-    orient_equalities(c, !Resuming);  /* mark only on resume (no flips) */
-    mark_maximal_literals(c->literals);
-    mark_selected_literals(c->literals, stringparm1(Opt->literal_selection));
-    index_literals(c, INSERT, Clocks.index, FALSE);
-    index_back_demod(c, INSERT, Clocks.index, flag(Opt->back_demod));
-    index_clashable(c, INSERT);
-  }
-
-  /* Index demodulators */
-  for (p = Glob.demods->first; p != NULL; p = p->next) {
-    Topform c = p->c;
-    if (pos_eq_unit(c->literals)) {
-      orient_equalities(c, !Resuming);
-      {
-        int type = demodulator_type(c,
-                     parm(Opt->lex_dep_demod_lim),
-                     flag(Opt->lex_dep_demod_sane));
-        if (type == NOT_DEMODULATOR)
-          type = ORIENTED;  /* trust the checkpoint */
-        index_demodulator(c, type, INSERT, Clocks.index);
-      }
-    }
-  }
-  if (flag(Opt->eval_rewrite))
-    init_dollar_eval(Glob.demods);
-
-  /* Index hints.  On resume, skip orient/renumber -- hints were saved
-     in their final form. */
+  /* 4-8. Orient, index all checkpoint clauses in CLAUSE ID ORDER.
+     The original run indexed clauses in the order they were discovered
+     (which is strictly increasing by clause ID).  DISCRIM tree leaf-list
+     ordering depends on insertion order, so we must reproduce it exactly
+     for deterministic forward subsumption (backsub_check is bounded). */
   {
-    int hint_id_number = 1;
-    for (p = Glob.hints->first; p != NULL; p = p->next) {
-      Topform h = p->c;
-      h->id = hint_id_number++;
-      orient_equalities(h, !Resuming);  /* mark only on resume */
-      if (!Resuming)
-        renumber_variables(h, MAX_VARS);
-      index_hint(h);
-    }
-  }
+    int n_usable, n_sos, n_all, idx;
+    Topform *all_clauses;  /* merged usable+SOS for ID-sorted indexing */
 
-  /* Restore matching_hint pointers from checkpoint metadata.
-     Hint IDs are now 1..N (assigned above).  For each clause with a
-     saved hint_match, walk the hints list to the matching position. */
-  if (Resume_meta != NULL) {
-    int i, restored = 0;
-    /* Build hint array for O(1) lookup by ID */
-    Topform *hint_arr = NULL;
-    int hint_count = Glob.hints->length;
-    if (hint_count > 0) {
-      hint_arr = (Topform *) safe_malloc((hint_count + 1) * sizeof(Topform));
-      for (p = Glob.hints->first; p != NULL; p = p->next) {
-        Topform h = p->c;
-        if (h->id >= 1 && h->id <= (unsigned long long)hint_count)
-          hint_arr[h->id] = h;
-      }
-    }
-    for (i = 0; i < Resume_meta_count; i++) {
-      if (Resume_meta[i].hint_match > 0 && hint_arr != NULL &&
-          Resume_meta[i].hint_match <= hint_count) {
-        Topform c = find_clause_by_id(Resume_meta[i].id);
-        if (c != NULL) {
-          c->matching_hint = hint_arr[Resume_meta[i].hint_match];
-          restored++;
+    /* Build merged array of usable + SOS clauses */
+    n_usable = Glob.usable->length;
+    n_sos    = Glob.sos->length;
+    n_all    = n_usable + n_sos;
+    all_clauses = (Topform *) safe_malloc(n_all * sizeof(Topform));
+    idx = 0;
+    for (p = Glob.usable->first; p != NULL; p = p->next)
+      all_clauses[idx++] = p->c;
+    for (p = Glob.sos->first; p != NULL; p = p->next)
+      all_clauses[idx++] = p->c;
+
+    /* Sort by clause ID (reproduces original insertion order) */
+    qsort(all_clauses, n_all, sizeof(Topform), topform_id_qsort_compare);
+
+    /* Orient and index all usable+SOS clauses in ID order.
+       First n_usable entries came from usable, rest from SOS, but after
+       sorting they're interleaved.  Use a hash to identify usable clauses. */
+    {
+      /* Build quick-lookup set of usable clause IDs */
+      int *is_usable = (int *) safe_calloc(n_all, sizeof(int));
+      for (p = Glob.usable->first; p != NULL; p = p->next) {
+        int j;
+        for (j = 0; j < n_all; j++) {
+          if (all_clauses[j] == p->c) { is_usable[j] = 1; break; }
         }
       }
+      for (idx = 0; idx < n_all; idx++) {
+        Topform c = all_clauses[idx];
+        orient_equalities(c, FALSE);  /* mark-only (already oriented) */
+        upward_clause_links(c);       /* set container pointers */
+        mark_maximal_literals(c->literals);
+        mark_selected_literals(c->literals, stringparm1(Opt->literal_selection));
+        index_literals_fpa_only(c, INSERT, Clocks.index, FALSE);
+        index_back_demod(c, INSERT, Clocks.index, flag(Opt->back_demod));
+        if (is_usable[idx])
+          index_clashable(c, INSERT);
+      }
+      safe_free(is_usable);
     }
-    if (hint_arr) safe_free(hint_arr);
-    safe_free(Resume_meta);
-    Resume_meta = NULL;
-    if (restored > 0)
-      printf("%%   Restored %d hint matches from checkpoint.\n", restored);
+    safe_free(all_clauses);
+
+    /* Orient demodulators and set up container links (needed for
+       demod index serialization which navigates term→clause) */
+    for (p = Glob.demods->first; p != NULL; p = p->next) {
+      Topform c = p->c;
+      orient_equalities(c, FALSE);
+      upward_clause_links(c);
+    }
+
+    /* Restore DISCRIM index leaf orderings from serialized data.
+       This preserves the exact leaf-list order from the original run,
+       which determines forward demodulation and subsumption behavior. */
+    restore_demod_index(Resume_dir, Clocks.index);
+    restore_unit_discrim_index(Resume_dir);
+
+    if (flag(Opt->eval_rewrite))
+      init_dollar_eval(Glob.demods);
+
+    /* Index hints (these have their own ID namespace 1..N, order preserved) */
+    {
+      int hint_id_number = 1;
+      for (p = Glob.hints->first; p != NULL; p = p->next) {
+        Topform h = p->c;
+        h->id = hint_id_number++;
+        orient_equalities(h, FALSE);
+        renumber_variables(h, MAX_VARS);
+        index_hint(h);
+      }
+    }
+
+    /* Restore matching_hint pointers from checkpoint metadata */
+    if (Resume_meta != NULL) {
+      int i, restored = 0;
+      Topform *hint_arr = NULL;
+      int hint_count = Glob.hints->length;
+      if (hint_count > 0) {
+        hint_arr = (Topform *) safe_malloc((hint_count+1) * sizeof(Topform));
+        for (p = Glob.hints->first; p != NULL; p = p->next) {
+          Topform h = p->c;
+          if (h->id >= 1 && h->id <= (unsigned long long)hint_count)
+            hint_arr[h->id] = h;
+        }
+      }
+      for (i = 0; i < Resume_meta_count; i++) {
+        if (Resume_meta[i].hint_match > 0 && hint_arr != NULL &&
+            Resume_meta[i].hint_match <= hint_count) {
+          Topform c = find_clause_by_id(Resume_meta[i].id);
+          if (c != NULL) {
+            c->matching_hint = hint_arr[Resume_meta[i].hint_match];
+            restored++;
+          }
+        }
+      }
+      if (hint_arr) safe_free(hint_arr);
+      safe_free(Resume_meta);
+      Resume_meta = NULL;
+      if (restored > 0)
+        printf("%%   Restored %d hint matches from checkpoint.\n", restored);
+    }
+
+    /* Insert SOS clauses into weight-ordered AVL for given selection */
+    temp_sos = clist_init("temp_sos");
+    while (Glob.sos->first) {
+      Topform c = Glob.sos->first->c;
+      clist_remove(c, Glob.sos);
+      clist_append(c, temp_sos);
+    }
+    while (temp_sos->first) {
+      Topform c = temp_sos->first->c;
+      clist_remove(c, temp_sos);
+      insert_into_sos2(c, Glob.sos);
+    }
+    clist_zap(temp_sos);
   }
 
-  /* Index limbo clauses (they were cl_processed in the original run,
-     so they need literal indexing for hyper-resolution to find them).
-     Note: do NOT call index_back_demod here — limbo_process will call
-     it when moving clauses to SOS/usable. */
-  for (p = Glob.limbo->first; p != NULL; p = p->next) {
-    Topform c = p->c;
-    orient_equalities(c, !Resuming);  /* mark only on resume */
-    mark_maximal_literals(c->literals);
-    mark_selected_literals(c->literals, stringparm1(Opt->literal_selection));
-    index_literals(c, INSERT, Clocks.index, FALSE);
-  }
+  /* 9. Restore selector cycle state */
+  if (Resume_low_selector_name[0] != '\0')
+    set_low_selector_state(Resume_low_selector_name,
+                           Resume_low_selector_count);
+  if (Resume_high_selector_name[0] != '\0')
+    set_high_selector_state(Resume_high_selector_name,
+                            Resume_high_selector_count);
 
-  /* Move SOS clauses to temp list, orient/index, then insert back
-     via insert_into_sos2 for weight-ordered given-clause selection. */
-  while (Glob.sos->first) {
-    Topform c = Glob.sos->first->c;
-    clist_remove(c, Glob.sos);
-    clist_append(c, temp_sos);
-  }
-  for (p = temp_sos->first; p != NULL; p = p->next) {
-    Topform c = p->c;
-    orient_equalities(c, !Resuming);  /* mark only on resume */
-    mark_maximal_literals(c->literals);
-    mark_selected_literals(c->literals, stringparm1(Opt->literal_selection));
-    index_literals(c, INSERT, Clocks.index, FALSE);
-    index_back_demod(c, INSERT, Clocks.index, flag(Opt->back_demod));
-  }
-  while (temp_sos->first) {
-    Topform c = temp_sos->first->c;
-    clist_remove(c, temp_sos);
-    insert_into_sos2(c, Glob.sos);
-  }
-  clist_zap(temp_sos);
+  /* 10. Verify checkpoint hashes */
+  if (flag(Opt->checkpoint_verify))
+    verify_checkpoint_hashes(Resume_dir);
 
-  if (!flag(Opt->quiet))
-    printf("%% Resumed: sos=%d, usable=%d, demods=%d, disabled=%d\n",
-           Glob.sos->length, Glob.usable->length, Glob.demods->length,
-           Glob.disabled->length);
+  if (flag(Opt->print_derivations))
+    get_hit_list();
 
-  /* Update size stats */
+  /* 11. Update stats and print status */
   update_stats();
 
   if (!flag(Opt->quiet)) {
+    printf("%% Resumed: sos=%d, usable=%d, demods=%d, disabled=%d\n",
+           Glob.sos->length, Glob.usable->length, Glob.demods->length,
+           Glob.disabled->length);
     print_separator(stdout, "end of process initial clauses", TRUE);
     print_separator(stdout, "CLAUSES FOR SEARCH", TRUE);
   }
@@ -5469,7 +5548,7 @@ void resume_index_clauses(void)
 
   if (!flag(Opt->quiet))
     print_separator(stdout, "end of clauses for search", TRUE);
-}  /* resume_index_clauses */
+}  /* load_checkpoint_into_loop */
 
 /*************
  *
@@ -5574,46 +5653,19 @@ Prover_results search(Prover_input p)
     Glob.empties  = NULL;
 
     if (p->resume_dir) {
-      // Resume from checkpoint.
-      // Follows the same ordering as the normal path:
-      //   1. Load clauses (symbols are created)
-      //   2. basic_clause_properties (sets Glob.horn, equality, unit)
-      //   3. init_search (symbol_order, auto_inference, auto_process, etc.)
-      //   4. Orient, index, and insert clauses
+      // Resume from checkpoint.  Minimal setup here — the actual checkpoint
+      // data is loaded inside the main loop's first iteration, at the same
+      // program point as the checkpoint save (before make_inferences).
+      // saved_input.txt has clear(auto_inference)/clear(auto_process) so
+      // init_search won't re-run auto-mode on the empty clause lists.
 
-      resume_load_clauses(p->resume_dir);       // load into Glob lists, no orient/index
-      restore_fpa_ids(p->resume_dir);           // restore FPA_IDs (best-effort, before orient)
-      /* Diagnostic: verify FPA IDs immediately after restore, before indexing */
-      if (flag(Opt->checkpoint_verify)) {
-        printf("\n%% FPA hash check (after restore, before index):\n");
-        printf("%%   sos_fpa_pre:    %llu\n", hash_clist_fpa_ids(Glob.sos));
-        printf("%%   usable_fpa_pre: %llu\n", hash_clist_fpa_ids(Glob.usable));
-        printf("%%   hints_fpa_pre:  %llu\n", hash_clist_fpa_ids(Glob.hints));
-        printf("%%   limbo_fpa_pre:  %llu\n", hash_clist_fpa_ids(Glob.limbo));
-        fflush(stdout);
-      }
-#ifndef PRIMITIVE_ENVIRONMENT
-      restore_checkpoint_formulas(p->resume_dir); // restore goal formulas for proof ancestry
-      restore_justifications(p->resume_dir);    // restore real justifications for proof output
-#endif
-      resume_load_precedence(p->resume_dir);    // restore symbol ordering from checkpoint
+      resume_load_precedence(p->resume_dir);  // set preliminary precedence
+                                               // BEFORE init_search so
+                                               // symbol_order uses it
       basic_clause_properties(Glob.sos, Glob.usable);
-      init_search();                             // full init with clauses present
-      Resuming = TRUE;
-      resume_index_clauses();                    // index (skip orient -- already done)
-      Resuming = FALSE;
-      /* Restore selector cycle positions for deterministic given selection */
-      if (Resume_low_selector_name[0] != '\0')
-        set_low_selector_state(Resume_low_selector_name,
-                               Resume_low_selector_count);
-      if (Resume_high_selector_name[0] != '\0')
-        set_high_selector_state(Resume_high_selector_name,
-                                Resume_high_selector_count);
-      /* Verify checkpoint hashes if enabled */
-      if (flag(Opt->checkpoint_verify))
-        verify_checkpoint_hashes(p->resume_dir);
-      if (flag(Opt->print_derivations))
-	get_hit_list();
+      init_search();
+      Resume_dir = p->resume_dir;
+      Load_checkpoint = TRUE;
     }
     else {
       // Normal path.
@@ -5703,15 +5755,65 @@ Prover_results search(Prover_input p)
     if (parm(Opt->max_seconds) >= 0)
       set_clash_deadline(time(NULL) + (time_t)parm(Opt->max_seconds));
 
-    // On resume, process limbo clauses first.  The checkpoint was written
-    // after make_inferences() but before limbo_process().  The original
-    // run's next action was limbo_process(); we must do the same.
-    if (p->resume_dir && !clist_empty(Glob.limbo))
-      limbo_process(FALSE);
 
     // ****************************** Main Loop ******************************
+    //
+    // Checkpoint save and load happen at the TOP of the loop, BEFORE
+    // make_inferences().  At this point limbo is empty (drained by the
+    // previous iteration's limbo_process).  Save and load at the same
+    // program point guarantees bit-identical state on resume.
 
-    while (inferences_to_make()) {
+    while (Load_checkpoint || inferences_to_make()) {
+
+#ifndef __EMSCRIPTEN__
+      // Checkpoint save triggers (periodic / SIGUSR2).
+      // Skip on the first iteration if we are loading a checkpoint.
+      if (!Load_checkpoint) {
+
+        // Check for periodic automatic checkpoint
+        if (parm(Opt->checkpoint_minutes) > 0) {
+          time_t now = time(NULL);
+          if (now - Last_auto_ckpt_time >=
+              (time_t)parm(Opt->checkpoint_minutes) * 60) {
+            char auto_dir[512];
+            fprintf(stderr, "\nPeriodic checkpoint at given #%llu...\n",
+                    Stats.given);
+            fflush(stderr);
+            write_checkpoint();
+            fprintf(stderr, "\nCheckpoint saved at given #%llu.\n",
+                    Stats.given);
+            fflush(stderr);
+            Last_auto_ckpt_time = now;
+            snprintf(auto_dir, sizeof(auto_dir),
+                     "prover9_%d_ckpt_%llu", getpid(), Stats.given);
+            record_auto_checkpoint(auto_dir);
+            if (flag(Opt->checkpoint_exit))
+              done_with_search(CHECKPOINT_EXIT);
+          }
+        }
+
+        // Check for SIGUSR2 checkpoint request
+        if (checkpoint_requested()) {
+          fprintf(stderr, "\nCheckpoint requested at given #%llu...\n",
+                  Stats.given);
+          fflush(stderr);
+          write_checkpoint();
+          fprintf(stderr, "\nCheckpoint saved at given #%llu.\n",
+                  Stats.given);
+          fflush(stderr);
+          clear_checkpoint_request();
+          if (flag(Opt->checkpoint_exit))
+            done_with_search(CHECKPOINT_EXIT);
+        }
+
+      }  /* !Load_checkpoint */
+#endif /* !__EMSCRIPTEN__ */
+
+      // Checkpoint load (resume — first iteration only).
+      if (Load_checkpoint) {
+        load_checkpoint_into_loop();
+        Load_checkpoint = FALSE;
+      }
 
       // make_inferences: each inferred clause is cl_processed, which
       // does forward demodulation and subsumption; if the clause is kept
@@ -5729,43 +5831,6 @@ Prover_results search(Prover_input p)
         Progress_callback(STAGE_SEARCHING, (int) Stats.given, (int) Stats.kept,
                           (int) Stats.sos_size, (int) Stats.usable_size,
                           (int) megs_malloced());
-
-#ifndef __EMSCRIPTEN__
-      // Check for periodic automatic checkpoint
-      if (parm(Opt->checkpoint_minutes) > 0) {
-        time_t now = time(NULL);
-        if (now - Last_auto_ckpt_time >=
-            (time_t)parm(Opt->checkpoint_minutes) * 60) {
-          char auto_dir[512];
-          fprintf(stderr, "\nPeriodic checkpoint at given #%llu...\n",
-                  Stats.given);
-          fflush(stderr);
-          write_checkpoint();
-          fprintf(stderr, "\nCheckpoint saved at given #%llu.\n", Stats.given);
-          fflush(stderr);
-          Last_auto_ckpt_time = now;
-          // Reconstruct the directory name (same format as write_checkpoint)
-          snprintf(auto_dir, sizeof(auto_dir),
-                   "prover9_%d_ckpt_%llu", getpid(), Stats.given);
-          record_auto_checkpoint(auto_dir);
-          if (flag(Opt->checkpoint_exit))
-            done_with_search(CHECKPOINT_EXIT);
-        }
-      }
-
-      // Check for SIGUSR2 checkpoint request
-      if (checkpoint_requested()) {
-        fprintf(stderr, "\nCheckpoint requested at given #%llu...\n",
-                Stats.given);
-        fflush(stderr);
-        write_checkpoint();
-        fprintf(stderr, "\nCheckpoint saved at given #%llu.\n", Stats.given);
-        fflush(stderr);
-        clear_checkpoint_request();
-        if (flag(Opt->checkpoint_exit))
-          done_with_search(CHECKPOINT_EXIT);
-      }
-#endif /* !__EMSCRIPTEN__ */
 
       /* Periodic hint expiry sweep */
       if (parm(Opt->hint_expiry) > 0 &&

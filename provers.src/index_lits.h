@@ -52,4 +52,10 @@ Plist back_subsumption(Topform c);
 
 void lits_idx_report(void);
 
+void index_literals_fpa_only(Topform c, Indexop op, Clock clock, BOOL no_fapl);
+
+void write_unit_discrim_index(const char *dir);
+
+void restore_unit_discrim_index(const char *dir);
+
 #endif  /* conditional compilation of whole file */

@@ -26,6 +26,182 @@ static Lindex  Nonunit_fpa_idx;       /* back unit del */
 static Lindex  Unit_discrim_idx;      /* unit fsub, unit del */
 static Di_tree Nonunit_features_idx;  /* nonunit fsub, nonunit bsub */
 
+
+
+/*************
+ *
+ *   write_discrim_entries() -- walk DISCRIM tree, write clause IDs
+ *
+ *   Uses the same n-counter as zap_discrim_tree in discrim.c.
+ *   For each leaf entry (an atom Term), navigates atom->container
+ *   to get the clause ID.
+ *
+ *************/
+
+static
+void write_discrim_entries(FILE *fp, Discrim root)
+{
+  struct frame { Discrim node; int n; };
+  int cap = 256, top = 0;
+  struct frame *stack = (struct frame *) safe_malloc(cap * sizeof(struct frame));
+
+  stack[top].node = root;
+  stack[top].n = 1;
+  top++;
+
+  while (top > 0) {
+    Discrim cur;
+    int cur_n;
+
+    top--;
+    cur = stack[top].node;
+    cur_n = stack[top].n;
+
+    if (cur_n == 0) {
+      Plist p;
+      for (p = cur->u.data; p != NULL; p = p->next) {
+        Term atom = (Term) p->v;
+        Topform c = (Topform) atom->container;
+        fprintf(fp, "%llu\n", c->id);
+      }
+    }
+    else {
+      Discrim k;
+      Discrim *kids = NULL;
+      int n_kids = 0, i;
+
+      for (k = cur->u.kids; k != NULL; k = k->next)
+        n_kids++;
+      if (n_kids > 0) {
+        kids = (Discrim *) safe_malloc(n_kids * sizeof(Discrim));
+        i = 0;
+        for (k = cur->u.kids; k != NULL; k = k->next)
+          kids[i++] = k;
+        for (i = n_kids - 1; i >= 0; i--) {
+          int arity;
+          k = kids[i];
+          if (k->type == AC_ARG_TYPE || k->type == AC_NV_ARG_TYPE)
+            arity = 0;
+          else if (DVAR(k))
+            arity = 0;
+          else
+            arity = sn_to_arity(k->symbol);
+          if (top >= cap) {
+            cap *= 2;
+            stack = (struct frame *) safe_realloc(stack,
+                                                  cap * sizeof(struct frame));
+          }
+          stack[top].node = k;
+          stack[top].n = cur_n + arity - 1;
+          top++;
+        }
+        safe_free(kids);
+      }
+    }
+  }
+  safe_free(stack);
+}
+
+/*************
+ *
+ *   write_unit_discrim_index() -- serialize Unit_discrim_idx leaf ordering
+ *
+ *************/
+
+/* PUBLIC */
+void write_unit_discrim_index(const char *dir)
+{
+  char path[600];
+  FILE *fp;
+
+  if (Unit_discrim_idx == NULL)
+    return;
+
+  snprintf(path, sizeof(path), "%s/unit_discrim_index.txt", dir);
+  fp = fopen(path, "w");
+  if (!fp)
+    return;
+
+  fprintf(fp, "POS\n");
+  if (Unit_discrim_idx->pos && Unit_discrim_idx->pos->discrim_tree)
+    write_discrim_entries(fp, Unit_discrim_idx->pos->discrim_tree);
+  fprintf(fp, "NEG\n");
+  if (Unit_discrim_idx->neg && Unit_discrim_idx->neg->discrim_tree)
+    write_discrim_entries(fp, Unit_discrim_idx->neg->discrim_tree);
+  fclose(fp);
+}  /* write_unit_discrim_index */
+
+/*************
+ *
+ *   restore_unit_discrim_index() -- rebuild from serialized leaf ordering
+ *
+ *************/
+
+/* PUBLIC */
+void restore_unit_discrim_index(const char *dir)
+{
+  char path[600];
+  FILE *fp;
+  char line[128];
+  int section = -1;  /* 0 = POS, 1 = NEG */
+  int count = 0;
+
+  snprintf(path, sizeof(path), "%s/unit_discrim_index.txt", dir);
+  fp = fopen(path, "r");
+  if (!fp)
+    return;
+
+  while (fgets(line, sizeof(line), fp)) {
+    unsigned long long clause_id;
+    if (strncmp(line, "POS", 3) == 0) {
+      section = 0;
+      continue;
+    }
+    if (strncmp(line, "NEG", 3) == 0) {
+      section = 1;
+      continue;
+    }
+    if (section < 0)
+      continue;
+    if (sscanf(line, "%llu", &clause_id) == 1) {
+      Topform c = find_clause_by_id(clause_id);
+      if (c != NULL && c->literals != NULL) {
+        Term atom = c->literals->atom;
+        if (section == 0)
+          mindex_update(Unit_discrim_idx->pos, atom, INSERT);
+        else
+          mindex_update(Unit_discrim_idx->neg, atom, INSERT);
+        count++;
+      }
+    }
+  }
+  fclose(fp);
+  printf("%%   Restored unit discrim index: %d entries from %s\n", count,
+         path);
+}  /* restore_unit_discrim_index */
+
+
+/*************
+ *
+ *   index_literals_fpa_only() -- index only into FPA indexes (skip DISCRIM)
+ *
+ *   Used during checkpoint resume: DISCRIM indexes are restored from
+ *   serialized leaf ordering; FPA indexes are order-independent.
+ *
+ *************/
+
+/* PUBLIC */
+void index_literals_fpa_only(Topform c, Indexop op, Clock clock, BOOL no_fapl)
+{
+  BOOL unit = (number_of_literals(c->literals) == 1);
+  clock_start(clock);
+  if (!no_fapl || !positive_clause(c->literals))
+    lindex_update(unit ? Unit_fpa_idx : Nonunit_fpa_idx, c, op);
+  /* Skip Unit_discrim_idx and Nonunit_features_idx — restored from file */
+  clock_stop(clock);
+}  /* index_literals_fpa_only */
+
+
 /*************
  *
  *   init_lits_index()
