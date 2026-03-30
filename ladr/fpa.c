@@ -30,6 +30,7 @@
 /* Private definitions and types */
 
 static unsigned Fpa_id_count = 0;
+static unsigned Fpa_new_assigns = 0;
 
 static unsigned Next_calls = 0;
 static unsigned Next_calls_overflows = 0;
@@ -937,8 +938,10 @@ void fpa_update(Term t, Fpa_index idx, Indexop op)
   struct path p;
 
   if (FPA_ID(t) == 0) {
-    if (op == INSERT)
+    if (op == INSERT) {
       FPA_ID(t) = ++Fpa_id_count;
+      Fpa_new_assigns++;
+    }
     else
       fatal_error("fpa_update: FPA_ID=0.");
   }
@@ -1857,6 +1860,18 @@ void set_fpa_id_count(unsigned n)
 {
   Fpa_id_count = n;
 }  /* set_fpa_id_count */
+
+/* PUBLIC */
+unsigned get_fpa_new_assigns(void)
+{
+  return Fpa_new_assigns;
+}
+
+/* PUBLIC */
+void reset_fpa_new_assigns(void)
+{
+  Fpa_new_assigns = 0;
+}
 
 /*************
  *

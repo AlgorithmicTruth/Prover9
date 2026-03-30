@@ -47,4 +47,6 @@ BOOL cac_tautology(Literals lits);
 
 BOOL cac_redundancy(Topform c, BOOL print);
 
+BOOL seed_cac_properties(Topform c);
+
 #endif  /* conditional compilation of whole file */

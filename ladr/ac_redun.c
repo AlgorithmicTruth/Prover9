@@ -514,3 +514,57 @@ BOOL cac_redundancy(Topform c, BOOL print)
 
 }  /* cac_redundancy */
 
+/*************
+ *
+ *  seed_cac_properties()
+ *
+ *************/
+
+/* DOCUMENTATION
+Detect commutativity/associativity/c-associativity in a clause and
+update the C/A1/A2/AC symbol lists WITHOUT applying tautology checks
+(which would modify the clause).  Used during checkpoint resume to
+rebuild the AC/C detection state from loaded clauses.
+Returns TRUE if a new property was recorded.
+*/
+
+/* PUBLIC */
+BOOL seed_cac_properties(Topform c)
+{
+  BOOL changed = FALSE;
+  if (pos_eq_unit(c->literals)) {
+    Term atom = c->literals->atom;
+    int sn;
+
+    sn = commutativity(atom);
+    if (sn > 0 && !ilist_member(C_symbols, sn)) {
+      C_symbols = ilist_append(C_symbols, sn);
+      changed = TRUE;
+    }
+
+    sn = associativity(atom);
+    if (sn > 0 && !ilist_member(A1_symbols, sn)) {
+      A1_symbols = ilist_append(A1_symbols, sn);
+      changed = TRUE;
+    }
+
+    sn = c_associativity(atom);
+    if (sn > 0 && !ilist_member(A2_symbols, sn)) {
+      A2_symbols = ilist_append(A2_symbols, sn);
+      changed = TRUE;
+    }
+
+    /* Check if we now have all three for any symbol */
+    if (changed) {
+      int check_sn = SYMNUM(ARG(atom, 0));
+      if (ilist_member(C_symbols, check_sn) &&
+          ilist_member(A1_symbols, check_sn) &&
+          ilist_member(A2_symbols, check_sn) &&
+          !ilist_member(AC_symbols, check_sn)) {
+        AC_symbols = ilist_append(AC_symbols, check_sn);
+      }
+    }
+  }
+  return changed;
+}  /* seed_cac_properties */
+

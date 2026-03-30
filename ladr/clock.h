@@ -78,6 +78,8 @@ unsigned user_time();
 
 double user_seconds();
 
+void set_user_seconds_offset(double offset);
+
 unsigned system_time();
 
 double system_seconds();

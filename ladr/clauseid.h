@@ -48,6 +48,8 @@ BOOL clause_plist_member(Plist p, Topform c, BOOL increasing);
 
 void set_clause_id_count(unsigned long long n);
 
+void clear_clause_id_tab(void);
+
 void register_clause_with_id(Topform c);
 
 Plist collect_formulas_from_id_tab(void);

@@ -269,6 +269,34 @@ void set_clause_id_count(unsigned long long n)
 
 /*************
  *
+ *   clear_clause_id_tab()
+ *
+ *************/
+
+/* DOCUMENTATION
+Clear all entries from the clause ID hash table.  Used before reloading
+clauses from a checkpoint (in-process save+reload test) to prevent stale
+entries from shadowing newly-loaded clauses.
+Clause objects are NOT freed — they are leaked.
+*/
+
+/* PUBLIC */
+void clear_clause_id_tab(void)
+{
+  int i;
+  for (i = 0; i < CLAUSE_ID_TAB_SIZE; i++) {
+    Plist p = Topform_id_tab[i];
+    while (p) {
+      Plist next = p->next;
+      free_plist(p);
+      p = next;
+    }
+    Topform_id_tab[i] = NULL;
+  }
+}  /* clear_clause_id_tab */
+
+/*************
+ *
  *   register_clause_with_id()
  *
  *************/

@@ -18,6 +18,7 @@
 
 #include "search.h"
 #include "provers.h"
+#include "../ladr/ac_redun.h"
 #include "../ladr/memory.h"
 #include "../ladr/string.h"
 #include "../ladr/sine.h"
@@ -74,6 +75,19 @@ static int Resume_meta_count = 0;
 /* In-loop checkpoint loading state */
 static BOOL Load_checkpoint = FALSE;  /* TRUE on first loop iteration during resume */
 static const char *Resume_dir = NULL; /* checkpoint directory for in-loop loading */
+
+/* Saved cac_clauses IDs from checkpoint (restored after clause loading) */
+static unsigned long long *Resume_cac_ids = NULL;
+static int Resume_cac_count = 0;
+
+/* Saved desc_to_be_disabled IDs from checkpoint */
+static unsigned long long *Resume_dtbd_ids = NULL;
+static int Resume_dtbd_count = 0;
+
+/* Hoisted from make_inferences() for checkpoint save/restore */
+static int Bf_level = 0;             /* breadth-first level counter */
+static int Bf_last_of_level = 0;     /* last clause ID of current level */
+static int Nohints_count = 0;        /* consecutive givens without hint match */
 
 /* Periodic automatic checkpoint state */
 static time_t Last_auto_ckpt_time = 0;       // wall-clock of last auto checkpoint
@@ -2802,8 +2816,6 @@ void make_inferences(void)
   clock_stop(Clocks.pick_given);
 
   if (given_clause != NULL) {
-    static int level = 0;             // NOTE: STATIC VARIABLE
-    static int last_of_level = 0;     // NOTE: STATIC VARIABLE
 
     // Print "level" message for breadth-first; also "level" actions.
 
@@ -2813,20 +2825,20 @@ void make_inferences(void)
 	parm(Opt->weight_part) == 0 &&
 	parm(Opt->random_part) == 0 &&
 	str_ident(selection_type, "A") &&
-	given_clause->id > last_of_level) {
-      level++;
-      last_of_level = clause_ids_assigned();
+	given_clause->id > Bf_last_of_level) {
+      Bf_level++;
+      Bf_last_of_level = clause_ids_assigned();
       if (!flag(Opt->quiet)) {
 	printf("\nNOTE: Starting on level %d, last clause "
 	       "of level %d is %d.\n",
-	       level, level-1, last_of_level);
+	       Bf_level, Bf_level-1, Bf_last_of_level);
 	fflush(stdout);
 	fprintf(stderr, "\nStarting on level %d, last clause "
 		"of level %d is %d.\n",
-		level, level-1, last_of_level);
+		Bf_level, Bf_level-1, Bf_last_of_level);
 	fflush(stderr);
       }
-      statistic_actions("level", level);
+      statistic_actions("level", Bf_level);
     }
 
     Stats.given++;
@@ -2835,16 +2847,15 @@ void make_inferences(void)
 
     /* max_nohints: exit after N consecutive givens w/o hint match (Veroff) */
     {
-      static int nohints_count = 0;
       BOOL hint_matcher = given_clause->matching_hint != NULL
 	&& (parm(Opt->degrade_limit) == -1
 	    || (int)(given_clause->weight / 1000) <= parm(Opt->degrade_limit));
       if (given_clause->initial || hint_matcher)
-	nohints_count = 0;
+	Nohints_count = 0;
       else
-	nohints_count++;
+	Nohints_count++;
       if (parm(Opt->max_nohints) > 0
-	  && nohints_count > parm(Opt->max_nohints)) {
+	  && Nohints_count > parm(Opt->max_nohints)) {
 	printf("\n%% %d givens in a row w/o an input clause or a hint matcher "
 	       "(max_nohints).\n", parm(Opt->max_nohints));
 	done_with_search(MAX_NOHINTS_EXIT);
@@ -3176,15 +3187,23 @@ void init_search_early(void)
 
   if (Glob.given_selection == NULL)
     Glob.given_selection = selector_rules_from_options(Opt);
-  else if (flag(Opt->input_sos_first))
+  else if (Resume_dir == NULL && flag(Opt->input_sos_first))
+    /* Skip on resume: saved_input.txt already has the complete
+       given_selection list including the "I" rule from the original run.
+       Re-prepending would duplicate it, corrupting the picker cycle. */
     Glob.given_selection = plist_prepend(Glob.given_selection,
 					 selector_rule_term("I", "high", "age",
 							    "initial",
 							    INT_MAX));
   init_giv_select(Glob.given_selection);
 
-  Glob.delete_rules = plist_cat(delete_rules_from_options(Opt),
-				Glob.delete_rules);
+  /* On resume, saved_input.txt already has the complete delete_rules.
+     Skip merging defaults to avoid duplication. */
+  if (Resume_dir == NULL)
+    Glob.delete_rules = plist_cat(delete_rules_from_options(Opt),
+				  Glob.delete_rules);
+  else if (Glob.delete_rules == NULL)
+    Glob.delete_rules = delete_rules_from_options(Opt);
 
   init_white_black(Glob.keep_rules, Glob.delete_rules);
 
@@ -3223,6 +3242,14 @@ void init_search_early(void)
 static
 void init_search_late(void)
 {
+  /* On resume, skip all clause-dependent initialization.  The checkpoint
+     captures the final state of precedence, KBO weights, unfold symbols,
+     and inference/process flags.  load_checkpoint_into_loop() calls
+     symbol_order() on the loaded clauses.  Only the package option calls
+     (resolution_options, paramodulation_options) are needed here. */
+  if (Resume_dir != NULL)
+    goto package_options;
+
   // Symbol precedence (examines clauses)
 
   symbol_order(Glob.usable, Glob.sos, Glob.demods, !flag(Opt->quiet));
@@ -3307,6 +3334,7 @@ void init_search_late(void)
 
   // Tell packages about options and other things.
 
+package_options:
   resolution_options(flag(Opt->ordered_res),
 		     flag(Opt->check_res_instances),
 		     flag(Opt->initial_nuclei),
@@ -3813,6 +3841,10 @@ int write_clist_bare(FILE *clause_fp, FILE *data_fp,
         fprintf(data_fp, " shared");
       if (c->matching_hint != NULL)
         fprintf(data_fp, " hint_match %d", (int)c->matching_hint->id);
+      if (c->used)
+        fprintf(data_fp, " used");
+      if (c->was_given)
+        fprintf(data_fp, " was_given");
       /* Save atom private_flags for each literal (carries oriented_eq,
          renamable_flip, maximal, selected marks — lost in text round-trip) */
       {
@@ -4587,6 +4619,26 @@ void write_checkpoint_input(const char *dir)
     fwrite_term_list(fp, Glob.weights, "weights");
   if (Glob.kbo_weights)
     fwrite_term_list(fp, Glob.kbo_weights, "kbo_weights");
+  else if (stringparm(Opt->order, "kbo")) {
+    /* KBO with auto-generated weights: reconstruct list(kbo_weights) from
+       current symbol table so the resume process gets the exact weights
+       instead of re-running auto_kbo_weights on empty clause lists. */
+    Ilist fsyms = current_fsym_precedence();
+    Ilist p;
+    BOOL any_nondefault = FALSE;
+    for (p = fsyms; p; p = p->next) {
+      if (sn_to_kb_wt(p->i) != 1) { any_nondefault = TRUE; break; }
+    }
+    if (any_nondefault) {
+      fprintf(fp, "\nlist(kbo_weights).\n");
+      for (p = fsyms; p; p = p->next) {
+        if (sn_to_kb_wt(p->i) != 1)
+          fprintf(fp, "%s = %d.\n", sn_to_str(p->i), sn_to_kb_wt(p->i));
+      }
+      fprintf(fp, "end_of_list.\n");
+    }
+    zap_ilist(fsyms);
+  }
   if (Glob.actions)
     fwrite_term_list(fp, Glob.actions, "actions");
   if (Glob.interps)
@@ -4678,6 +4730,26 @@ void write_checkpoint(void)
       fprintf(fp, "high_selector %s\n", sel_name);
       fprintf(fp, "high_selector_count %d\n", sel_count);
     }
+    /* Save cac_clauses IDs (commutativity/associativity/AC triggers) */
+    if (Glob.cac_clauses != NULL) {
+      Plist p;
+      fprintf(fp, "cac_clauses");
+      for (p = Glob.cac_clauses; p; p = p->next)
+        fprintf(fp, " %llu", ((Topform) p->v)->id);
+      fprintf(fp, "\n");
+    }
+    /* Save desc_to_be_disabled clause IDs (may be NULL at checkpoint time) */
+    if (Glob.desc_to_be_disabled != NULL) {
+      Plist p;
+      fprintf(fp, "desc_to_be_disabled");
+      for (p = Glob.desc_to_be_disabled; p; p = p->next)
+        fprintf(fp, " %llu", ((Topform) p->v)->id);
+      fprintf(fp, "\n");
+    }
+    /* Save hoisted function-local statics */
+    fprintf(fp, "bf_level %d\n", Bf_level);
+    fprintf(fp, "bf_last_of_level %d\n", Bf_last_of_level);
+    fprintf(fp, "nohints_count %d\n", Nohints_count);
     fclose(fp);
   }
 
@@ -4762,6 +4834,25 @@ void write_checkpoint(void)
                                           "disabled", NULL, 0);
         fclose(fp);
       }
+    }
+
+    /* Empties (proof clauses) — Plist, not Clist.  Build temporary Clist. */
+    if (Glob.empties != NULL) {
+      Plist ep;
+      Clist tmp_empties = clist_init("empties");
+      for (ep = Glob.empties; ep; ep = ep->next)
+        clist_append((Topform) ep->v, tmp_empties);
+      snprintf(cpath, sizeof(cpath), "%s/empties.clauses", tmpdir);
+      fp = fopen(cpath, "w");
+      if (fp) {
+        total_clauses += write_clist_bare(fp, data_fp, tmp_empties,
+                                          "empties", NULL, 0);
+        fclose(fp);
+      }
+      /* Remove from temp Clist without freeing clauses */
+      while (tmp_empties->first)
+        clist_remove(tmp_empties->first->c, tmp_empties);
+      clist_zap(tmp_empties);
     }
 
     }  /* end seen_tab scope */
@@ -4909,6 +5000,28 @@ BOOL read_metadata_str(FILE *fp, const char *key, char *val, int val_size)
 
 /*************
  *
+ *   read_metadata_double()
+ *
+ *   Read a named double value from metadata.
+ *
+ *************/
+
+static
+double read_metadata_double(FILE *fp, const char *key)
+{
+  char buf[256], name[128];
+  double val;
+  while (fgets(buf, sizeof(buf), fp)) {
+    if (sscanf(buf, "%127s %lf", name, &val) == 2) {
+      if (strcmp(name, key) == 0)
+        return val;
+    }
+  }
+  return 0.0;  /* not found — no warning, old checkpoints may lack this */
+}  /* read_metadata_double */
+
+/*************
+ *
  *   load_clause_data()
  *
  *   Read clause_data.txt into parallel arrays indexed by (list, position).
@@ -4924,6 +5037,8 @@ struct clause_meta {
   int initial;    /* c->initial flag (0 or 1) */
   int shared;     /* 1 if clause is shared with another list (dedup) */
   int hint_match; /* matched hint ID (1-based), 0 if none */
+  int used;       /* c->used flag */
+  int was_given;  /* c->was_given flag */
   unsigned aflags[10]; /* atom private_flags per literal (max 10 lits) */
   int aflags_count;    /* number of aflags entries */
 };
@@ -4948,6 +5063,8 @@ int load_clause_data(const char *dir, struct clause_meta **out)
     char *p;
     m->shared = 0;
     m->hint_match = 0;
+    m->used = 0;
+    m->was_given = 0;
     m->aflags_count = 0;
     if (sscanf(line, "%31s %d %llu %lf %d",
                m->list_name, &m->position,
@@ -4957,6 +5074,10 @@ int load_clause_data(const char *dir, struct clause_meta **out)
       p = strstr(line, "hint_match");
       if (p != NULL)
         sscanf(p, "hint_match %d", &m->hint_match);
+      if (strstr(line, " used") != NULL)
+        m->used = 1;
+      if (strstr(line, "was_given") != NULL)
+        m->was_given = 1;
       /* Parse atom private_flags: "aflags N [aflags N ...]" */
       p = strstr(line, "aflags");
       while (p != NULL && m->aflags_count < 10) {
@@ -5028,6 +5149,8 @@ Clist load_clauses_from_file(const char *dir, const char *filename,
         c->id = meta[meta_pos].id;
         c->weight = meta[meta_pos].weight;
         c->initial = meta[meta_pos].initial;
+        c->used = meta[meta_pos].used;
+        c->was_given = meta[meta_pos].was_given;
         if (!skip_register)
           register_clause_with_id(c);
         meta_pos++;
@@ -5041,6 +5164,8 @@ Clist load_clauses_from_file(const char *dir, const char *filename,
             c->id = meta[j].id;
             c->weight = meta[j].weight;
             c->initial = meta[j].initial;
+            c->used = meta[j].used;
+            c->was_given = meta[j].was_given;
             if (!skip_register)
               register_clause_with_id(c);
             break;
@@ -5149,7 +5274,7 @@ void resume_load_clauses(const char *dir)
   int meta_count, meta_offset;
   unsigned long long max_clause_id;
   Clist loaded_sos, loaded_usable, loaded_demods, loaded_hints;
-  Clist loaded_limbo, loaded_disabled;
+  Clist loaded_limbo, loaded_disabled, loaded_empties;
 
   fprintf(stderr, "Resuming from checkpoint (experimental): %s\n", dir);
   fflush(stderr);
@@ -5199,6 +5324,18 @@ void resume_load_clauses(const char *dir)
   rewind(fp); Stats.sos_displaced = read_metadata_ull(fp, "sos_displaced");
   rewind(fp); Stats.sos_removed = read_metadata_ull(fp, "sos_removed");
 
+  /* Restore accumulated CPU time from original run so max_seconds and
+     reporting account for total time across checkpoint/resume cycles. */
+  {
+    double saved_seconds;
+    rewind(fp);
+    saved_seconds = read_metadata_double(fp, "user_seconds");
+    if (saved_seconds > 0.0) {
+      set_user_seconds_offset(saved_seconds);
+      printf("%%   Restored user_seconds offset: %.2f\n", saved_seconds);
+    }
+  }
+
   /* Read selector cycle state (may not be present in old checkpoints) */
   rewind(fp);
   if (!read_metadata_str(fp, "low_selector", Resume_low_selector_name,
@@ -5212,6 +5349,64 @@ void resume_load_clauses(const char *dir)
     Resume_high_selector_name[0] = '\0';
   rewind(fp);
   Resume_high_selector_count = (int) read_metadata_ull(fp, "high_selector_count");
+
+  /* Read cac_clauses IDs (restored after clause loading via find_clause_by_id) */
+  rewind(fp);
+  {
+    char buf[4096], name[128];
+    Resume_cac_ids = NULL;
+    Resume_cac_count = 0;
+    while (fgets(buf, sizeof(buf), fp)) {
+      if (sscanf(buf, "%127s", name) == 1 && strcmp(name, "cac_clauses") == 0) {
+        char *p = buf + strlen("cac_clauses");
+        unsigned long long id;
+        int cap = 0;
+        while (sscanf(p, " %llu%n", &id, &cap) == 1) {
+          Resume_cac_count++;
+          Resume_cac_ids = (unsigned long long *)
+            safe_realloc(Resume_cac_ids,
+                         Resume_cac_count * sizeof(unsigned long long));
+          Resume_cac_ids[Resume_cac_count - 1] = id;
+          p += cap;
+        }
+        break;
+      }
+    }
+  }
+
+  /* Read desc_to_be_disabled IDs (same pattern as cac_clauses) */
+  rewind(fp);
+  {
+    char buf[4096], name[128];
+    Resume_dtbd_ids = NULL;
+    Resume_dtbd_count = 0;
+    while (fgets(buf, sizeof(buf), fp)) {
+      if (sscanf(buf, "%127s", name) == 1 &&
+          strcmp(name, "desc_to_be_disabled") == 0) {
+        char *p = buf + strlen("desc_to_be_disabled");
+        unsigned long long id;
+        int cap = 0;
+        while (sscanf(p, " %llu%n", &id, &cap) == 1) {
+          Resume_dtbd_count++;
+          Resume_dtbd_ids = (unsigned long long *)
+            safe_realloc(Resume_dtbd_ids,
+                         Resume_dtbd_count * sizeof(unsigned long long));
+          Resume_dtbd_ids[Resume_dtbd_count - 1] = id;
+          p += cap;
+        }
+        break;
+      }
+    }
+  }
+
+  /* Restore hoisted function-local statics */
+  rewind(fp);
+  Bf_level = (int) read_metadata_ull(fp, "bf_level");
+  rewind(fp);
+  Bf_last_of_level = (int) read_metadata_ull(fp, "bf_last_of_level");
+  rewind(fp);
+  Nohints_count = (int) read_metadata_ull(fp, "nohints_count");
+
   fclose(fp);
 
   /* 2. Load clause_data */
@@ -5240,6 +5435,10 @@ void resume_load_clauses(const char *dir)
                                             "disabled",
                                             meta, meta_count, &meta_offset,
                                             FALSE);
+  loaded_empties = load_clauses_from_file(dir, "empties.clauses",
+                                           "empties",
+                                           meta, meta_count, &meta_offset,
+                                           FALSE);
 
   /* 4. Set clause ID counter past all loaded IDs */
   set_clause_id_count(max_clause_id);
@@ -5321,6 +5520,19 @@ void resume_load_clauses(const char *dir)
     }
     clist_zap(loaded_disabled);
   }
+  /* Empties (proof clauses) — load into Glob.empties Plist */
+  if (loaded_empties) {
+    int n = 0;
+    while (loaded_empties->first) {
+      Topform c = loaded_empties->first->c;
+      clist_remove(c, loaded_empties);
+      Glob.empties = plist_append(Glob.empties, c);
+      n++;
+    }
+    clist_zap(loaded_empties);
+    if (n > 0)
+      printf("%%   Restored %d empty (proof) clauses from checkpoint.\n", n);
+  }
   /* Keep meta for hint_match restoration in resume_index_clauses */
   Resume_meta = meta;
   Resume_meta_count = meta_count;
@@ -5370,7 +5582,11 @@ void load_checkpoint_into_loop(void)
   int fpa_depth;
   Clist temp_sos;
 
-  /* 0. Restore symbol table (symnum assignments) BEFORE any clause loading.
+  /* 0a. Clear clause ID hash table so stale entries don't shadow
+     newly-loaded clauses (critical for in-process save+reload). */
+  clear_clause_id_tab();
+
+  /* 0b. Restore symbol table (symnum assignments) BEFORE any clause loading.
      Ensures str_to_sn assigns the same symnums as the original run, which
      is critical for term_compare_vcp secondary ordering. */
   {
@@ -5442,10 +5658,82 @@ void load_checkpoint_into_loop(void)
            restored, not_found);
   }
 
+  /* Clear and restore Glob.cac_clauses from saved IDs.
+     Must clear first — in-process reload leaves stale entries. */
+  if (Glob.cac_clauses != NULL) {
+    zap_plist(Glob.cac_clauses);
+    Glob.cac_clauses = NULL;
+  }
+  if (Resume_cac_ids != NULL) {
+    int i, restored = 0;
+    /* Iterate backward: IDs were written head-to-tail, plist_prepend
+       reverses, so backward iteration preserves original order. */
+    for (i = Resume_cac_count - 1; i >= 0; i--) {
+      Topform c = find_clause_by_id(Resume_cac_ids[i]);
+      if (c != NULL) {
+        Glob.cac_clauses = plist_prepend(Glob.cac_clauses, c);
+        restored++;
+      }
+    }
+    safe_free(Resume_cac_ids);
+    Resume_cac_ids = NULL;
+    if (restored > 0)
+      printf("%%   Restored %d cac_clauses from checkpoint.\n", restored);
+  }
+
+  /* Clear and restore Glob.desc_to_be_disabled from saved IDs. */
+  if (Glob.desc_to_be_disabled != NULL) {
+    zap_plist(Glob.desc_to_be_disabled);
+    Glob.desc_to_be_disabled = NULL;
+  }
+  if (Resume_dtbd_ids != NULL) {
+    int i, restored = 0;
+    for (i = Resume_dtbd_count - 1; i >= 0; i--) {
+      Topform c = find_clause_by_id(Resume_dtbd_ids[i]);
+      if (c != NULL) {
+        Glob.desc_to_be_disabled = plist_prepend(Glob.desc_to_be_disabled, c);
+        restored++;
+      }
+    }
+    safe_free(Resume_dtbd_ids);
+    Resume_dtbd_ids = NULL;
+    if (restored > 0)
+      printf("%%   Restored %d desc_to_be_disabled from checkpoint.\n",
+             restored);
+  }
+
+  /* Recompute clause properties from loaded clauses (the call in the
+     resume setup block ran on empty lists before clauses were loaded). */
+  basic_clause_properties(Glob.sos, Glob.usable);
+
+  /* Rebuild AC/C redundancy detection state from loaded clauses.
+     The ac_redun.c static lists (C_symbols, A1_symbols, A2_symbols,
+     AC_symbols) are process-local and empty in a fresh process.
+     Scan for commutativity/associativity axioms to re-seed them. */
+  if (flag(Opt->cac_redundancy)) {
+    Clist scan_lists[4];
+    int li, seeded = 0;
+    scan_lists[0] = Glob.usable;
+    scan_lists[1] = Glob.sos;
+    scan_lists[2] = Glob.demods;
+    scan_lists[3] = Glob.disabled;
+    for (li = 0; li < 4; li++) {
+      Clist_pos cp;
+      for (cp = scan_lists[li]->first; cp != NULL; cp = cp->next) {
+        if (seed_cac_properties(cp->c))
+          seeded++;
+      }
+    }
+    if (seeded > 0)
+      printf("%%   Seeded %d CAC properties from checkpoint clauses.\n",
+             seeded);
+  }
+
   /* Convert preliminary precedence to actual lex_val ordering.
      symbol_order uses the preliminary precedence + clause symbols
      to assign lex_val (the actual precedence used by term ordering). */
   symbol_order(Glob.usable, Glob.sos, Glob.demods, !flag(Opt->quiet));
+
 
   /* 3. Re-initialize indexes (old indexes are leaked — acceptable for
      in-process save+reload testing and cross-process resume alike) */
@@ -5753,12 +6041,13 @@ Prover_results search(Prover_input p)
       // saved_input.txt has clear(auto_inference)/clear(auto_process) so
       // init_search won't re-run auto-mode on the empty clause lists.
 
+      Resume_dir = p->resume_dir;  // set BEFORE init_search so it can
+                                    // skip duplicate given_selection/delete_rules
       resume_load_precedence(p->resume_dir);  // set preliminary precedence
                                                // BEFORE init_search so
                                                // symbol_order uses it
       basic_clause_properties(Glob.sos, Glob.usable);
       init_search();
-      Resume_dir = p->resume_dir;
       Load_checkpoint = TRUE;
     }
     else {
@@ -5914,6 +6203,7 @@ Prover_results search(Prover_input p)
       // does forward demodulation and subsumption; if the clause is kept
       // it is put on the Limbo list, and it is indexed so that it can be
       // used immediately with subsequent newly inferred clauses.
+
 
       make_inferences();
 

@@ -101,6 +101,10 @@ unsigned get_fpa_id_count(void);
 
 void set_fpa_id_count(unsigned n);
 
+unsigned get_fpa_new_assigns(void);
+
+void reset_fpa_new_assigns(void);
+
 void set_fpa_hash_threshold(int n);
 
 int get_fpa_hash_threshold(void);

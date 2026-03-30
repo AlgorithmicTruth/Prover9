@@ -28,6 +28,7 @@ struct clock {
 };
 
 static BOOL Clocks_enabled = TRUE;   /* getrusage can be slow */
+static double User_seconds_offset = 0.0;  /* added to user_seconds for resume */
 static unsigned Clock_starts = 0;    /* Keep a count */
 
 static unsigned Wall_start;          /* for measuring wall-clock time */
@@ -333,7 +334,7 @@ current process has used so far.
 double user_seconds()
 {
 #ifdef PRIMITIVE_ENVIRONMENT
-  return (double)clock() / CLOCKS_PER_SEC;
+  return User_seconds_offset + (double)clock() / CLOCKS_PER_SEC;
 #else
   struct rusage r;
   unsigned sec, usec;
@@ -342,9 +343,26 @@ double user_seconds()
   sec = r.ru_utime.tv_sec;
   usec = r.ru_utime.tv_usec;
 
-  return(sec + (usec / 1000000.0));
+  return User_seconds_offset + sec + (usec / 1000000.0);
 #endif
 }  /* user_seconds */
+
+/*************
+ *
+ *   set_user_seconds_offset()
+ *
+ *************/
+
+/* DOCUMENTATION
+Set an offset that is added to user_seconds().  Used on checkpoint
+resume so the reported CPU time includes time from the original run.
+*/
+
+/* PUBLIC */
+void set_user_seconds_offset(double offset)
+{
+  User_seconds_offset = offset;
+}  /* set_user_seconds_offset */
 
 /*************
  *
