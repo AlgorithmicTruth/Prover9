@@ -5367,8 +5367,11 @@ void resume_load_clauses(const char *dir)
     rewind(fp);
     saved_seconds = read_metadata_double(fp, "user_seconds");
     if (saved_seconds > 0.0) {
-      set_user_seconds_offset(saved_seconds);
-      printf("%%   Restored user_seconds offset: %.2f\n", saved_seconds);
+      /* Don't restore wall clock offset — it causes checkpoint_minutes
+         to trigger immediately on resume if the saved time exceeds the
+         interval.  CPU time is tracked separately in statistics. */
+      /* set_user_seconds_offset(saved_seconds); */
+      printf("%%   Saved user_seconds: %.2f (not restored)\n", saved_seconds);
     }
   }
 
@@ -6107,12 +6110,25 @@ void load_checkpoint_into_loop(void)
         printf("%%   Restored %d hint matches from checkpoint.\n", restored);
     }
 
-    /* Bulk-insert SOS clauses into weight-ordered AVL for given selection.
-       Uses sorted-array AVL construction instead of n individual inserts. */
-    fprintf(stderr, "%% Inserting %d SOS clauses into selection queue...\n",
-            Glob.sos->length);
-    fflush(stderr);
-    bulk_insert_into_sos2(Glob.sos);
+    /* Insert SOS clauses into weight-ordered AVL for given selection. */
+    {
+      Clist temp_sos;
+      fprintf(stderr, "%% Inserting %d SOS clauses into selection queue...\n",
+              Glob.sos->length);
+      fflush(stderr);
+      temp_sos = clist_init("temp_sos");
+      while (Glob.sos->first) {
+        Topform c = Glob.sos->first->c;
+        clist_remove(c, Glob.sos);
+        clist_append(c, temp_sos);
+      }
+      while (temp_sos->first) {
+        Topform c = temp_sos->first->c;
+        clist_remove(c, temp_sos);
+        insert_into_sos2(c, Glob.sos);
+      }
+      clist_zap(temp_sos);
+    }
   }
 
   /* 9. Restore selector cycle state */
