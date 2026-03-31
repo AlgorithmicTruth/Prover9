@@ -108,4 +108,6 @@ BOOL fpalist_empty(Fpa_list p);
 
 void p_fpa_list(Fpa_chunk c);
 
+Fpa_list fpalist_build(Term *terms, int n);
+
 #endif  /* conditional compilation of whole file */

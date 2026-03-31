@@ -404,3 +404,67 @@ void lits_idx_report(void)
   printf("Neg nonunit lits index: ");
   p_fpa_density(Nonunit_fpa_idx->neg->fpa);
 }  /* lits_idx_report */
+
+/*************
+ *
+ *   write_fpa_lits_index() / restore_fpa_lits_index()
+ *
+ *   Serialize/deserialize the 4 FPA literal indexes for checkpoint.
+ *
+ *************/
+
+/* PUBLIC */
+void write_fpa_lits_index(const char *dir)
+{
+  char path[600];
+  FILE *fp;
+
+  snprintf(path, sizeof(path), "%s/fpa_lits_index.txt", dir);
+  fp = fopen(path, "w");
+  if (!fp) return;
+
+  fprintf(fp, "SECTION unit_pos\n");
+  fpa_write_index(fp, Unit_fpa_idx->pos->fpa);
+  fprintf(fp, "SECTION unit_neg\n");
+  fpa_write_index(fp, Unit_fpa_idx->neg->fpa);
+  fprintf(fp, "SECTION nonunit_pos\n");
+  fpa_write_index(fp, Nonunit_fpa_idx->pos->fpa);
+  fprintf(fp, "SECTION nonunit_neg\n");
+  fpa_write_index(fp, Nonunit_fpa_idx->neg->fpa);
+  fprintf(fp, "END\n");
+
+  fclose(fp);
+}  /* write_fpa_lits_index */
+
+/* PUBLIC */
+BOOL restore_fpa_lits_index(const char *dir)
+{
+  char path[600], buf[64];
+  FILE *fp;
+  int restored = 0;
+
+  snprintf(path, sizeof(path), "%s/fpa_lits_index.txt", dir);
+  fp = fopen(path, "r");
+  if (!fp) return FALSE;
+
+  while (fscanf(fp, " %63s", buf) == 1) {
+    if (strcmp(buf, "END") == 0) break;
+    if (strcmp(buf, "SECTION") != 0) continue;
+    if (fscanf(fp, " %63s", buf) != 1) break;
+
+    if (strcmp(buf, "unit_pos") == 0) {
+      if (fpa_restore_index(fp, Unit_fpa_idx->pos->fpa)) restored++;
+    } else if (strcmp(buf, "unit_neg") == 0) {
+      if (fpa_restore_index(fp, Unit_fpa_idx->neg->fpa)) restored++;
+    } else if (strcmp(buf, "nonunit_pos") == 0) {
+      if (fpa_restore_index(fp, Nonunit_fpa_idx->pos->fpa)) restored++;
+    } else if (strcmp(buf, "nonunit_neg") == 0) {
+      if (fpa_restore_index(fp, Nonunit_fpa_idx->neg->fpa)) restored++;
+    }
+  }
+
+  fclose(fp);
+  printf("%%   Restored FPA literals index: %d sections from %s\n",
+         restored, path);
+  return (restored == 4);
+}  /* restore_fpa_lits_index */

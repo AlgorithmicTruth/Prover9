@@ -53,4 +53,8 @@ Plist back_demodulatable(Topform demod, int type, BOOL lex_order_vars);
 
 void back_demod_idx_report(void);
 
+void write_fpa_back_demod_index(const char *dir);
+
+BOOL restore_fpa_back_demod_index(const char *dir);
+
 #endif  /* conditional compilation of whole file */

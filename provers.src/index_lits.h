@@ -58,4 +58,8 @@ void write_unit_discrim_index(const char *dir);
 
 void restore_unit_discrim_index(const char *dir);
 
+void write_fpa_lits_index(const char *dir);
+
+BOOL restore_fpa_lits_index(const char *dir);
+
 #endif  /* conditional compilation of whole file */

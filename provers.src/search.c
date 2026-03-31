@@ -4922,6 +4922,26 @@ void write_checkpoint(void)
     write_demod_index(tmpdir);
     write_unit_discrim_index(tmpdir);
 
+    /* 3c3. Write FPA trie structure for fast resume (avoids rebuilding
+       from scratch, which is O(n * paths * depth) for millions of clauses) */
+    write_fpa_lits_index(tmpdir);
+    write_fpa_back_demod_index(tmpdir);
+    /* Clashable FPA index */
+    {
+      char cpath[600];
+      FILE *cfp;
+      snprintf(cpath, sizeof(cpath), "%s/fpa_clashable_index.txt", tmpdir);
+      cfp = fopen(cpath, "w");
+      if (cfp) {
+        fprintf(cfp, "SECTION pos\n");
+        fpa_write_index(cfp, Glob.clashable_idx->pos->fpa);
+        fprintf(cfp, "SECTION neg\n");
+        fpa_write_index(cfp, Glob.clashable_idx->neg->fpa);
+        fprintf(cfp, "END\n");
+        fclose(cfp);
+      }
+    }
+
     /* 3d. Write justifications for proof reconstruction on resume */
     write_justifications(tmpdir);
 
@@ -5811,54 +5831,171 @@ void load_checkpoint_into_loop(void)
     /* Sort by clause ID (reproduces original insertion order) */
     qsort(all_clauses, n_all, sizeof(Topform), topform_id_qsort_compare);
 
-    /* Orient and index all usable+SOS clauses in ID order.
-       First n_usable entries came from usable, rest from SOS, but after
-       sorting they're interleaved.  Use a hash to identify usable clauses. */
+    /* Set container links for all clauses (needed regardless of index method) */
+    for (idx = 0; idx < n_all; idx++)
+      upward_clause_links(all_clauses[idx]);
+
+    /* Try fast FPA restore from serialized trie files.
+       Falls back to per-clause FPA rebuild if files are missing. */
     {
-      /* Mark usable clauses via container pointer.  After upward_clause_links,
-         c->justification->u.lst points to the containing Clist.  We can check
-         membership by comparing against Glob.usable.  But upward_clause_links
-         hasn't been called yet, so use a simple bitmap indexed by array pos. */
-      char *is_usable = (char *) safe_calloc(n_all, sizeof(char));
+      BOOL fpa_restored = FALSE;
+
+      /* Build FPA_ID -> Term* lookup table for trie restore */
       {
-        /* After qsort, usable clauses are interleaved with SOS.
-           Use a hash: scan usable list O(n_usable), then for each sorted
-           entry do a binary search O(log n_all) to find its index. */
+        unsigned id_count = get_fpa_id_count();
+        Term *id_table = (Term *) safe_calloc(id_count + 1, sizeof(Term));
+        int vi;
+        Term v;
+
+        /* Collect variable term IDs */
+        for (vi = 0; (v = get_variable_term_if_exists(vi)) != NULL; vi++) {
+          if (FPA_ID(v) != 0 && FPA_ID(v) <= id_count)
+            id_table[FPA_ID(v)] = v;
+        }
+        /* Collect all clause term IDs */
+        for (idx = 0; idx < n_all; idx++) {
+          Literals lit;
+          for (lit = all_clauses[idx]->literals; lit != NULL; lit = lit->next) {
+            Term atom = lit->atom;
+            /* Walk atom and all subterms (for back_demod index) */
+            {
+              struct { Term t; int i; } stk[256];
+              int sp = 0;
+              stk[sp].t = atom; stk[sp].i = 0; sp++;
+              while (sp > 0) {
+                Term t = stk[sp-1].t;
+                int ci = stk[sp-1].i;
+                if (ci >= ARITY(t)) {
+                  if (FPA_ID(t) != 0 && FPA_ID(t) <= id_count)
+                    id_table[FPA_ID(t)] = t;
+                  sp--;
+                } else {
+                  stk[sp-1].i = ci + 1;
+                  if (sp < 256) {
+                    stk[sp].t = ARG(t, ci);
+                    stk[sp].i = 0;
+                    sp++;
+                  }
+                }
+              }
+            }
+          }
+        }
+        /* Also walk hint and disabled clause terms */
+        {
+          Clist extra_lists[2];
+          int li;
+          extra_lists[0] = Glob.hints;
+          extra_lists[1] = Glob.disabled;
+          for (li = 0; li < 2; li++) {
+            Clist_pos cp;
+            for (cp = extra_lists[li]->first; cp != NULL; cp = cp->next) {
+              Literals lit;
+              for (lit = cp->c->literals; lit != NULL; lit = lit->next) {
+                Term atom = lit->atom;
+                struct { Term t; int i; } stk[256];
+                int sp = 0;
+                stk[sp].t = atom; stk[sp].i = 0; sp++;
+                while (sp > 0) {
+                  Term t = stk[sp-1].t;
+                  int ci = stk[sp-1].i;
+                  if (ci >= ARITY(t)) {
+                    if (FPA_ID(t) != 0 && FPA_ID(t) <= id_count)
+                      id_table[FPA_ID(t)] = t;
+                    sp--;
+                  } else {
+                    stk[sp-1].i = ci + 1;
+                    if (sp < 256) {
+                      stk[sp].t = ARG(t, ci);
+                      stk[sp].i = 0;
+                      sp++;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        fpa_set_id_table(id_table, id_count);
+        fprintf(stderr, "%% Built FPA_ID lookup table (%u entries).\n", id_count);
+        fflush(stderr);
+      }
+
+      /* Try restoring FPA indexes from serialized trie files */
+      {
+        BOOL lits_ok, bdemod_ok, clash_ok;
+        fprintf(stderr, "%% Restoring FPA indexes from checkpoint...\n");
+        fflush(stderr);
+
+        lits_ok = restore_fpa_lits_index(Resume_dir);
+        bdemod_ok = restore_fpa_back_demod_index(Resume_dir);
+
+        /* Clashable FPA index */
+        clash_ok = FALSE;
+        {
+          char cpath[600];
+          FILE *cfp;
+          snprintf(cpath, sizeof(cpath), "%s/fpa_clashable_index.txt", Resume_dir);
+          cfp = fopen(cpath, "r");
+          if (cfp) {
+            char buf[64];
+            int restored = 0;
+            while (fscanf(cfp, " %63s", buf) == 1) {
+              if (strcmp(buf, "END") == 0) break;
+              if (strcmp(buf, "SECTION") != 0) continue;
+              if (fscanf(cfp, " %63s", buf) != 1) break;
+              if (strcmp(buf, "pos") == 0) {
+                if (fpa_restore_index(cfp, Glob.clashable_idx->pos->fpa))
+                  restored++;
+              } else if (strcmp(buf, "neg") == 0) {
+                if (fpa_restore_index(cfp, Glob.clashable_idx->neg->fpa))
+                  restored++;
+              }
+            }
+            fclose(cfp);
+            clash_ok = (restored == 2);
+            if (clash_ok)
+              printf("%%   Restored FPA clashable index from %s\n", cpath);
+          }
+        }
+
+        fpa_restored = lits_ok && bdemod_ok && clash_ok;
+      }
+
+      fpa_free_id_table();
+
+      if (!fpa_restored) {
+        /* Fallback: rebuild FPA indexes from scratch (format 3 checkpoints
+           or missing FPA trie files). */
+        char *is_usable = (char *) safe_calloc(n_all, sizeof(char));
         for (p = Glob.usable->first; p != NULL; p = p->next) {
-          /* Binary search for p->c in the ID-sorted all_clauses array */
           int lo = 0, hi = n_all - 1;
           while (lo <= hi) {
             int mid = lo + (hi - lo) / 2;
             if (all_clauses[mid]->id == p->c->id) {
-              is_usable[mid] = 1;
-              break;
+              is_usable[mid] = 1; break;
             }
-            else if (all_clauses[mid]->id < p->c->id)
-              lo = mid + 1;
-            else
-              hi = mid - 1;
+            else if (all_clauses[mid]->id < p->c->id) lo = mid + 1;
+            else hi = mid - 1;
           }
         }
-      }
-      fprintf(stderr, "%% Indexing %d clauses...\n", n_all);
-      fflush(stderr);
-      for (idx = 0; idx < n_all; idx++) {
-        Topform c = all_clauses[idx];
-        /* Skip orient_equalities and mark_maximal/selected — the atom
-           private_flags (aflags) were restored from checkpoint metadata.
-           Re-computing would overwrite with potentially different results
-           due to cross-process state differences. */
-        upward_clause_links(c);       /* set container pointers */
-        index_literals_fpa_only(c, INSERT, Clocks.index, FALSE);
-        index_back_demod(c, INSERT, Clocks.index, flag(Opt->back_demod));
-        if (is_usable[idx])
-          index_clashable(c, INSERT);
-        if ((idx + 1) % 1000000 == 0) {
-          fprintf(stderr, "%%   %d / %d clauses indexed...\n", idx + 1, n_all);
-          fflush(stderr);
+        fprintf(stderr, "%% FPA trie files not found, rebuilding indexes...\n");
+        fprintf(stderr, "%% Indexing %d clauses...\n", n_all);
+        fflush(stderr);
+        for (idx = 0; idx < n_all; idx++) {
+          Topform c = all_clauses[idx];
+          index_literals_fpa_only(c, INSERT, Clocks.index, FALSE);
+          index_back_demod(c, INSERT, Clocks.index, flag(Opt->back_demod));
+          if (is_usable[idx])
+            index_clashable(c, INSERT);
+          if ((idx + 1) % 1000000 == 0) {
+            fprintf(stderr, "%%   %d / %d clauses indexed...\n", idx + 1, n_all);
+            fflush(stderr);
+          }
         }
+        safe_free(is_usable);
       }
-      safe_free(is_usable);
     }
     safe_free(all_clauses);
 

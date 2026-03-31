@@ -568,3 +568,67 @@ void p_fpa_list(Fpa_chunk c)
   }
 }  /* p_fpa_list */
 
+/*************
+ *
+ *   fpalist_build()
+ *
+ *   Build an Fpa_list from an array of Term pointers already sorted
+ *   in decreasing FPA_ID order.  This is O(n) — no per-element
+ *   insertion, no sorting, no chunk splitting.  Used for fast
+ *   checkpoint restore of serialized FPA indexes.
+ *
+ *************/
+
+/* PUBLIC */
+Fpa_list fpalist_build(Term *terms, int n)
+{
+  Fpa_list p = get_fpa_list();
+  int chunksize, remaining, pos;
+
+  if (n == 0) return p;
+
+  /* Choose chunk size: double from F_INITIAL_SIZE until it covers n,
+     but cap at F_MAX_SIZE.  This mirrors what fpalist_insert would
+     end up with after n insertions. */
+  chunksize = F_INITIAL_SIZE;
+  while (chunksize < F_MAX_SIZE && chunksize * chunksize < n)
+    chunksize *= 2;
+  p->chunksize = chunksize;
+
+  /* Build chunks from the front of the array (highest FPA_IDs first,
+     which is how the decreasing-order list is structured). */
+  remaining = n;
+  pos = 0;
+  while (remaining > 0) {
+    int fill = (remaining < chunksize) ? remaining : chunksize;
+    Fpa_chunk c = get_fpa_chunk(chunksize);
+    int i;
+    /* Right-justify: items go in d[chunksize-fill .. chunksize-1] */
+    for (i = 0; i < fill; i++)
+      c->d[chunksize - fill + i] = terms[pos + i];
+    c->n = fill;
+    c->head = p;
+    /* Prepend — we'll reverse after the loop so chunks are in order */
+    c->next = p->chunks;
+    p->chunks = c;
+    p->num_chunks++;
+    pos += fill;
+    remaining -= fill;
+  }
+
+  /* Reverse chunk list so first chunk has highest FPA_IDs */
+  {
+    Fpa_chunk prev = NULL, cur = p->chunks, next;
+    while (cur) {
+      next = cur->next;
+      cur->next = prev;
+      prev = cur;
+      cur = next;
+    }
+    p->chunks = prev;
+  }
+
+  p->num_terms = n;
+  return p;
+}  /* fpalist_build */
+

@@ -163,8 +163,9 @@ Plist nonneg_clauses(Plist clauses)
   for (p = clauses; p; p = p->next) {
     Topform c = p->v;
     if (!negative_clause(c->literals))
-      nonneg = plist_append(nonneg, c);
+      nonneg = plist_prepend(nonneg, c);
   }
+  nonneg = reverse_plist(nonneg);
   return nonneg;
 }  /* nonneg_clauses */
 

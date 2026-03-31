@@ -1902,3 +1902,209 @@ int get_fpa_hash_threshold(void)
   return 0;
 #endif
 }  /* get_fpa_hash_threshold */
+
+/* ============ FPA trie serialization for checkpoint/resume ============ */
+
+/* FPA_ID -> Term* lookup table for trie restore.
+   Set by fpa_set_id_table() before calling fpa_restore_index(). */
+static Term   *Id_table = NULL;
+static unsigned Id_table_size = 0;
+
+/*************
+ *
+ *   fpa_set_id_table() / fpa_free_id_table()
+ *
+ *   The caller builds the table (needs Clist/Literals access)
+ *   and passes it here for use during fpa_restore_index().
+ *
+ *************/
+
+/* PUBLIC */
+void fpa_set_id_table(Term *table, unsigned size)
+{
+  Id_table = table;
+  Id_table_size = size;
+}  /* fpa_set_id_table */
+
+/* PUBLIC */
+void fpa_free_id_table(void)
+{
+  if (Id_table != NULL) {
+    safe_free(Id_table);
+    Id_table = NULL;
+    Id_table_size = 0;
+  }
+}  /* fpa_free_id_table */
+
+/*************
+ *
+ *   fpa_write_trie_node()  (recursive DFS)
+ *
+ *   Write one FPA trie node and its subtree in pre-order DFS.
+ *   Format per node:
+ *     N <label> <num_terms> <num_children>
+ *     T <id1> <id2> ...    (only if num_terms > 0)
+ *     [child subtrees follow]
+ *
+ *************/
+
+static int fpa_count_kids(Fpa_trie node)
+{
+  int n = 0;
+  Fpa_trie k;
+  for (k = node->kids; k != NULL; k = k->next)
+    n++;
+  return n;
+}
+
+static void fpa_write_trie_node(FILE *fp, Fpa_trie node)
+{
+  Fpa_trie kid;
+  int nkids = fpa_count_kids(node);
+  int nterms = (node->terms != NULL) ? node->terms->num_terms : 0;
+
+  fprintf(fp, "N %d %d %d\n", node->label, nterms, nkids);
+
+  if (nterms > 0) {
+    struct fposition pos;
+    fprintf(fp, "T");
+    for (pos = first_fpos(node->terms); FTERM(pos) != NULL;
+         pos = next_fpos(pos))
+      fprintf(fp, " %u", FPA_ID(FTERM(pos)));
+    fprintf(fp, "\n");
+  }
+
+  for (kid = node->kids; kid != NULL; kid = kid->next)
+    fpa_write_trie_node(fp, kid);
+}
+
+/*************
+ *
+ *   fpa_write_index()
+ *
+ *   Write an entire FPA index to a file.
+ *
+ *************/
+
+/* PUBLIC */
+void fpa_write_index(FILE *fp, Fpa_index idx)
+{
+  if (idx == NULL || idx->root == NULL) {
+    fprintf(fp, "EMPTY\n");
+    return;
+  }
+  fprintf(fp, "DEPTH %d\n", idx->depth);
+  fpa_write_trie_node(fp, idx->root);
+}  /* fpa_write_index */
+
+/*************
+ *
+ *   fpa_restore_trie_node()  (recursive DFS)
+ *
+ *   Read one FPA trie node and its subtree from serialized data.
+ *
+ *************/
+
+static Fpa_trie fpa_restore_trie_node(FILE *fp, Fpa_trie parent)
+{
+  char tag;
+  int label, nterms, nkids, i;
+  Fpa_trie node;
+
+  if (fscanf(fp, " %c %d %d %d", &tag, &label, &nterms, &nkids) != 4 ||
+      tag != 'N')
+    return NULL;
+
+  node = get_fpa_trie();
+  node->label = label;
+  node->parent = parent;
+
+  if (nterms > 0) {
+    /* Read term IDs and resolve to Term pointers */
+    Term *terms_arr = (Term *) safe_malloc(nterms * sizeof(Term));
+    int valid = 0;
+
+    if (fscanf(fp, " %c", &tag) != 1 || tag != 'T') {
+      safe_free(terms_arr);
+      return node;
+    }
+
+    for (i = 0; i < nterms; i++) {
+      unsigned id;
+      if (fscanf(fp, " %u", &id) != 1) break;
+      if (id <= Id_table_size && Id_table[id] != NULL)
+        terms_arr[valid++] = Id_table[id];
+    }
+
+    if (valid > 0)
+      node->terms = fpalist_build(terms_arr, valid);
+
+    safe_free(terms_arr);
+  }
+
+  /* Read children */
+  {
+    Fpa_trie last_kid = NULL;
+    for (i = 0; i < nkids; i++) {
+      Fpa_trie kid = fpa_restore_trie_node(fp, node);
+      if (kid == NULL) break;
+      /* Append to kids list (preserve order) */
+      if (last_kid == NULL)
+        node->kids = kid;
+      else
+        last_kid->next = kid;
+      last_kid = kid;
+#ifndef NO_FPA_HASH
+      node->num_kids++;
+#endif
+    }
+  }
+
+#ifndef NO_FPA_HASH
+  /* Build hash table if needed */
+  if (node->num_kids >= Kid_hash_threshold)
+    kid_hash_build(node);
+#endif
+
+  return node;
+}
+
+/*************
+ *
+ *   fpa_restore_index()
+ *
+ *   Restore an FPA index from serialized data.  Returns TRUE on success.
+ *   The index must already be initialized (via fpa_init_index).
+ *
+ *************/
+
+/* PUBLIC */
+BOOL fpa_restore_index(FILE *fp, Fpa_index idx)
+{
+  char buf[64];
+  int depth;
+
+  if (fscanf(fp, " %63s", buf) != 1) return FALSE;
+
+  if (strcmp(buf, "EMPTY") == 0) return TRUE;  /* nothing to restore */
+
+  if (strcmp(buf, "DEPTH") != 0) return FALSE;
+  if (fscanf(fp, " %d", &depth) != 1) return FALSE;
+
+  /* depth should match the initialized index */
+  if (idx->depth != depth) {
+    fprintf(stderr, "WARNING: FPA index depth mismatch: saved=%d, current=%d\n",
+            depth, idx->depth);
+  }
+
+  /* Replace root with restored trie */
+  if (idx->root != NULL) {
+    /* Leak old root — acceptable during checkpoint restore */
+  }
+  idx->root = fpa_restore_trie_node(fp, NULL);
+  if (idx->root == NULL) {
+    idx->root = get_fpa_trie();
+    return FALSE;
+  }
+  return TRUE;
+}  /* fpa_restore_index */

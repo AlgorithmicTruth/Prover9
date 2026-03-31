@@ -109,4 +109,12 @@ void set_fpa_hash_threshold(int n);
 
 int get_fpa_hash_threshold(void);
 
+void fpa_set_id_table(Term *table, unsigned size);
+
+void fpa_free_id_table(void);
+
+void fpa_write_index(FILE *fp, Fpa_index idx);
+
+BOOL fpa_restore_index(FILE *fp, Fpa_index idx);
+
 #endif  /* conditional compilation of whole file */

@@ -348,3 +348,43 @@ void back_demod_idx_report(void)
   printf("Back demod index: ");
   p_fpa_density(Back_demod_idx->fpa);
 }  /* back_demod_idx_report */
+
+/*************
+ *
+ *   write_fpa_back_demod_index() / restore_fpa_back_demod_index()
+ *
+ *************/
+
+/* PUBLIC */
+void write_fpa_back_demod_index(const char *dir)
+{
+  char path[600];
+  FILE *fp;
+
+  snprintf(path, sizeof(path), "%s/fpa_back_demod_index.txt", dir);
+  fp = fopen(path, "w");
+  if (!fp) return;
+
+  fpa_write_index(fp, Back_demod_idx->fpa);
+
+  fclose(fp);
+}  /* write_fpa_back_demod_index */
+
+/* PUBLIC */
+BOOL restore_fpa_back_demod_index(const char *dir)
+{
+  char path[600];
+  FILE *fp;
+  BOOL ok;
+
+  snprintf(path, sizeof(path), "%s/fpa_back_demod_index.txt", dir);
+  fp = fopen(path, "r");
+  if (!fp) return FALSE;
+
+  ok = fpa_restore_index(fp, Back_demod_idx->fpa);
+
+  fclose(fp);
+  if (ok)
+    printf("%%   Restored FPA back-demod index from %s\n", path);
+  return ok;
+}  /* restore_fpa_back_demod_index */
