@@ -75,8 +75,4 @@ int active_hints(void);
 
 void print_hint_match_stats(FILE *fp, Clist hint_list);
 
-void write_fpa_hints_index(const char *dir);
-
-BOOL restore_fpa_hints_index(const char *dir);
-
 #endif  /* conditional compilation of whole file */
