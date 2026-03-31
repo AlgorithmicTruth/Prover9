@@ -672,3 +672,63 @@ void print_hint_match_stats(FILE *fp, Clist hint_list)
 
   safe_free(counts);
 }  /* print_hint_match_stats */
+
+/*************
+ *
+ *   write_fpa_hints_index() / restore_fpa_hints_index()
+ *
+ *   Serialize/deserialize the hint FPA index for fast checkpoint resume.
+ *
+ *************/
+
+/* PUBLIC */
+void write_fpa_hints_index(const char *dir)
+{
+  char path[600];
+  FILE *fp;
+
+  if (Hints_idx == NULL) return;
+
+  snprintf(path, sizeof(path), "%s/fpa_hints_index.txt", dir);
+  fp = fopen(path, "w");
+  if (!fp) return;
+
+  fprintf(fp, "SECTION pos\n");
+  fpa_write_index(fp, Hints_idx->pos->fpa);
+  fprintf(fp, "SECTION neg\n");
+  fpa_write_index(fp, Hints_idx->neg->fpa);
+  fprintf(fp, "END\n");
+
+  fclose(fp);
+}  /* write_fpa_hints_index */
+
+/* PUBLIC */
+BOOL restore_fpa_hints_index(const char *dir)
+{
+  char path[600], buf[64];
+  FILE *fp;
+  int restored = 0;
+
+  if (Hints_idx == NULL) return FALSE;
+
+  snprintf(path, sizeof(path), "%s/fpa_hints_index.txt", dir);
+  fp = fopen(path, "r");
+  if (!fp) return FALSE;
+
+  while (fscanf(fp, " %63s", buf) == 1) {
+    if (strcmp(buf, "END") == 0) break;
+    if (strcmp(buf, "SECTION") != 0) continue;
+    if (fscanf(fp, " %63s", buf) != 1) break;
+
+    if (strcmp(buf, "pos") == 0) {
+      if (fpa_restore_index(fp, Hints_idx->pos->fpa)) restored++;
+    } else if (strcmp(buf, "neg") == 0) {
+      if (fpa_restore_index(fp, Hints_idx->neg->fpa)) restored++;
+    }
+  }
+
+  fclose(fp);
+  printf("%%   Restored FPA hints index: %d sections from %s\n",
+         restored, path);
+  return (restored == 2);
+}  /* restore_fpa_hints_index */

@@ -466,6 +466,8 @@ void fpalist_delete(Fpa_list p, Term t)
 /* PUBLIC */
 struct fposition first_fpos(Fpa_list f)
 {
+  if (f == NULL)
+    return (struct fposition) {NULL, 0};
   return next_fpos((struct fposition) {f->chunks, -1});
 }  /* first_fpos */
 

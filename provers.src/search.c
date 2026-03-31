@@ -4926,6 +4926,7 @@ void write_checkpoint(void)
        from scratch, which is O(n * paths * depth) for millions of clauses) */
     write_fpa_lits_index(tmpdir);
     write_fpa_back_demod_index(tmpdir);
+    write_fpa_hints_index(tmpdir);
     /* Clashable FPA index */
     {
       char cpath[600];
@@ -6013,37 +6014,63 @@ void load_checkpoint_into_loop(void)
     if (flag(Opt->eval_rewrite))
       init_dollar_eval(Glob.demods);
 
-    /* Index hints, preserving the redundant/active partition from the
-       original run.  Hints marked redundant_hint in clause_data are put
-       directly into Redundant_hints without the subsumption check that
-       index_hint normally performs (which gives different results when
-       back-demodulated hints are re-indexed from scratch). */
+    /* Index hints.  Try fast FPA restore first; fall back to per-hint
+       orient/index if FPA files are missing. */
     {
+      BOOL hints_fpa_restored = restore_fpa_hints_index(Resume_dir);
       int hint_id_number = 1;
-      int meta_hint_pos = 0;  /* tracks position in Resume_meta hints section */
-      fprintf(stderr, "%% Indexing %d hints...\n", Glob.hints->length);
+      int meta_hint_pos = 0;
+
+      fprintf(stderr, "%% %s %d hints...\n",
+              hints_fpa_restored ? "Restoring" : "Indexing",
+              Glob.hints->length);
       fflush(stderr);
+
       for (p = Glob.hints->first; p != NULL; p = p->next) {
         Topform h = p->c;
         int is_redundant = 0;
 
-        /* Find this hint's redundant status from metadata */
+        /* Find this hint's metadata by position */
         if (Resume_meta != NULL) {
           while (meta_hint_pos < Resume_meta_count &&
                  strcmp(Resume_meta[meta_hint_pos].list_name, "hints") != 0)
             meta_hint_pos++;
-          if (meta_hint_pos < Resume_meta_count)
+          if (meta_hint_pos < Resume_meta_count) {
             is_redundant = Resume_meta[meta_hint_pos].redundant_hint;
+            /* Restore aflags (oriented_eq etc.) from checkpoint metadata */
+            if (Resume_meta[meta_hint_pos].aflags_count > 0) {
+              Literals lit;
+              int j = 0;
+              for (lit = h->literals;
+                   lit != NULL && j < Resume_meta[meta_hint_pos].aflags_count;
+                   lit = lit->next, j++)
+                lit->atom->private_flags =
+                  (FLAGS_TYPE) Resume_meta[meta_hint_pos].aflags[j];
+            }
+          }
           meta_hint_pos++;
         }
 
         h->id = hint_id_number++;
-        orient_equalities(h, FALSE);
-        renumber_variables(h, MAX_VARS);
-        if (is_redundant)
-          index_hint_as_redundant(h);
-        else
-          index_hint(h);  /* NOTE: this zeroes h->weight */
+
+        if (hints_fpa_restored) {
+          /* FPA index restored from file — skip orient/renumber/FPA insert,
+             but still maintain redundant partition and counters. */
+          h->weight = 0;
+          if (is_redundant) {
+            index_hint_as_redundant(h);
+          }
+          /* else: active hint, FPA already populated from serialization.
+             Counters and back-demod indexing handled below. */
+        } else {
+          /* Fallback: orient, renumber, and index from scratch */
+          orient_equalities(h, FALSE);
+          renumber_variables(h, MAX_VARS);
+          if (is_redundant)
+            index_hint_as_redundant(h);
+          else
+            index_hint(h);  /* NOTE: this zeroes h->weight */
+        }
       }
     }
 
