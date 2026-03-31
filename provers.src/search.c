@@ -5815,14 +5815,33 @@ void load_checkpoint_into_loop(void)
        First n_usable entries came from usable, rest from SOS, but after
        sorting they're interleaved.  Use a hash to identify usable clauses. */
     {
-      /* Build quick-lookup set of usable clause IDs */
-      int *is_usable = (int *) safe_calloc(n_all, sizeof(int));
-      for (p = Glob.usable->first; p != NULL; p = p->next) {
-        int j;
-        for (j = 0; j < n_all; j++) {
-          if (all_clauses[j] == p->c) { is_usable[j] = 1; break; }
+      /* Mark usable clauses via container pointer.  After upward_clause_links,
+         c->justification->u.lst points to the containing Clist.  We can check
+         membership by comparing against Glob.usable.  But upward_clause_links
+         hasn't been called yet, so use a simple bitmap indexed by array pos. */
+      char *is_usable = (char *) safe_calloc(n_all, sizeof(char));
+      {
+        /* After qsort, usable clauses are interleaved with SOS.
+           Use a hash: scan usable list O(n_usable), then for each sorted
+           entry do a binary search O(log n_all) to find its index. */
+        for (p = Glob.usable->first; p != NULL; p = p->next) {
+          /* Binary search for p->c in the ID-sorted all_clauses array */
+          int lo = 0, hi = n_all - 1;
+          while (lo <= hi) {
+            int mid = lo + (hi - lo) / 2;
+            if (all_clauses[mid]->id == p->c->id) {
+              is_usable[mid] = 1;
+              break;
+            }
+            else if (all_clauses[mid]->id < p->c->id)
+              lo = mid + 1;
+            else
+              hi = mid - 1;
+          }
         }
       }
+      fprintf(stderr, "%% Indexing %d clauses...\n", n_all);
+      fflush(stderr);
       for (idx = 0; idx < n_all; idx++) {
         Topform c = all_clauses[idx];
         /* Skip orient_equalities and mark_maximal/selected — the atom
@@ -5834,6 +5853,10 @@ void load_checkpoint_into_loop(void)
         index_back_demod(c, INSERT, Clocks.index, flag(Opt->back_demod));
         if (is_usable[idx])
           index_clashable(c, INSERT);
+        if ((idx + 1) % 1000000 == 0) {
+          fprintf(stderr, "%%   %d / %d clauses indexed...\n", idx + 1, n_all);
+          fflush(stderr);
+        }
       }
       safe_free(is_usable);
     }
@@ -5862,6 +5885,8 @@ void load_checkpoint_into_loop(void)
     {
       int hint_id_number = 1;
       int meta_hint_pos = 0;  /* tracks position in Resume_meta hints section */
+      fprintf(stderr, "%% Indexing %d hints...\n", Glob.hints->length);
+      fflush(stderr);
       for (p = Glob.hints->first; p != NULL; p = p->next) {
         Topform h = p->c;
         int is_redundant = 0;
@@ -5947,6 +5972,9 @@ void load_checkpoint_into_loop(void)
     }
 
     /* Insert SOS clauses into weight-ordered AVL for given selection */
+    fprintf(stderr, "%% Inserting %d SOS clauses into selection queue...\n",
+            Glob.sos->length);
+    fflush(stderr);
     temp_sos = clist_init("temp_sos");
     while (Glob.sos->first) {
       Topform c = Glob.sos->first->c;
