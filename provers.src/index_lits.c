@@ -197,7 +197,16 @@ void index_literals_fpa_only(Topform c, Indexop op, Clock clock, BOOL no_fapl)
   clock_start(clock);
   if (!no_fapl || !positive_clause(c->literals))
     lindex_update(unit ? Unit_fpa_idx : Nonunit_fpa_idx, c, op);
-  /* Skip Unit_discrim_idx and Nonunit_features_idx — restored from file */
+  /* Skip Unit_discrim_idx (restored from file).
+     But DO populate Nonunit_features_idx (subsumption filter). */
+  if (!unit) {
+    int *f = features(c->literals);
+    int flen = feature_length();
+    if (op == INSERT)
+      di_tree_insert(f, flen, Nonunit_features_idx, c);
+    else
+      di_tree_delete(f, flen, Nonunit_features_idx, c);
+  }
   clock_stop(clock);
 }  /* index_literals_fpa_only */
 
