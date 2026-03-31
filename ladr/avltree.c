@@ -660,3 +660,38 @@ void p_avl(Avl_node p, int level)
   }
 }  /* p_avl */
 
+/*************
+ *
+ *   avl_build_sorted()
+ *
+ *   Build a balanced AVL tree from a pre-sorted array of items.
+ *   O(n) — no rotations, no comparisons.  The array must be sorted
+ *   in the same order as the compare function would produce.
+ *
+ *************/
+
+static
+Avl_node avl_build_range(void **items, int lo, int hi)
+{
+  Avl_node p;
+  int mid, lh, rh;
+  if (lo > hi) return NULL;
+  mid = lo + (hi - lo) / 2;
+  p = get_avl_node();
+  p->item = items[mid];
+  p->left = avl_build_range(items, lo, mid - 1);
+  p->right = avl_build_range(items, mid + 1, hi);
+  lh = (p->left  != NULL) ? p->left->height  : 0;
+  rh = (p->right != NULL) ? p->right->height : 0;
+  p->height = 1 + (lh > rh ? lh : rh);
+  p->size = 1 + (p->left ? p->left->size : 0)
+              + (p->right ? p->right->size : 0);
+  return p;
+}
+
+/* PUBLIC */
+Avl_node avl_build_sorted(void **items, int n)
+{
+  return avl_build_range(items, 0, n - 1);
+}  /* avl_build_sorted */
+

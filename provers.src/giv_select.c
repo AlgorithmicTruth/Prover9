@@ -321,6 +321,83 @@ void remove_from_sos2(Topform c, Clist sos)
 
 /*************
  *
+ *   bulk_insert_into_sos2()
+ *
+ *   Bulk-insert all clauses from a Clist into the SOS selector AVL trees.
+ *   Uses sorted-array AVL construction: O(n log n) for qsort + O(n) for
+ *   tree build, vs O(n log n) for n individual AVL inserts but with much
+ *   better constant factor (no rotations, no per-insert rule evaluation
+ *   overhead via batching).
+ *
+ *************/
+
+/* qsort comparator wrapper — uses a static function pointer */
+static Ordertype (*Bulk_compare)(void *, void *);
+
+static int bulk_qsort_compare(const void *a, const void *b)
+{
+  Ordertype r = Bulk_compare(*(void **)a, *(void **)b);
+  return (r == LESS_THAN) ? -1 : (r == GREATER_THAN) ? 1 : 0;
+}
+
+/* PUBLIC */
+void bulk_insert_into_sos2(Clist sos)
+{
+  int n, i;
+  void **all;
+  Clist_pos cp;
+  Plist p;
+
+  n = sos->length;
+  if (n == 0) return;
+
+  /* Build array of all clauses */
+  all = (void **) safe_malloc(n * sizeof(void *));
+  i = 0;
+  for (cp = sos->first; cp != NULL; cp = cp->next)
+    all[i++] = cp->c;
+
+  /* For each selector, filter matching clauses, sort, build AVL */
+  {
+    void **matched = (void **) safe_malloc(n * sizeof(void *));
+    Select_state states[2];
+    int si;
+
+    states[0] = &High;
+    states[1] = &Low;
+
+    for (si = 0; si < 2; si++) {
+      for (p = states[si]->selectors; p; p = p->next) {
+        Giv_select gs = p->v;
+        int nm = 0;
+
+        /* Collect clauses matching this selector's property */
+        for (i = 0; i < n; i++) {
+          if (eval_clause_in_rule((Topform) all[i], gs->property))
+            matched[nm++] = all[i];
+        }
+
+        if (nm > 0) {
+          /* Sort by selector's compare function */
+          Bulk_compare = gs->compare;
+          qsort(matched, nm, sizeof(void *), bulk_qsort_compare);
+
+          /* Build balanced AVL tree from sorted array */
+          gs->idx = avl_build_sorted(matched, nm);
+
+          states[si]->occurrences += nm;
+        }
+      }
+    }
+    safe_free(matched);
+  }
+
+  Sos_size = n;
+  safe_free(all);
+}  /* bulk_insert_into_sos2 */
+
+/*************
+ *
  *   next_selector()
  *
  *************/

@@ -5616,7 +5616,6 @@ void load_checkpoint_into_loop(void)
 {
   Clist_pos p;
   int fpa_depth;
-  Clist temp_sos;
 
   /* 0a. Clear clause ID hash table so stale entries don't shadow
      newly-loaded clauses (critical for in-process save+reload). */
@@ -6108,22 +6107,12 @@ void load_checkpoint_into_loop(void)
         printf("%%   Restored %d hint matches from checkpoint.\n", restored);
     }
 
-    /* Insert SOS clauses into weight-ordered AVL for given selection */
+    /* Bulk-insert SOS clauses into weight-ordered AVL for given selection.
+       Uses sorted-array AVL construction instead of n individual inserts. */
     fprintf(stderr, "%% Inserting %d SOS clauses into selection queue...\n",
             Glob.sos->length);
     fflush(stderr);
-    temp_sos = clist_init("temp_sos");
-    while (Glob.sos->first) {
-      Topform c = Glob.sos->first->c;
-      clist_remove(c, Glob.sos);
-      clist_append(c, temp_sos);
-    }
-    while (temp_sos->first) {
-      Topform c = temp_sos->first->c;
-      clist_remove(c, temp_sos);
-      insert_into_sos2(c, Glob.sos);
-    }
-    clist_zap(temp_sos);
+    bulk_insert_into_sos2(Glob.sos);
   }
 
   /* 9. Restore selector cycle state */

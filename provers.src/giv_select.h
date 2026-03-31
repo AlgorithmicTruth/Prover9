@@ -64,4 +64,6 @@ Term selector_rule_term(char *name, char *priority,
 
 Plist selector_rules_from_options(Prover_options opt);
 
+void bulk_insert_into_sos2(Clist sos);
+
 #endif  /* conditional compilation of whole file */

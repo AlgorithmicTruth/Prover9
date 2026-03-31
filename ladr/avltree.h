@@ -90,4 +90,6 @@ void avl_check(Avl_node p,
 
 void p_avl(Avl_node p, int level);
 
+Avl_node avl_build_sorted(void **items, int n);
+
 #endif  /* conditional compilation of whole file */
