@@ -1099,21 +1099,32 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL flatten_fof)
     int tna = get_tptp_name_attr();
     char *tptp_name = get_string_attribute(c->attributes, tna, 1);
 
+    /* TPTP names containing parens, commas, or spaces must be quoted.
+       E.g., 'ass(cond(61, 0), 0)' stays quoted. */
+    char qname[512];
+    BOOL needs_quote = FALSE;
+    if (tptp_name) {
+      char *p;
+      for (p = tptp_name; *p && !needs_quote; p++) {
+        if (*p == '(' || *p == ')' || *p == ',' || *p == ' ')
+          needs_quote = TRUE;
+      }
+      if (needs_quote)
+        snprintf(qname, sizeof(qname), "'%s'", tptp_name);
+      else
+        snprintf(qname, sizeof(qname), "%s", tptp_name);
+    }
+
     if (tptp_name && (primary_type == INPUT_JUST ||
                        primary_type == GOAL_JUST)) {
-      /* Direct input with known TPTP name */
-      fprintf(fp, ", file('%s',%s)).\n", "tptp_input", tptp_name);
+      fprintf(fp, ", file('%s',%s)).\n", "tptp_input", qname);
     }
     else if (tptp_name && (promote_to_axiom || promote_to_neg_conj)) {
-      /* Clausified from a skipped FOF: use file() since the FOF parent
-         is not in the proof output (flatten_fof omitted it). */
-      fprintf(fp, ", file('%s',%s)).\n", "tptp_input", tptp_name);
+      fprintf(fp, ", file('%s',%s)).\n", "tptp_input", qname);
     }
     else if (tptp_name && (primary_type == CLAUSIFY_JUST ||
                            primary_type == DENY_JUST)) {
-      /* Clausified from a named FOF that IS in the proof output */
-      fprintf(fp, ", inference(clausify, [status(esa)], [%s])).\n",
-              tptp_name);
+      fprintf(fp, ", inference(clausify, [status(esa)], [%s])).\n", qname);
     }
     else if (primary_type == INPUT_JUST || promote_to_axiom ||
              promote_to_neg_conj) {
