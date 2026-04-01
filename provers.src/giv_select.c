@@ -351,11 +351,15 @@ void bulk_insert_into_sos2(Clist sos)
   n = sos->length;
   if (n == 0) return;
 
-  /* Build array of all clauses */
+  /* Build array of all clauses, evaluating semantics if needed */
   all = (void **) safe_malloc(n * sizeof(void *));
   i = 0;
-  for (cp = sos->first; cp != NULL; cp = cp->next)
-    all[i++] = cp->c;
+  for (cp = sos->first; cp != NULL; cp = cp->next) {
+    Topform c = cp->c;
+    if (Rule_needs_semantics)
+      set_semantics(c);
+    all[i++] = c;
+  }
 
   /* For each selector, filter matching clauses, sort, build AVL */
   {
