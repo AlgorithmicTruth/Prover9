@@ -97,4 +97,6 @@ void free_scan_result(Scan_result scan);
 
 Plist tptp_distinct_object_axioms(Plist distinct_names);
 
+int get_tptp_name_attr(void);
+
 #endif  /* conditional compilation of whole file */

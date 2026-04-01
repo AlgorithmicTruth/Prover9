@@ -40,9 +40,24 @@
 #include "tptp_parse.h"
 #include "symbols.h"
 #include "fatal.h"
+#include "attrib.h"
 #include <stdarg.h>
 #include <ctype.h>
 #include <limits.h>  /* PATH_MAX */
+
+/* Attribute ID for preserving TPTP formula names through clausification.
+   Registered lazily on first use; -1 = not yet registered. */
+static int Tptp_name_attr = -1;
+
+static void ensure_tptp_name_attr(void) {
+  if (Tptp_name_attr < 0)
+    Tptp_name_attr = register_attribute("tptp_name", STRING_ATTRIBUTE);
+}
+
+int get_tptp_name_attr(void) {
+  ensure_tptp_name_attr();
+  return Tptp_name_attr;
+}
 
 /* =========================================================================
  * Lexer
@@ -1351,6 +1366,12 @@ static void parse_tptp_input(Lexer *lex,
     expect(lex, TOK_RPAREN, "')'");
     expect(lex, TOK_DOT, "'.'");
 
+    /* Attach the TPTP formula name so it survives clausification.
+       The attribute propagates: Formula -> Topform -> clausified clauses. */
+    ensure_tptp_name_attr();
+    f->attributes = set_string_attribute(f->attributes, Tptp_name_attr,
+                                         formula_name);
+
     /* Classify by role */
     if (strcmp(role, "conjecture") == 0) {
       *goals = plist_prepend(*goals, f);
@@ -2082,6 +2103,11 @@ Tptp_input parse_scanned_formulas(Scan_result scan, BOOL *keep)
       f = parse_fof_formula(&lex, 0);
     else
       f = parse_cnf_top(&lex);
+
+    /* Attach the TPTP formula name for provenance tracking */
+    ensure_tptp_name_attr();
+    f->attributes = set_string_attribute(f->attributes, Tptp_name_attr,
+                                         e->name);
 
     /* Classify by role */
     if (e->role == SCAN_ROLE_GOAL) {

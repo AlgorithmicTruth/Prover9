@@ -23,6 +23,7 @@
 #include "../ladr/string.h"
 #include "../ladr/sine.h"
 #include "../ladr/clash.h"
+#include "../ladr/tptp_parse.h"
 #include "../VERSION_DATE.h"
 
 // system includes
@@ -1091,15 +1092,33 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL flatten_fof)
       zap_term(t);
   }
 
-  /* Print the source/inference annotation */
-  if (primary_type == INPUT_JUST || promote_to_axiom ||
-      promote_to_neg_conj) {
-    fprintf(fp, ", introduced(assumption,[])).\n");
-  }
-  else if (primary_type == GOAL_JUST) {
-    fprintf(fp, ", introduced(conjecture,[])).\n");
-  }
-  else {
+  /* Print the source/inference annotation.
+     If the clause carries a tptp_name attribute (from TPTP input parsing),
+     emit file() or inference(clausify) to preserve provenance. */
+  {
+    int tna = get_tptp_name_attr();
+    char *tptp_name = get_string_attribute(c->attributes, tna, 1);
+
+    if (tptp_name && (primary_type == INPUT_JUST ||
+                       primary_type == GOAL_JUST)) {
+      /* Direct input with known TPTP name */
+      fprintf(fp, ", file('%s',%s)).\n", "tptp_input", tptp_name);
+    }
+    else if (tptp_name && (primary_type == CLAUSIFY_JUST ||
+                           primary_type == DENY_JUST ||
+                           promote_to_axiom || promote_to_neg_conj)) {
+      /* Clausified from a named FOF formula */
+      fprintf(fp, ", inference(clausify, [status(esa)], [%s])).\n",
+              tptp_name);
+    }
+    else if (primary_type == INPUT_JUST || promote_to_axiom ||
+             promote_to_neg_conj) {
+      fprintf(fp, ", introduced(assumption,[])).\n");
+    }
+    else if (primary_type == GOAL_JUST) {
+      fprintf(fp, ", introduced(conjecture,[])).\n");
+    }
+    else {
     /* Inference step: inference(rule, [status(thm)], [parents]) */
     const char *rule = tptp_rule_name(primary_type);
 
@@ -1120,6 +1139,7 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL flatten_fof)
     }
 
     fprintf(fp, "])).\n");
+    }
   }
 }  /* fprint_clause_tptp */
 
