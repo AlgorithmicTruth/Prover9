@@ -1104,10 +1104,14 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL flatten_fof)
       /* Direct input with known TPTP name */
       fprintf(fp, ", file('%s',%s)).\n", "tptp_input", tptp_name);
     }
+    else if (tptp_name && (promote_to_axiom || promote_to_neg_conj)) {
+      /* Clausified from a skipped FOF: use file() since the FOF parent
+         is not in the proof output (flatten_fof omitted it). */
+      fprintf(fp, ", file('%s',%s)).\n", "tptp_input", tptp_name);
+    }
     else if (tptp_name && (primary_type == CLAUSIFY_JUST ||
-                           primary_type == DENY_JUST ||
-                           promote_to_axiom || promote_to_neg_conj)) {
-      /* Clausified from a named FOF formula */
+                           primary_type == DENY_JUST)) {
+      /* Clausified from a named FOF that IS in the proof output */
       fprintf(fp, ", inference(clausify, [status(esa)], [%s])).\n",
               tptp_name);
     }
