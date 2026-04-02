@@ -882,6 +882,56 @@ char *szs_status_string(int code)
  *
  *************/
 
+/* Quote symbol names that aren't valid TPTP identifiers.
+   E.g., + becomes '+', >= becomes '>=', ==> becomes '==>'.
+   This also forces arrange_term() to use prefix notation for
+   these symbols, since quoted names aren't registered as infix. */
+static
+void tptp_quote_bad_syms(Term t)
+{
+  int i;
+  if (t == NULL) return;
+  if (!VARIABLE(t)) {
+    char *s = sn_to_str(SYMNUM(t));
+    /* Check if symbol needs quoting: not already quoted, not a $keyword,
+       not a LADR built-in connective (=, |, -, #), and not matching
+       [a-z][a-zA-Z0-9_]* (valid TPTP lower_word). */
+    BOOL bad = FALSE;
+    if (s[0] != '\'' && s[0] != '$' &&
+        strcmp(s, "=") != 0 && strcmp(s, "!=") != 0 &&
+        strcmp(s, "|") != 0 && strcmp(s, "-") != 0 &&
+        strcmp(s, "#") != 0) {
+      if (!(s[0] >= 'a' && s[0] <= 'z'))
+        bad = TRUE;
+      else {
+        int k;
+        for (k = 1; s[k]; k++) {
+          char c = s[k];
+          if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') || c == '_'))
+            { bad = TRUE; break; }
+        }
+      }
+    }
+    if (bad) {
+      /* Build quoted version: '+' etc. */
+      char *escaped = escape_char(s, '\'');
+      int n = strlen(escaped);
+      char *new_str = safe_malloc(n + 3);
+      new_str[0] = '\'';
+      strcpy(new_str + 1, escaped);
+      new_str[n + 1] = '\'';
+      new_str[n + 2] = '\0';
+      int new_sn = str_to_sn(new_str, sn_to_arity(SYMNUM(t)));
+      safe_free(new_str);
+      safe_free(escaped);
+      t->private_symbol = -(new_sn);
+    }
+    for (i = 0; i < ARITY(t); i++)
+      tptp_quote_bad_syms(ARG(t, i));
+  }
+}
+
 static
 void fwrite_term_tptp(FILE *fp, Term t)
 {
@@ -904,9 +954,11 @@ void fwrite_term_tptp(FILE *fp, Term t)
       BOOL at_neg_pos = (i == 0 ||
                          (i >= 2 && s[i-1] == ' ' && s[i-2] == '|') ||
                          s[i-1] == '(');
-      /* Is the next char a letter or open-paren (i.e., start of an atom)? */
+      /* Is the next char a letter, open-paren, or quote (start of an atom)?
+         Quote handles negation of quoted predicates: -'>='(A,B) -> ~'>='(A,B) */
       BOOL before_atom = (s[i+1] != '\0' &&
                           (s[i+1] == '(' ||
+                           s[i+1] == '\'' ||
                            (s[i+1] >= 'a' && s[i+1] <= 'z') ||
                            (s[i+1] >= 'A' && s[i+1] <= 'Z') ||
                            s[i+1] == '$'));
@@ -1086,8 +1138,10 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL flatten_fof)
     Term t = topform_to_term_without_attributes(c);
     if (c->literals == NULL)
       fprintf(fp, "$false");
-    else
+    else {
+      tptp_quote_bad_syms(t);
       fwrite_term_tptp(fp, t);
+    }
     if (t)
       zap_term(t);
   }
