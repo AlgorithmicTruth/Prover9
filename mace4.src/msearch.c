@@ -1418,11 +1418,11 @@ Mace_results mace4(Plist clauses, Mace_options opt)
       sprintf(str, "DOMAIN SIZE %d", n);
       print_separator(stdout, str, TRUE);
       fflush(stdout);
-    }
-    if (Mace4_tptp_mode)
-      fprintf(stderr,"\n%% Mace4 starting on domain size %d.\n",n);
-    else
       fprintf(stderr,"\n=== Mace4 starting on domain size %d. ===\n",n);
+    }
+    /* TPTP mode: suppress domain size messages entirely.
+       Geoff's harness merges stdout+stderr, so even stderr output
+       causes disk quota issues on problems that iterate many sizes. */
 
     Start_domain_seconds = user_seconds();
 #ifdef __EMSCRIPTEN__
