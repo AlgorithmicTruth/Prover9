@@ -1196,7 +1196,9 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL flatten_fof)
 
     fprintf(fp, ",\n    inference(%s, [status(thm)], [", rule);
 
-    /* Collect ALL parent IDs (primary + secondary justification nodes) */
+    /* Collect ALL parent IDs (primary + secondary justification nodes).
+       Filter out the clause's own ID — some justification types
+       (e.g., xx/back_rewrite) reference the clause itself. */
     {
       Ilist parents = get_parents(just, TRUE);
       Ilist p;
