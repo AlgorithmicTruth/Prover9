@@ -24,6 +24,7 @@
 #include "../ladr/sine.h"
 #include "../ladr/clash.h"
 #include "../ladr/tptp_parse.h"
+#include "../ladr/xproofs.h"
 #include "../VERSION_DATE.h"
 
 // system includes
@@ -1236,13 +1237,21 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
   else
     fprintf(fp, "%% SZS output start CNFRefutation\n");
 
+  /* Expand compound justifications into separate steps.
+     This unrolls resolve+rewrite+unit_del chains so that each TSTP
+     inference step has a single operation with correct intermediate
+     clause bodies.  Without this, back-demodulated parent bodies
+     make compound steps un-verifiable. */
+  I3list jmap = NULL;
+  Plist expanded = expand_proof(proof, &jmap);
+
   /* Check if proof contains FOF entries (axioms or conjectures).
      If so, flatten the FOF layer: skip FOF entries and promote their
      CNF children (clausify, deny) to leaf nodes.  This avoids GDV
      verification failures from Skolemization + multi-clause
      clausification / assume_negation steps. */
   BOOL has_fof = FALSE;
-  for (p = proof; p && !has_fof; p = p->next) {
+  for (p = expanded; p && !has_fof; p = p->next) {
     Topform c = (Topform) p->v;
     if (c->is_formula && c->justification &&
 	(c->justification->type == INPUT_JUST ||
@@ -1250,7 +1259,7 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
       has_fof = TRUE;
   }
 
-  for (p = proof; p; p = p->next) {
+  for (p = expanded; p; p = p->next) {
     Topform c = (Topform) p->v;
     if (c->is_formula) {
       set_variable_style(orig_style);
@@ -1262,6 +1271,8 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
     fprint_clause_tptp(fp, c, has_fof);
   }
 
+  delete_clauses(expanded);
+  zap_i3list(jmap);
   set_variable_style(orig_style);
   if (Glob.problem_name)
     fprintf(fp, "%% SZS output end CNFRefutation for %s\n", Glob.problem_name);
