@@ -853,6 +853,8 @@ Topform resolve2(Topform c1, int n1, Topform c2, int n2, BOOL renumber_vars)
 
     inherit_attributes(c1, s1, c2, s2, res);
     res->justification = binary_res_just(c1, n1, c2, n2);
+    if (c1->goal_derived || c2->goal_derived)
+      res->goal_derived = TRUE;
     upward_clause_links(res);
     if (renumber_vars)
       renumber_variables(res, MAX_VARS);

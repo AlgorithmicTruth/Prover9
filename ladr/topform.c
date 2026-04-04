@@ -570,6 +570,7 @@ Topform copy_clause(Topform c)
 {
   Topform c2 = get_topform();
   c2->literals = copy_literals(c->literals);
+  c2->goal_derived = c->goal_derived;
   upward_clause_links(c2);
   return c2;
 }  /* copy_clause */
@@ -591,6 +592,7 @@ Topform copy_clause_with_flags(Topform c)
 {
   Topform c2 = get_topform();
   c2->literals = copy_literals_with_flags(c->literals);
+  c2->goal_derived = c->goal_derived;
   upward_clause_links(c2);
   return c2;
 }  /* copy_clause_with_flags */
@@ -612,6 +614,7 @@ Topform copy_clause_with_flag(Topform c, int flag)
 {
   Topform c2 = get_topform();
   c2->literals = copy_literals_with_flag(c->literals, flag);
+  c2->goal_derived = c->goal_derived;
   upward_clause_links(c2);
   return c2;
 }  /* copy_clause_with_flag */

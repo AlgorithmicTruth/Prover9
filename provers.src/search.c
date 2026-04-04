@@ -1121,11 +1121,14 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL flatten_fof)
   /* Print: fof/cnf(c_ID, role, */
   fprintf(fp, "%s(c_%llu, ", is_fof ? "fof" : "cnf", c->id);
 
-  /* Determine role */
-  if (primary_type == INPUT_JUST || promote_to_axiom)
-    fprintf(fp, "axiom, ");
-  else if (primary_type == GOAL_JUST || promote_to_neg_conj)
+  /* Determine role.  Check negated_conjecture FIRST so that goal-derived
+     clauses (including those whose justification was changed by predicate
+     elimination) get the correct role. */
+  if (primary_type == GOAL_JUST || primary_type == DENY_JUST ||
+      promote_to_neg_conj || c->goal_derived)
     fprintf(fp, "negated_conjecture, ");
+  else if (primary_type == INPUT_JUST || promote_to_axiom)
+    fprintf(fp, "axiom, ");
   else
     fprintf(fp, "plain, ");
 

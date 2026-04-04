@@ -1147,6 +1147,7 @@ Plist process_goal_formulas(Plist formulas, BOOL echo)
       Topform c = q->v;
       c->attributes = copy_attributes(tf->attributes);
       c->justification = deny_just(tf);
+      c->goal_derived = TRUE;
       new = plist_prepend(new, c);
     }
     append_label_attribute(tf, "non_clause");
