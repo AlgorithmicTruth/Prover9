@@ -1867,12 +1867,21 @@ static void scan_tptp_input(Lexer *lex,
 
         /* Save token text */
         if (t->type == TOK_QUOTED || t->type == TOK_DISTINCT) {
-          /* Collect distinct object names */
-          if (t->type == TOK_DISTINCT)
-            *distinct_objects = add_distinct_name(*distinct_objects, t->text);
           /* Reconstruct single-quoted form for re-lexing.
+             Distinct objects get a "do_" prefix so LADR treats
+             uppercase names (e.g., "Apple") as constants, not
+             variables.  The same prefix is used in the inequality
+             axioms so symbols match.
              Escape ' as '' (TPTP convention), and \ and " with
              backslash (these have special meaning in the lexer). */
+          const char *prefix = (t->type == TOK_DISTINCT) ? "do_" : "";
+          int pfxlen = strlen(prefix);
+          /* Collect distinct object names (with prefix) */
+          if (t->type == TOK_DISTINCT) {
+            char prefixed[MAX_TOKEN_LEN];
+            snprintf(prefixed, sizeof(prefixed), "%s%s", prefix, t->text);
+            *distinct_objects = add_distinct_name(*distinct_objects, prefixed);
+          }
           const char *s;
           int extra = 0;
           int qlen = strlen(t->text);
@@ -1881,9 +1890,10 @@ static void scan_tptp_input(Lexer *lex,
             if (*s == '\'') extra++;
             else if (*s == '\\' || *s == '"') extra++;
           }
-          qbuf = safe_malloc(qlen + extra + 3);
+          qbuf = safe_malloc(qlen + pfxlen + extra + 3);
           d = qbuf;
           *d++ = '\'';
+          for (s = prefix; *s; s++) *d++ = *s;
           for (s = t->text; *s; s++) {
             if (*s == '\'') *d++ = '\'';      /* double it */
             else if (*s == '\\') *d++ = '\\'; /* backslash-escape */
@@ -2188,6 +2198,8 @@ Plist tptp_distinct_object_axioms(Plist distinct_names)
     for (q = p->next; q; q = q->next) {
       char *name_a = (char *) p->v;
       char *name_b = (char *) q->v;
+      /* Use raw names — the LADR parser strips quotes from 'Apple'
+         to Apple, so the symbol table entry is the unquoted name. */
       Term a = get_rigid_term(name_a, 0);
       Term b = get_rigid_term(name_b, 0);
       Term eq = get_rigid_term_dangerously(Eq_sn, 2);
