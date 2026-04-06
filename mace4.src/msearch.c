@@ -1473,7 +1473,7 @@ Mace_results mace4(Plist clauses, Mace_options opt)
     }
     else if (rc == SEARCH_DOMAIN_OUT_OF_RANGE) {
       if (!Mace4_tptp_mode)
-        printf("\n====== Domain size %d skipped because domain elememt too big. ======\n",n);
+        printf("\n====== Domain size %d skipped because domain element too big. ======\n",n);
       rc = SEARCH_GO_NO_MODELS;
     }
     clock_stop(Mace4_clock);
