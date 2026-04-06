@@ -279,6 +279,7 @@ int main(int argc, char **argv)
     for (i = 1; i < argc; i++) {
       if (strcmp(argv[i], "-tptp") == 0) {
         tptp_mode = TRUE;
+        argv[i] = "-c";  /* consumed; -c is a harmless no-op in getopt */
       }
       if (strcmp(argv[i], "-ladr_out") == 0 ||
           strcmp(argv[i], "-ladr-out") == 0) {
