@@ -1424,7 +1424,7 @@ Mace_results mace4(Plist clauses, Mace_options opt)
       fflush(stdout);
       fprintf(stderr,"\n=== Mace4 starting on domain size %d. ===\n",n);
     }
-    else if (parm(opt->report_stderr) >= 0) {
+    else {
       fprintf(stderr,"\n%% Mace4 starting on domain size %d.\n",n);
     }
 

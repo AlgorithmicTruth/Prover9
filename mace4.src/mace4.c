@@ -241,7 +241,6 @@ int main(int argc, char **argv)
   Plist clauses;
   Mace_results results;
   BOOL tptp_mode = FALSE;
-  BOOL tptp_verbose = FALSE;  /* -v: show domain size progress in TPTP mode */
   BOOL ladr_output = FALSE;   /* -ladr_out: LADR model format with TPTP input */
   char *tptp_file = NULL;     /* .p filename or NULL (stdin) */
   char *problem_name = NULL;
@@ -285,10 +284,6 @@ int main(int argc, char **argv)
           strcmp(argv[i], "-ladr-out") == 0) {
         ladr_output = TRUE;
         argv[i] = "-c";  /* consumed; -c is a harmless no-op in getopt */
-      }
-      if (strcmp(argv[i], "-v") == 0) {
-        tptp_verbose = TRUE;
-        argv[i] = "-c";  /* consumed */
       }
       if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
         prescan_timeout = atoi(argv[i+1]);
@@ -342,8 +337,6 @@ int main(int argc, char **argv)
 
   init_standard_ladr();
   init_mace_options(&opt);  /* We must do this before calling usage_message. */
-  if (tptp_mode && !tptp_verbose)
-    assign_parm(opt.report_stderr, -1, TRUE);  /* quiet by default in TPTP */
   init_attrs();
 
   if (member_args(argc, argv, "help") ||
