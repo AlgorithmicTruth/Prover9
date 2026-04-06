@@ -47,6 +47,60 @@
 /* Everything from here to cores_from_scan() uses fork/mmap/signals
    which are unavailable in WebAssembly.  WASM mode runs single-strategy. */
 
+/* Signal-safe child PID tracking for cleanup on parent death.
+   Tombstone array: slots are 0 (empty) or a live child PID.
+   Signal handler scans the full array — no counter needed. */
+#define MAX_CHILD_PIDS 128
+static volatile pid_t Child_pids[MAX_CHILD_PIDS];
+
+static void track_child(pid_t pid)
+{
+  int i;
+  for (i = 0; i < MAX_CHILD_PIDS; i++) {
+    if (Child_pids[i] == 0) {
+      Child_pids[i] = pid;
+      return;
+    }
+  }
+}
+
+static void untrack_child(pid_t pid)
+{
+  int i;
+  for (i = 0; i < MAX_CHILD_PIDS; i++) {
+    if (Child_pids[i] == pid) {
+      Child_pids[i] = 0;
+      return;
+    }
+  }
+}
+
+/* Parent death handler: kill all tracked children and exit.
+   Called on SIGTERM, SIGXCPU, SIGINT from competition infrastructure. */
+static void parent_death_handler(int sig)
+{
+  int i;
+  (void)sig;
+  for (i = 0; i < MAX_CHILD_PIDS; i++) {
+    if (Child_pids[i] > 0) {
+      kill(Child_pids[i], SIGCONT);  /* wake stopped children */
+      kill(Child_pids[i], SIGKILL);
+    }
+  }
+  _exit(1);
+}
+
+static void install_parent_death_handler(void)
+{
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = parent_death_handler;
+  sa.sa_flags = 0;
+  sigaction(SIGTERM, &sa, NULL);
+  sigaction(SIGXCPU, &sa, NULL);
+  sigaction(SIGINT, &sa, NULL);
+}
+
 /*************
  *
  *   Strategy scheduling for TPTP mode.
@@ -175,6 +229,7 @@ void kill_child(pid_t pid)
     kill(pid, SIGKILL);
     waitpid(pid, NULL, 0);
   }
+  untrack_child(pid);
 }  /* kill_child */
 
 /* File-scope slice duration for re-arming after SIGCONT resume. */
@@ -766,6 +821,10 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
   n_suspended = 0;
   start_time = absolute_wallclock();
 
+  /* Install cleanup handler so external kill (SIGTERM/SIGXCPU)
+     kills all children instead of orphaning them. */
+  install_parent_death_handler();
+
   /* Initial fill: launch up to N children.
      auto_default gets full time budget (never self-suspends), keeping
      its dedicated slot for the entire run.  Other strategies get the
@@ -776,6 +835,7 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
     pid_t cpid = spawn_child(i, si, next, slice, saved_stdout,
                              output_shm, input, psr, hints_shm);
     if (cpid > 0) {
+      track_child(cpid);
       slots[i] = cpid;
       slot_strat[i] = si;
       slot_oidx[i] = next;
@@ -830,6 +890,7 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
 
       if (wpid < 0) {
         /* child already gone */
+        untrack_child(slots[i]);
         slots[i] = 0;
         continue;
       }
@@ -886,6 +947,7 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
           pid_t cpid = spawn_child(i, si, next, per_child_sec, saved_stdout,
                                    output_shm, input, psr, hints_shm);
           if (cpid > 0) {
+            track_child(cpid);
             slots[i] = cpid;
             slot_strat[i] = si;
             slot_oidx[i] = next;
@@ -989,6 +1051,7 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
                  best_code != SOS_EMPTY_EXIT)
           best_code = MAX_SECONDS_EXIT;
 
+        untrack_child(slots[i]);
         slots[i] = 0;
 
         /* Fill slot: Phase 1 (new strategy) or Phase 2 (resume) */
@@ -997,6 +1060,7 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
           pid_t cpid = spawn_child(i, si, next, per_child_sec, saved_stdout,
                                    output_shm, input, psr, hints_shm);
           if (cpid > 0) {
+            track_child(cpid);
             slots[i] = cpid;
             slot_strat[i] = si;
             slot_oidx[i] = next;
