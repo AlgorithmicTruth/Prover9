@@ -133,7 +133,8 @@ enum {
   SEARCH_MAX_MEGS,            /* stop */
   SEARCH_MAX_TOTAL_SECONDS,   /* stop */
   SEARCH_MAX_DOMAIN_SECONDS,  /* stop */
-  SEARCH_DOMAIN_OUT_OF_RANGE  /* stop */
+  SEARCH_DOMAIN_OUT_OF_RANGE, /* continue (may fit at larger size) */
+  SEARCH_CELLS_OVERFLOW       /* stop (larger sizes only get worse) */
 };
 
 /* Ground terms.  MACE4 operates on ground clauses, which are
@@ -449,8 +450,9 @@ void initialize_for_search(Plist clauses)
  *
  *************/
 
+/* Returns TRUE on success, FALSE if cells overflow (domain too large). */
 static
-void init_for_domain_size(void)
+BOOL init_for_domain_size(void)
 {
   int i, j, nextbase, id;
   Symbol_data s;
@@ -465,7 +467,7 @@ void init_for_domain_size(void)
               "\n%% Mace4: too many cells for domain size %d "
               "(symbol %s/%d, arity too high)\n",
               Domain_size, sn_to_str(s->sn), s->arity);
-      mace4_exit(EXHAUSTED_EXIT);
+      return FALSE;
     }
     s->base = nextbase;
     nextbase += cells;
@@ -502,6 +504,7 @@ void init_for_domain_size(void)
   
   if (flag(Opt->negprop))
     init_negprop_index();
+  return TRUE;
 } /* init_for_domain_size */
 
 /*************
@@ -1240,7 +1243,8 @@ int mace4n(Plist clauses, int order)
 
   Domain_size = order;
 
-  init_for_domain_size();
+  if (!init_for_domain_size())
+    return SEARCH_CELLS_OVERFLOW;  /* cells overflow — stop iterating */
 
   built_in_assignments();  /* Fill out equality table (and maybe others). */
 
@@ -1476,6 +1480,13 @@ Mace_results mace4(Plist clauses, Mace_options opt)
         printf("\n====== Domain size %d skipped because domain element too big. ======\n",n);
       rc = SEARCH_GO_NO_MODELS;
     }
+    else if (rc == SEARCH_CELLS_OVERFLOW) {
+      /* Cell count overflows at this domain size.  Larger sizes only
+         make it worse (cells = domain_size^arity), so stop iterating. */
+      if (!Mace4_tptp_mode)
+        printf("\n====== Domain size %d: too many cells. Stopping. ======\n",n);
+      break;
+    }
     clock_stop(Mace4_clock);
     if (!Mace4_tptp_mode)
       p_stats();
@@ -1537,6 +1548,8 @@ Mace_results mace4(Plist clauses, Mace_options opt)
     results->return_code = Total_models==0 ? MAX_SEC_NO_EXIT : MAX_SEC_YES_EXIT;
   else if (rc == SEARCH_MAX_MEGS)
     results->return_code = Total_models==0 ? MAX_MEGS_NO_EXIT : MAX_MEGS_YES_EXIT;
+  else if (rc == SEARCH_CELLS_OVERFLOW)
+    results->return_code = Total_models==0 ? EXHAUSTED_EXIT : ALL_MODELS_EXIT;
   else
     fatal_error("mace4: unknown return code");
 
@@ -1776,7 +1789,8 @@ int mace4n_resume(Plist clauses, int order,
   }
 
   Domain_size = order;
-  init_for_domain_size();
+  if (!init_for_domain_size())
+    return SEARCH_CELLS_OVERFLOW;
   built_in_assignments();
   special_assignments();
 
