@@ -471,11 +471,6 @@ int main(int argc, char **argv)
     Mace4_ladr_output = ladr_output;
     Mace4_has_goals = has_goals;
 
-    /* TPTP default: cap domain size at 1000 to prevent runaway iteration.
-       User can override with -N.  assign_parm with FALSE = don't warn. */
-    if (parm(opt.end_size) == -1)
-      assign_parm(opt.end_size, 1000, FALSE);
-
     /* Apply command-line overrides (-t, -n, -N, etc.) */
     process_command_line_args(argc, argv, &opt);
 
