@@ -1903,9 +1903,22 @@ static void scan_tptp_input(Lexer *lex,
           *d++ = '\'';
           *d = '\0';
           body_buf_append(&bb, qbuf);
-          /* Collect as symbol (not a variable name) */
+          /* Collect as symbol (not a variable name).  For TOK_DISTINCT
+             the body text was emitted with the "do_" prefix above, so
+             the scanner symbol-table entry must use the same prefixed
+             name to keep the SInE-signature ID consistent with the
+             actual symbol that appears in the re-lexed body. */
           {
-            int sid = scan_lookup(ht, t->text);
+            char prefixed_name[MAX_TOKEN_LEN];
+            const char *lookup_name;
+            if (t->type == TOK_DISTINCT) {
+              snprintf(prefixed_name, sizeof(prefixed_name), "%s%s",
+                       prefix, t->text);
+              lookup_name = prefixed_name;
+            } else {
+              lookup_name = t->text;
+            }
+            int sid = scan_lookup(ht, lookup_name);
             sym_acc_add(sa, sid);
           }
           safe_free(qbuf);
@@ -2198,8 +2211,11 @@ Plist tptp_distinct_object_axioms(Plist distinct_names)
     for (q = p->next; q; q = q->next) {
       char *name_a = (char *) p->v;
       char *name_b = (char *) q->v;
-      /* Use raw names — the LADR parser strips quotes from 'Apple'
-         to Apple, so the symbol table entry is the unquoted name. */
+      /* Names already include the "do_" prefix from scan_tptp_input,
+         so they match the symbols emitted into the rewritten formula
+         body (which goes through the LADR re-lexer that strips the
+         outer single quotes from 'do_Apple' to do_Apple).  Both
+         sites must use the same prefixed name. */
       Term a = get_rigid_term(name_a, 0);
       Term b = get_rigid_term(name_b, 0);
       Term eq = get_rigid_term_dangerously(Eq_sn, 2);
