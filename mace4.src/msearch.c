@@ -195,7 +195,7 @@ void init_mace_options(Mace_options opt)
 #else
   opt->max_megs          = init_parm("max_megs",     49152,      -1, INT_MAX);
 #endif
-  opt->report_stderr     = init_parm("report_stderr",    60,      -1, INT_MAX);
+  opt->report_stderr     = init_parm("report_stderr",    -1,      -1, INT_MAX);
          
   opt->print_models           = init_flag("print_models",           TRUE);
   opt->print_models_tabular   = init_flag("print_models_tabular",   FALSE);
