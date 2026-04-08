@@ -527,8 +527,16 @@ void instances_recurse(Topform c, int *vals, int *domains,
 #endif    
     Mstats.ground_clauses_seen++;
     if (FALSE_TERM(t)) {
-      fprintf(stdout, "\nNOTE: unsatisfiability detected on input.\n");
-      fprintf(stderr, "\nNOTE: unsatisfiability detected on input.\n");
+      /* TPTP mode: prefix with "% " so the line is a valid TPTP comment.
+         Without the prefix, SystemOnTPTP graders see a non-comment line
+         that isn't an SZS directive and reject the output. */
+      if (Mace4_tptp_mode) {
+        fprintf(stdout, "\n%% NOTE: unsatisfiability detected on input.\n");
+        fprintf(stderr, "\n%% NOTE: unsatisfiability detected on input.\n");
+      } else {
+        fprintf(stdout, "\nNOTE: unsatisfiability detected on input.\n");
+        fprintf(stderr, "\nNOTE: unsatisfiability detected on input.\n");
+      }
       state->ok = FALSE;
       return;
     }
@@ -542,8 +550,13 @@ void instances_recurse(Topform c, int *vals, int *domains,
       }
       process_initial_clause(m, state);
       if (!state->ok) {
-	fprintf(stdout, "\nNOTE: unsatisfiability detected on input.\n");
-	fprintf(stderr, "\nNOTE: unsatisfiability detected on input.\n");
+        if (Mace4_tptp_mode) {
+          fprintf(stdout, "\n%% NOTE: unsatisfiability detected on input.\n");
+          fprintf(stderr, "\n%% NOTE: unsatisfiability detected on input.\n");
+        } else {
+          fprintf(stdout, "\nNOTE: unsatisfiability detected on input.\n");
+          fprintf(stderr, "\nNOTE: unsatisfiability detected on input.\n");
+        }
 	return;
       }
       Ground_clauses = plist_prepend(Ground_clauses, m);
