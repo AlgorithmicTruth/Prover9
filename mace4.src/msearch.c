@@ -40,6 +40,7 @@ BOOL  Mace4_tptp_mode = FALSE;
 BOOL  Mace4_ladr_output = FALSE;
 BOOL  Mace4_has_goals = FALSE;
 char *Mace4_problem_name = NULL;
+BOOL  Mace4_quiet = FALSE;     /* -quiet: suppress per-domain status (TPTP only) */
 
 /*****************************************************************************/
 /* Variables -- most are used (extern) by other source files */
@@ -1425,7 +1426,8 @@ Mace_results mace4(Plist clauses, Mace_options opt)
       fprintf(stderr,"\n=== Mace4 starting on domain size %d. ===\n",n);
     }
     else {
-      fprintf(stderr,"\n%% Mace4 starting on domain size %d.\n",n);
+      if (!Mace4_quiet)
+        fprintf(stderr,"\n%% Mace4 starting on domain size %d.\n",n);
     }
 
     Start_domain_seconds = user_seconds();

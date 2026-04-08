@@ -226,6 +226,7 @@ extern BOOL  Mace4_tptp_mode;
 extern BOOL  Mace4_ladr_output;  /* -ladr_out: LADR model format with TPTP input */
 extern BOOL  Mace4_has_goals;
 extern char *Mace4_problem_name;
+extern BOOL  Mace4_quiet;        /* -quiet: suppress per-domain status (TPTP only) */
 
 /* from util.c */
 

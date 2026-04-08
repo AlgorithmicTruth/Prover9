@@ -128,6 +128,9 @@ void usage_message(FILE *fp, Mace_options opt)
   "         designed for another program such as a theorem prover.\n"
   "  -r dir : Resume from checkpoint directory.\n"
   "  -A   : Enable memory logging (logs allocations/frees to stderr).\n"
+  "  -quiet : Suppress per-domain status line in TPTP mode.\n"
+  "         No effect in LADR mode.  Does not suppress the SZS\n"
+  "         status line, model output, or banner.\n"
   "\n"
 
 	  , PROGRAM_NAME, PROGRAM_VERSION, PROGRAM_DATE,

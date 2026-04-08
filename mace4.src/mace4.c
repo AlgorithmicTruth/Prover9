@@ -286,6 +286,10 @@ int main(int argc, char **argv)
         ladr_output = TRUE;
         argv[i] = "-c";  /* consumed; -c is a harmless no-op in getopt */
       }
+      if (strcmp(argv[i], "-quiet") == 0) {
+        Mace4_quiet = TRUE;
+        argv[i] = "-c";  /* consumed; -c is a harmless no-op in getopt */
+      }
       if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
         prescan_timeout = atoi(argv[i+1]);
       }
