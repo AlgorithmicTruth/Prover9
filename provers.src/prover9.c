@@ -1723,17 +1723,28 @@ int main(int argc, char **argv)
       Topform c = p->v;
       if (c->id == 0) assign_clause_id(c);
     }
+    /* Post-clausification simplification: apply the same three
+       transforms that search()/cl_process_simplify() applies to
+       initial clauses before proof search.  Without these, the
+       raw CNF output differs from what appears as proof leaves —
+       equalities may be unoriented, duplicate literals unsimplified,
+       and trivial literals (x=x) unremoved.  These are standalone
+       LADR library functions with no Glob/Opt dependencies. */
+    for (p = input->usable; p; p = p->next) {
+      orient_equalities(p->v, TRUE);
+      simplify_literals2(p->v);
+      merge_literals(p->v);
+    }
+    for (p = input->sos; p; p = p->next) {
+      orient_equalities(p->v, TRUE);
+      simplify_literals2(p->v);
+      merge_literals(p->v);
+    }
     /* TPTP output formatting */
     set_variable_style(PROLOG_STYLE);
     clear_parse_type_for_all_symbols();
     declare_tptp_output_types();
-    /* Output all clauses in TPTP cnf() format.
-       These are raw clausified clauses (no post-clausification
-       simplification like orient_equalities or merge_literals).
-       The consumer (proofcheck) handles the normalization differences
-       via canonical_clause_shape which alpha-renames variables,
-       normalizes Skolem names, sorts equality args and disjuncts,
-       and strips trivial constants. */
+    /* Output all clauses in TPTP cnf() format */
     for (p = input->usable; p; p = p->next)
       fwrite_clause(stdout, p->v, CL_FORM_TSTP);
     for (p = input->sos; p; p = p->next)
