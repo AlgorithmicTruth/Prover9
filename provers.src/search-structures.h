@@ -308,6 +308,7 @@ struct prover_input {
   BOOL xproofs;  // tell search() to return xproofs as well as ordinary proofs
   BOOL has_goals; // input contained goals/conjecture (for SZS status: Theorem vs Unsatisfiable)
   BOOL has_neg_conj; // input had CNF negated_conjecture (refutation, not satisfiability)
+  BOOL cnf_only;     // if TRUE, output processed clauses and exit (no search)
   char *problem_name;  // TPTP problem name for SZS lines (e.g., "PUZ001-2"), or NULL
   // checkpoint resume
   char *resume_dir;  // if non-NULL, resume from this checkpoint directory

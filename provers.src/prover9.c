@@ -1708,13 +1708,13 @@ int main(int argc, char **argv)
   }
 #endif
 
+  /***************** CNF-only: set flag and fall through to search() *********/
+
   /***************** CNF-only output (if -cnf flag) *************************/
 
   if (cnf_only) {
     Plist p;
-    /* Ensure all clauses have IDs (some already-clausal inputs may
-       have id==0 because process_input_formulas skips assign_clause_id
-       for clauses that don't need clausification). */
+    /* Ensure all clauses have IDs */
     for (p = input->usable; p; p = p->next) {
       Topform c = p->v;
       if (c->id == 0) assign_clause_id(c);
@@ -1723,11 +1723,17 @@ int main(int argc, char **argv)
       Topform c = p->v;
       if (c->id == 0) assign_clause_id(c);
     }
-    /* Set TPTP output formatting (uppercase variables, TPTP operators) */
+    /* TPTP output formatting */
     set_variable_style(PROLOG_STYLE);
     clear_parse_type_for_all_symbols();
     declare_tptp_output_types();
-    /* Output all clauses in TPTP cnf() format */
+    /* Output all clauses in TPTP cnf() format.
+       These are raw clausified clauses (no post-clausification
+       simplification like orient_equalities or merge_literals).
+       The consumer (proofcheck) handles the normalization differences
+       via canonical_clause_shape which alpha-renames variables,
+       normalizes Skolem names, sorts equality args and disjuncts,
+       and strips trivial constants. */
     for (p = input->usable; p; p = p->next)
       fwrite_clause(stdout, p->v, CL_FORM_TSTP);
     for (p = input->sos; p; p = p->next)
