@@ -347,6 +347,10 @@ struct arg_options get_command_line_args(int argc, char **argv)
       opts.read_stdin = TRUE;
       argv[i] = "-_";
     }
+    else if (strcmp(argv[i], "-cnf") == 0) {
+      opts.tptp_mode = TRUE;  /* -cnf implies TPTP I/O */
+      argv[i] = "-_";         /* neutralize so getopt skips it */
+    }
     else if (strcmp(argv[i], "-cores") == 0) {
       if (i + 1 < argc) {
         int max_cores = physical_cores();

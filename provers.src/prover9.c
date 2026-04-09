@@ -1401,6 +1401,7 @@ int main(int argc, char **argv)
   BOOL tptp_mode = FALSE;
   BOOL nosine = FALSE;
   BOOL nomem = FALSE;
+  BOOL cnf_only = FALSE;
 #ifndef __EMSCRIPTEN__
   int force_strategy = -1;  /* -strategy N: force portfolio index */
   int max_strategies = -1;  /* -strategies N: cap Phase 1 breadth */
@@ -1501,7 +1502,21 @@ int main(int argc, char **argv)
     }
   }
 
-  print_banner(saved_command, PROVER_NAME, PROGRAM_VERSION, PROGRAM_DATE, tptp_mode);
+  /* Check for -cnf flag (clausify-only mode: output cnf() lines, no search) */
+  {
+    int i;
+    for (i = 1; i < argc; i++) {
+      if (strcmp(argv[i], "-cnf") == 0) {
+        cnf_only = TRUE;
+        tptp_mode = TRUE;   /* -cnf implies TPTP I/O */
+        nosine = TRUE;       /* output all clauses, no SInE filtering */
+        break;
+      }
+    }
+  }
+
+  if (!cnf_only)
+    print_banner(saved_command, PROVER_NAME, PROGRAM_VERSION, PROGRAM_DATE, tptp_mode);
   set_program_name(PROVER_NAME);   /* for conditional input */
 
   /* Arm wall-clock timeout as early as possible so it covers
@@ -1540,7 +1555,15 @@ int main(int argc, char **argv)
 
 #else /* native */
 
-  if (tptp_mode) {
+  if (tptp_mode && cnf_only) {
+    /* CNF-only mode: simple init + clausify, no strategy scheduling.
+       echo=FALSE suppresses intermediate output to stdout so only
+       the cnf() lines we emit at the end appear. */
+    input = std_prover_init_and_input(argc, argv, TRUE, FALSE, KILL_UNKNOWN);
+    assign_parm(input->options->sine, 0, FALSE);
+    if (nomem) disable_max_megs();
+  }
+  else if (tptp_mode) {
     /*=======================================================================
      * TPTP mode: use two-phase entry so strategy scheduler can fork
      * BEFORE SInE/parse/clausify for large inputs.
@@ -1684,6 +1707,34 @@ int main(int argc, char **argv)
             parm(opt->max_seconds), parm(opt->max_megs));
   }
 #endif
+
+  /***************** CNF-only output (if -cnf flag) *************************/
+
+  if (cnf_only) {
+    Plist p;
+    /* Ensure all clauses have IDs (some already-clausal inputs may
+       have id==0 because process_input_formulas skips assign_clause_id
+       for clauses that don't need clausification). */
+    for (p = input->usable; p; p = p->next) {
+      Topform c = p->v;
+      if (c->id == 0) assign_clause_id(c);
+    }
+    for (p = input->sos; p; p = p->next) {
+      Topform c = p->v;
+      if (c->id == 0) assign_clause_id(c);
+    }
+    /* Set TPTP output formatting (uppercase variables, TPTP operators) */
+    set_variable_style(PROLOG_STYLE);
+    clear_parse_type_for_all_symbols();
+    declare_tptp_output_types();
+    /* Output all clauses in TPTP cnf() format */
+    for (p = input->usable; p; p = p->next)
+      fwrite_clause(stdout, p->v, CL_FORM_TSTP);
+    for (p = input->sos; p; p = p->next)
+      fwrite_clause(stdout, p->v, CL_FORM_TSTP);
+    fflush(stdout);
+    exit(0);
+  }
 
   /***************** Search for a proof **************************************/
 
