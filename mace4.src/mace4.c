@@ -290,6 +290,17 @@ int main(int argc, char **argv)
         Mace4_quiet = TRUE;
         argv[i] = "-c";  /* consumed; -c is a harmless no-op in getopt */
       }
+      if (strcmp(argv[i], "-casc") == 0) {
+        /* CASC competition mode: -tptp -quiet -t T */
+        tptp_mode = TRUE;
+        Mace4_quiet = TRUE;
+        if (i + 1 < argc) {
+          prescan_timeout = atoi(argv[i+1]);
+          argv[i] = "-t";  /* convert to -t so getopt finds the value */
+        } else {
+          argv[i] = "-c";
+        }
+      }
       if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
         prescan_timeout = atoi(argv[i+1]);
       }
