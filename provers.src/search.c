@@ -894,6 +894,22 @@ void tptp_quote_bad_syms(Term t)
   if (t == NULL) return;
   if (!VARIABLE(t)) {
     char *s = sn_to_str(SYMNUM(t));
+    /* Restore distinct objects: do_foo -> "foo" */
+    if (is_distinct_object(SYMNUM(t))) {
+      const char *base = s + 3;  /* skip "do_" prefix */
+      int n = strlen(base);
+      char *new_str = safe_malloc(n + 3);
+      new_str[0] = '"';
+      strcpy(new_str + 1, base);
+      new_str[n + 1] = '"';
+      new_str[n + 2] = '\0';
+      int new_sn = str_to_sn(new_str, sn_to_arity(SYMNUM(t)));
+      safe_free(new_str);
+      t->private_symbol = -(new_sn);
+      for (i = 0; i < ARITY(t); i++)
+        tptp_quote_bad_syms(ARG(t, i));
+      return;
+    }
     /* Check if symbol needs quoting: not already quoted, not a $keyword,
        not a LADR built-in connective (=, |, -, #), and not matching
        [a-z][a-zA-Z0-9_]* (valid TPTP lower_word). */

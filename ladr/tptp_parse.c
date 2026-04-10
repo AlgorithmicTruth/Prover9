@@ -2202,6 +2202,13 @@ Plist tptp_distinct_object_axioms(Plist distinct_names)
   Plist result = NULL;
   Plist p, q;
 
+  /* Tag all distinct object symbols in the symbol table. */
+  for (p = distinct_names; p; p = p->next) {
+    char *name = (char *) p->v;
+    int sn = str_to_sn(name, 0);
+    set_distinct_object(sn);
+  }
+
   if (distinct_names == NULL || distinct_names->next == NULL)
     return NULL;  /* 0 or 1 distinct object: nothing to generate */
 

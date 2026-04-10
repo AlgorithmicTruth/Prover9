@@ -36,6 +36,7 @@ struct symbol {
   int         kb_weight;        /* for Knuth-Bendix ordering */
   Lrpo_status lrpo_status;      /* for LRPO, LPO, RPO */
   BOOL        skolem;
+  BOOL        distinct_object;  /* TPTP distinct object ("foo" -> do_foo) */
   BOOL        quoted;           /* from quoted/distinct token — never a variable */
   BOOL        unfold;
   BOOL        auxiliary;        /* not part of theory, e.g., in hints only */
@@ -445,6 +446,7 @@ Symbol get_symbol(void)
   p->kb_weight = 1;
   p->type = UNSPECIFIED_SYMBOL;
   p->skolem = FALSE;
+  p->distinct_object = FALSE;
   p->quoted = FALSE;
   p->unfold = FALSE;
   p->auxiliary = FALSE;
@@ -1963,6 +1965,26 @@ BOOL is_skolem(int symnum)
   Symbol p = lookup_by_id(symnum);
   return p->skolem;
 }  /* is_skolem */
+
+/*************
+ *
+ *   set_distinct_object() / is_distinct_object()
+ *
+ *************/
+
+/* PUBLIC */
+void set_distinct_object(int symnum)
+{
+  Symbol p = lookup_by_id(symnum);
+  p->distinct_object = TRUE;
+}  /* set_distinct_object */
+
+/* PUBLIC */
+BOOL is_distinct_object(int symnum)
+{
+  Symbol p = lookup_by_id(symnum);
+  return p->distinct_object;
+}  /* is_distinct_object */
 
 /*************
  *
