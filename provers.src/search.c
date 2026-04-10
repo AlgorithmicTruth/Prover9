@@ -1119,6 +1119,13 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL flatten_fof)
     }
   }
 
+  /* Skip $false input leaves: the empty clause cannot be a legitimate
+     input axiom or goal.  These arise when fastPE resolves clauses
+     during preprocessing before the search starts. */
+  if (c->literals == NULL &&
+      (primary_type == INPUT_JUST || primary_type == GOAL_JUST))
+    return;
+
   /* Print: fof/cnf(c_ID, role, */
   fprintf(fp, "%s(c_%llu, ", is_fof ? "fof" : "cnf", c->id);
 
