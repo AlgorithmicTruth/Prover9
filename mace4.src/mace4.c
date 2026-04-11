@@ -455,9 +455,21 @@ int main(int argc, char **argv)
     set_fatal_tptp_mode(TRUE, problem_name);
     set_fatal_szs_status("GaveUp");
 
-    /* Clausify */
+    /* Snapshot symbols from original FOF formulas BEFORE clausification.
+       embed_formulas_in_topforms registers terms in the LADR symbol table.
+       After clausification, some symbols are eliminated by simplification
+       and won't appear in the clausified set. */
     assumptions = embed_formulas_in_topforms(tptp->assumptions, TRUE);
     goals_list = embed_formulas_in_topforms(tptp->goals, FALSE);
+    {
+      extern Ilist Input_fsyms, Input_rsyms;
+      Plist all_input = plist_cat2(assumptions, goals_list);
+      Input_fsyms = fsym_set_in_topforms(all_input);
+      Input_rsyms = rsym_set_in_topforms(all_input);
+      zap_plist(all_input);  /* shallow — doesn't free the Topforms */
+    }
+
+    /* Clausify */
     assumptions = process_input_formulas(assumptions, FALSE);
     goals_list = process_goal_formulas(goals_list, FALSE);
     clauses = plist_cat(assumptions, goals_list);

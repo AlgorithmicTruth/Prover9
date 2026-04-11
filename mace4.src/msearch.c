@@ -41,6 +41,8 @@ BOOL  Mace4_ladr_output = FALSE;
 BOOL  Mace4_has_goals = FALSE;
 char *Mace4_problem_name = NULL;
 BOOL  Mace4_quiet = FALSE;     /* -quiet: suppress per-domain status (TPTP only) */
+Ilist Input_fsyms = NULL;      /* pre-clausification function symbols */
+Ilist Input_rsyms = NULL;      /* pre-clausification relation symbols */
 
 /*****************************************************************************/
 /* Variables -- most are used (extern) by other source files */

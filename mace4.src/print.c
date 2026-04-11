@@ -423,6 +423,86 @@ void print_model_tptp(FILE *fp)
     fprintf(fp, " )).\n\n");
   }
 
+  /* Output default interpretations for symbols in the original problem
+     that were eliminated during clausification.  Input_fsyms/Input_rsyms
+     are snapshots taken before clausification in mace4.c. */
+  {
+    extern Ilist Input_fsyms, Input_rsyms;
+    Ilist p;
+
+    /* Extra functions: symbols in pre-clausification set but not in Mace4's Symbols */
+    for (p = Input_fsyms; p; p = p->next) {
+      int sn = p->i;
+      char *name = sn_to_str(sn);
+      int arity = sn_to_arity(sn);
+      if (variable_name(name)) continue;
+      if (is_eq_symbol(sn)) continue;
+      if (natural_string(name) >= 0) continue;
+      if (find_symbol_data(sn) != NULL) continue;
+      if (name[0] == '$') continue;
+      /* This function was eliminated during clausification.
+         Output a default interpretation (all values = d0). */
+      int n = int_power(Domain_size, arity);
+      for (i = 0; i < n; i++) {
+        if (has_functions || conjunct_count > 0)
+          fprintf(fp, "fof(interp_extra_%s, interpretation-mappings, (\n    ", name);
+        if (arity == 0) {
+          fprint_tptp_sym(fp, name);
+          fprintf(fp, " = \"d0\"");
+        } else {
+          int args[16], rem = i;
+          for (j = arity - 1; j >= 0; j--) {
+            args[j] = rem % Domain_size;
+            rem = rem / Domain_size;
+          }
+          fprint_tptp_sym(fp, name);
+          fprintf(fp, "(");
+          for (j = 0; j < arity; j++) {
+            if (j > 0) fprintf(fp, ",");
+            fprintf(fp, "\"d%d\"", args[j]);
+          }
+          fprintf(fp, ") = \"d0\"");
+        }
+        fprintf(fp, " )).\n\n");
+      }
+    }
+
+    /* Extra relations: symbols in pre-clausification set but not in Mace4's Symbols */
+    for (p = Input_rsyms; p; p = p->next) {
+      int sn = p->i;
+      char *name = sn_to_str(sn);
+      int arity = sn_to_arity(sn);
+      if (is_eq_symbol(sn)) continue;
+      if (find_symbol_data(sn) != NULL) continue;
+      if (name[0] == '$') continue;
+      /* Output default interpretation (all false) in a single fof block */
+      int n = int_power(Domain_size, arity);
+      fprintf(fp, "fof(interp_extra_%s, interpretation-mappings, (\n", name);
+      for (i = 0; i < n; i++) {
+        if (i > 0)
+          fprintf(fp, " &\n");
+        fprintf(fp, "    ~");
+        if (arity == 0) {
+          fprint_tptp_sym(fp, name);
+        } else {
+          int args[16], rem = i;
+          for (j = arity - 1; j >= 0; j--) {
+            args[j] = rem % Domain_size;
+            rem = rem / Domain_size;
+          }
+          fprint_tptp_sym(fp, name);
+          fprintf(fp, "(");
+          for (j = 0; j < arity; j++) {
+            if (j > 0) fprintf(fp, ",");
+            fprintf(fp, "\"d%d\"", args[j]);
+          }
+          fprintf(fp, ")");
+        }
+      }
+      fprintf(fp, " )).\n\n");
+    }
+  }
+
   /* SZS output end */
   if (Mace4_problem_name)
     fprintf(fp, "%% SZS output end FiniteModel for %s\n", Mace4_problem_name);
