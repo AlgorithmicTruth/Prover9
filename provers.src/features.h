@@ -43,7 +43,7 @@
 #define F_AVG_SYMS_PER_FORM 10
 #define F_MAX_BODY_LEN      11
 #define F_AVG_BODY_LEN      12
-#define F_DOMAIN_HASH       13
+#define F_DOMAIN_HASH       13  /* DEPRECATED: always 0 (removed for CASC compliance) */
 #define F_HAS_EQUALITY      14
 #define F_MAX_DEPTH_EST     15
 #define F_AVG_DEPTH_EST     16
@@ -67,7 +67,8 @@ extern const char *feature_names[NUM_FEATURES];
 /* Extract features from LADR scan result into fv[NUM_FEATURES] */
 void extract_features(Scan_result sd, int *fv);
 
-/* Set F_DOMAIN_HASH from TPTP filename (first 3 alpha chars hashed) */
+/* DEPRECATED: domain_hash removed for CASC compliance.
+   set_domain_hash is now a no-op — fv[13] stays 0. */
 void set_domain_hash(int *fv, const char *filename);
 
 #endif /* LADR_FEATURES_H */

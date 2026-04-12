@@ -209,24 +209,9 @@ void extract_features(Scan_result sd, int *fv)
 
 void set_domain_hash(int *fv, const char *filename)
 {
-  const char *base;
-  const char *p;
-  unsigned int h = 0;
-  int i;
-
-  if (filename == NULL) return;
-
-  base = filename;
-  p = strrchr(filename, '/');
-  if (p != NULL) base = p + 1;
-
-  for (i = 0; i < 3 && base[i] != '\0'; i++) {
-    if (base[i] >= 'A' && base[i] <= 'Z')
-      h = h * 31 + (unsigned int)(base[i] - 'A');
-    else if (base[i] >= 'a' && base[i] <= 'z')
-      h = h * 31 + (unsigned int)(base[i] - 'a');
-    else
-      break;
-  }
-  fv[F_DOMAIN_HASH] = (int)(h % 10000);
+  /* DEPRECATED: no-op. Domain hash removed for CASC compliance.
+     At competition, filenames are temp files — hash is meaningless.
+     Feature index 13 stays 0; decision tree falls through safely. */
+  (void)fv;
+  (void)filename;
 }
