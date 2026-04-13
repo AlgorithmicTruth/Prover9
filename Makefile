@@ -50,6 +50,17 @@ test5:
 	@bin/prover9 -f prover9.examples/sine_test.in < /dev/null 2>&1 | sed -n '/SInE:/p; /PROOF/,/end of proof/p'
 	@echo ""
 	@echo "**** If you see SInE stats and a proof, SInE in LADR mode is okay. ****"
+	@echo "**** Next try 'make test6'. ****"
+	@echo ""
+
+test6:
+	@echo "---- mace4 TPTP: PUZ001+1 (should GaveUp — no countermodel) ----"
+	@bin/mace4 -tptp -t 5 -N 10 -f tptp.examples/PUZ001+1.p < /dev/null 2>&1 | grep "SZS status"
+	@echo "---- mace4 TPTP: GRP001+1 (should CounterSatisfiable) ----"
+	@bin/mace4 -tptp -t 5 -N 10 -f tptp.examples/GRP001+1.p < /dev/null 2>&1 | grep "SZS status"
+	@echo ""
+	@echo "**** Expected: GaveUp, CounterSatisfiable ****"
+	@echo "**** If both match, mace4 TPTP mode is okay. ****"
 	@echo ""
 	@echo "*** All of the programs are in ./bin, and they can be copied anywhere you like. ***"
 	@echo ""
