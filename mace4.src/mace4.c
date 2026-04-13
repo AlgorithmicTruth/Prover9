@@ -463,10 +463,13 @@ int main(int argc, char **argv)
     goals_list = embed_formulas_in_topforms(tptp->goals, FALSE);
     {
       extern Ilist Input_fsyms, Input_rsyms;
-      Plist all_input = plist_cat2(assumptions, goals_list);
+      /* Copy both — plist_cat2 destroys p1, but we still need
+         assumptions and goals_list for clausification below. */
+      Plist all_input = plist_cat(copy_plist(assumptions),
+                                  copy_plist(goals_list));
       Input_fsyms = fsym_set_in_topforms(all_input);
       Input_rsyms = rsym_set_in_topforms(all_input);
-      zap_plist(all_input);  /* shallow — doesn't free the Topforms */
+      zap_plist(all_input);
     }
 
     /* Clausify */
