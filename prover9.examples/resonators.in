@@ -1,0 +1,40 @@
+%
+% Sample input deck demonstrating list(resonators), the Wos-style
+% resonance strategy ported from Otter's weight_list(pick_and_purge).
+%
+% Problem: in a group, x*x = e implies commutativity.  This is a
+% well-known benchmark from Wos/McCune.  The resonators here assign
+% weight 0 to equations whose functional skeleton matches
+% commutativity and associativity, giving such equations high
+% selection priority AND low-weight retention (Otter pick_and_purge
+% parity).
+%
+% Each named variable in a resonator pattern is an INDEPENDENT
+% wildcard: it matches any subterm (variable OR complex), with no
+% binding consistency across occurrences.  This is the semantics
+% Wos's resonance strategy requires; it is strictly coarser than
+% Prover9's standard weight() matching (which binds named vars).
+%
+% See Fitelson, "Clause Weighting and the Resonance Strategy:
+% Otter, Prover9, and the Loss of Resonators" (2026).
+%
+
+assign(max_weight, 12).
+
+list(resonators).
+  % shape: A * B = B * A   (captures commutativity in any form)
+  weight( x * y = y * x, 0).
+  % shape: A * (B * C) = (A * B) * C   (captures associativity in any form)
+  weight( x * (y * z) = (x * y) * z, 0).
+end_of_list.
+
+formulas(sos).
+  e * x = x.
+  x' * x = e.
+  (x * y) * z = x * (y * z).
+  x * x = e.
+end_of_list.
+
+formulas(goals).
+  x * y = y * x.
+end_of_list.

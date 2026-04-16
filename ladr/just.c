@@ -1682,6 +1682,114 @@ int proof_length(Plist proof)
 
 /*************
  *
+ *   proof_tree_weight()
+ *
+ *************/
+
+/* DOCUMENTATION
+Return the "proof weight" of clause c in Otter's sense: the number
+of input-clause leaves in the proof TREE of c (not the DAG, so shared
+ancestors are counted with multiplicity).  An input clause (one with
+no parents) contributes 1; a derived clause contributes the sum of
+the weights of its parents.  This measure differs from proof_length,
+which counts distinct ancestors (DAG nodes).  Used by ancestor
+subsumption as an alternate tie-breaking metric for alphabetic
+variants (see Otter's prf_weight).  The traversal is iterative with
+memoization keyed on clause ID so that DAGs with shared ancestors
+are evaluated in linear time even though each share is counted with
+multiplicity in the result.
+*/
+
+/* PUBLIC */
+int proof_tree_weight(Topform c)
+{
+  /* Memoized DAG evaluation computing the tree-leaf count.
+     We compute f(c) = 1 if c has no clause parents; else sum of f(p)
+     over clause parents p.  Memoization is keyed on clause id.  We
+     use a two-phase postorder: first push every node, then compute
+     bottom-up.  Cycles (which should not occur in a well-formed
+     proof DAG) are guarded by a "visiting" mark. */
+  enum { MARK_VISITING = -1 };
+  Plist worklist = NULL;     /* nodes to process (DFS stack, via plist_prepend) */
+  I2list memo = NULL;        /* clause_id -> computed weight (or MARK_VISITING) */
+  Plist ancestors;
+  Plist a;
+
+  if (c == NULL)
+    return 0;
+
+  /* Collect ancestors to bound the memo table and to pre-uncompress
+     any compressed justifications (get_clause_ancestors does this). */
+  ancestors = get_clause_ancestors(c);
+
+  /* Seed the worklist with every ancestor; iterative postorder pass. */
+  for (a = ancestors; a; a = a->next) {
+    Topform ca = a->v;
+    worklist = plist_prepend(worklist, ca);
+  }
+
+  while (worklist != NULL) {
+    Topform cur = worklist->v;
+    Ilist parents;
+    BOOL all_done;
+    int sum;
+
+    if (assoc(memo, cur->id) != INT_MIN) {
+      worklist = plist_pop(worklist);
+      continue;
+    }
+
+    parents = get_parents(cur->justification, TRUE);
+    if (parents == NULL) {
+      /* Input clause: leaf contributes 1. */
+      memo = alist_insert(memo, cur->id, 1);
+      worklist = plist_pop(worklist);
+      continue;
+    }
+
+    /* Check that all parents are memoized; if not, push them first. */
+    all_done = TRUE;
+    sum = 0;
+    {
+      Ilist p;
+      for (p = parents; p; p = p->next) {
+        int pv = assoc(memo, p->i);
+        if (pv == INT_MIN) {
+          Topform pc = find_clause_by_id(p->i);
+          if (pc == NULL) {
+            /* Parent vanished (e.g., purged by gc).  Treat as leaf
+               with weight 1 -- conservative, keeps the metric finite. */
+            sum += 1;
+          } else {
+            worklist = plist_prepend(worklist, pc);
+            all_done = FALSE;
+          }
+        } else {
+          sum += pv;
+        }
+      }
+    }
+    zap_ilist(parents);
+
+    if (all_done) {
+      memo = alist_insert(memo, cur->id, sum == 0 ? 1 : sum);
+      worklist = plist_pop(worklist);
+    }
+    /* else: parents were pushed; revisit cur after they're done. */
+  }
+
+  {
+    int result = assoc(memo, c->id);
+    if (result == INT_MIN)
+      result = 1;
+    zap_i2list(memo);
+    zap_plist(ancestors);
+    return result;
+  }
+}  /* proof_tree_weight */
+
+/*************
+ *
  *   map_id()
  *
  *************/

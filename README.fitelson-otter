@@ -1,0 +1,203 @@
+Fitelson-Otter Branch -- Resonators and Ancestor Subsumption
+=============================================================
+
+This branch adds two opt-in features ported from Otter to Prover9, both
+motivated by Fitelson, "Clause Weighting and the Resonance Strategy:
+Otter, Prover9, and the Loss of Resonators" (April 2026).  Both features
+are OFF by default.  Neither touches the default inference calculus;
+both are strictly additive and leave existing input decks unaffected.
+
+
+Background
+----------
+
+Otter supported two facilities that did not survive into Prover9:
+
+  1. Wos-style RESONATORS -- weight templates in which every variable
+     occurrence is an independent wildcard matching any subterm, with
+     no binding consistency across occurrences.  Resonators implement
+     Wos's resonance strategy: shape-based (functional-skeleton-based)
+     search direction, distinct from hints.
+
+  2. ANCESTOR SUBSUMPTION -- a refinement of ordinary subsumption that
+     preserves short-proof variants when two clauses are alphabetic
+     variants but differ in derivation length.  Useful for proof
+     shortening and iterative resonance/hint pipelines.
+
+Both were lost in Prover9's redesign: its equational weight rules use
+binding variable matching, making Wos-style resonators inexpressible;
+and its subsumption has no proof-cost tie-breaker.  This branch
+restores both, keeping Prover9's existing mechanisms unchanged when
+the new features are not used.
+
+
+Feature A: list(resonators)
+---------------------------
+
+Syntax:
+
+    list(resonators).
+      weight( PATTERN, N ).
+      weight( PATTERN, N ).
+      ...
+    end_of_list.
+
+PATTERN is an ordinary term (or literal).  N is an integer weight
+assigned to any clause whose functional skeleton matches the pattern.
+
+Matching semantics (Wos):
+
+  - Every variable occurrence in PATTERN -- named (x, y, A, ...) or
+    anonymous (_, _1..._9) -- is an INDEPENDENT wildcard.  It matches
+    ANY subterm (variable OR complex term).  There is no binding
+    consistency: two occurrences of "x" in a single pattern are not
+    required to match the same subterm.
+  - Non-variable symbols must match structurally (same symbol, same
+    arity, recursive argument match).
+
+Examples:
+
+    weight( i(x, x), 2 ).
+      matches P(i(a, b)), P(i(f(g), h)), P(i(a, a)) -- anything
+      whose argument to i is a two-argument structure, regardless of
+      whether the two argument positions hold the same subterm.
+
+    weight( x * y = y * x, 0 ).
+      matches any equation A*B = C*D for any subterms A,B,C,D --
+      which captures commutativity in any form, whatever the terms.
+
+    weight( x * (y * z) = (x * y) * z, 0 ).
+      matches any equation of associativity shape, even when the
+      subterms are complex.
+
+Role (Otter pick_and_purge parity):
+
+  - Resonators are consulted BEFORE ordinary weight rules (those in
+    list(weights)).  First-match-wins across the resonator list.
+  - A matching clause receives the resonator's weight in place of its
+    symbol-count weight.  Low-weight resonators (e.g. weight 0) give
+    high selection priority AND protect against SOS-size eviction --
+    Otter's pick_and_purge behavior.
+  - Existing list(weights) rules still apply to clauses that match
+    no resonator.
+
+Soundness:
+
+  - Resonators affect only weight assignment.  They do not change
+    inference rules or subsumption.  Any soundness/completeness
+    caveats that already applied to Prover9's weighting (e.g.,
+    max_weight/SOS-limit eviction) apply unchanged; no new risk class
+    is introduced.
+
+
+Feature B: set(ancestor_subsume)
+--------------------------------
+
+Syntax:
+
+    set(ancestor_subsume).   % off by default
+    set(proof_weight).       % off by default; selects tie-break metric
+
+Behavior:
+
+When ancestor_subsume is on, before clause C is allowed to subsume
+clause D (whether via forward or back subsumption), we apply the
+following refinement:
+
+  - If D also subsumes C (i.e. C and D are alphabetic variants), we
+    compare derivation costs.  The subsumption proceeds only if
+    cost(C) <= cost(D); otherwise D is kept, and the subsumption is
+    blocked.  Stats.anc_subsume_blocked counts these events.
+  - Otherwise (C is strictly more general), the subsumption proceeds
+    unconditionally.
+
+Two cost metrics:
+
+  - proof_weight OFF (default): cost is proof_length(c) = number of
+    distinct ancestors of c in the proof DAG.
+  - proof_weight ON: cost is proof_tree_weight(c) = number of
+    input-clause leaves in the proof TREE of c (shared ancestors
+    counted with multiplicity).  This corresponds to Otter's
+    set(proof_weight) metric.
+
+Soundness:
+
+  - Ancestor subsumption only ever BLOCKS subsumptions -- it retains
+    more clauses, never fewer.  Keeping redundant clauses is always
+    sound and preserves refutational completeness.  The cost is
+    search performance, never correctness.
+
+
+Example Decks
+-------------
+
+  prover9.examples/resonators.in       -- list(resonators) on a group
+                                          commutativity problem
+  prover9.examples/resonators_sc.in    -- list(resonators) in Wos's
+                                          sentential-calculus setting
+  prover9.examples/ancestor_subsume.in -- set(ancestor_subsume) on a
+                                          group commutativity problem
+
+
+Regression Tests
+----------------
+
+    make test7    # set(ancestor_subsume) regression
+    make test8    # list(resonators) regression
+
+Both produce "THEOREM PROVED" and diagnostic counters.  Test7 also
+shows Forward_subsumed/Back_subsumed totals (and Anc_subsume_blocked
+when blocks occur).  Test8 confirms "N resonators installed" and a
+successful proof in both decks.
+
+
+Implementation Notes
+--------------------
+
+Feature A (resonators):
+
+  ladr/unify.c:      match_resonator() -- new Wos-wildcard matcher
+  ladr/unify.c:      is_any_var_sym() -- exposed any-var check
+  ladr/weight.c:     init_resonators(), resonator_match_weight() --
+                     new storage and lookup; weight() consults
+                     resonators first, falls through to existing rules
+  ladr/top_input.c:  accept_list("resonators", ...) -- registered in
+                     provers.src/provers.c alongside existing lists
+
+Feature B (ancestor subsumption):
+
+  ladr/just.c:       proof_tree_weight() -- iterative tree-leaf
+                     counter with memoization (O(|ancestors|))
+  ladr/subsume.c:    anc_subsume(c, d, use_prf_weight) -- Otter's
+                     variant tie-breaker
+  provers.src/search.c:  flags ancestor_subsume and proof_weight
+                         registered; hooks at forward-subsumption and
+                         back-subsumption decision sites; new stat
+                         anc_subsume_blocked is printed in "lots"/"all"
+                         stats and serialized in checkpoints.
+
+
+Compatibility
+-------------
+
+  - Input decks that do not use list(resonators) or set(ancestor_subsume)
+    are behaviorally identical to the master branch.  All existing
+    regression tests (test1..test6) pass unchanged.
+  - Checkpoints from the master branch deserialize correctly: the new
+    stat "anc_subsume_blocked" is treated as 0 when missing.
+  - list(resonators) is serialized in new checkpoints alongside
+    list(weights).
+
+
+References
+----------
+
+  Fitelson (2026), "Clause Weighting and the Resonance Strategy:
+  Otter, Prover9, and the Loss of Resonators."
+
+  Wos (1995), "The Resonance Strategy," Computers & Mathematics with
+  Applications, vol. 29, no. 2, pp. 133-178.
+
+  McCune (2003), "OTTER 3.3 Reference Manual," ANL/MCS-TM-263,
+  especially Section 4 on weighting and Section 5 on ancestor
+  subsumption.

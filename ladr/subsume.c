@@ -294,6 +294,67 @@ BOOL subsumes_bt(Topform c, Topform d)
 
 /*************
  *
+ *   anc_subsume()
+ *
+ *************/
+
+/* DOCUMENTATION
+Ancestor subsumption: a refinement of ordinary subsumption for
+proof-elegance work, after Otter's anc_subsume (Otter clause.c
+lines 1188--1204).  The caller has already established that c
+subsumes d.  This routine decides whether the subsumption should
+be allowed to proceed (return TRUE) or blocked (return FALSE).
+<P>
+The logic is:
+<OL>
+<LI> If d also subsumes c (i.e. c and d are alphabetic variants),
+     compare derivation costs and return TRUE iff c's derivation
+     is no more expensive than d's.  If d has a strictly shorter
+     proof, the subsumption is blocked -- d survives.
+<LI> Otherwise (c is strictly more general than d), return TRUE
+     unconditionally: a strictly more general clause is always
+     preferable.
+</OL>
+<P>
+The <I>use_prf_weight</I> flag selects the derivation cost metric:
+<UL>
+<LI> FALSE: use proof_length (count of distinct ancestors in the
+     proof DAG).
+<LI> TRUE: use proof_tree_weight (count of input-clause leaves in
+     the proof tree, counting shared ancestors with multiplicity).
+</UL>
+This corresponds to Otter's set(ancestor_subsume) with optional
+set(proof_weight) modifier.  Blocking subsumption is always sound:
+at worst it retains redundant clauses (a performance cost, never a
+correctness cost).
+*/
+
+/* PUBLIC */
+BOOL anc_subsume(Topform c, Topform d, BOOL use_prf_weight)
+{
+  if (subsumes(d, c)) {
+    /* Alphabetic variants: compare derivation costs. */
+    int cost_c, cost_d;
+    if (use_prf_weight) {
+      cost_c = proof_tree_weight(c);
+      cost_d = proof_tree_weight(d);
+    } else {
+      Plist anc_c = get_clause_ancestors(c);
+      Plist anc_d = get_clause_ancestors(d);
+      cost_c = proof_length(anc_c);
+      cost_d = proof_length(anc_d);
+      zap_plist(anc_c);
+      zap_plist(anc_d);
+    }
+    return cost_c <= cost_d;
+  }
+  else
+    /* c is strictly more general than d: allow unconditionally. */
+    return TRUE;
+}  /* anc_subsume */
+
+/*************
+ *
  *   forward_subsume()
  *
  *************/

@@ -25,6 +25,15 @@
 
 static Plist Rules;
 
+/* Wos-style resonators (see init_resonators). */
+struct resonator {
+  Term pattern;  /* the match template (raw term) */
+  double wt;     /* the integer weight assigned to matching clauses */
+};
+static Plist Resonators = NULL;
+static int Num_resonators = 0;
+static int Num_resonator_matches = 0;
+
 static double Constant_weight;
 static double Sk_constant_weight;
 static double Not_weight;
@@ -190,6 +199,114 @@ void init_weight(Plist rules,
     }
   }
 }  /* init_weight */
+
+/*************
+ *
+ *   init_resonators()
+ *
+ *************/
+
+/* DOCUMENTATION
+Install Wos-style resonators for clause weighting.  Each resonator
+in the rules list must be a term of the form weight(pattern, N),
+where N is an integer or numeric constant giving the flat weight
+assigned to clauses whose literals match the pattern under Wos
+semantics (every variable position -- named or anonymous -- is an
+independent wildcard that matches any subterm, including complex
+terms).  Resonators are consulted before ordinary weight rules
+(first-match-wins across the resonator list); a clause matching
+any resonator gets that resonator's weight in place of its normal
+symbol-count weight.  This supports both Otter-style given-clause
+selection bias (lower weight = higher priority) and Otter-style
+pick_and_purge retention (max_weight deletion uses the same rule
+set).  Pass NULL or an empty list to install no resonators (the
+default; existing list(weights) behavior is unchanged).
+*/
+
+/* PUBLIC */
+void init_resonators(Plist resonators)
+{
+  Plist p;
+  Resonators = NULL;
+  Num_resonators = 0;
+  Num_resonator_matches = 0;
+  for (p = resonators; p; p = p->next) {
+    Term t = p->v;
+    Term pattern;
+    double wt;
+    struct resonator *r;
+    if (!is_term(t, "weight", 2)) {
+      p_term(t);
+      fatal_error("init_resonators: each resonator must be weight(pattern, N)");
+    }
+    pattern = copy_term(ARG(t, 0));
+    if (!term_to_number(ARG(t, 1), &wt)) {
+      p_term(t);
+      fatal_error("init_resonators: second argument must be numeric");
+    }
+    term_set_variables(pattern, MAX_VARS);
+    r = safe_malloc(sizeof(struct resonator));
+    r->pattern = pattern;
+    r->wt = wt;
+    Resonators = plist_append(Resonators, r);
+    Num_resonators++;
+  }
+}  /* init_resonators */
+
+/*************
+ *
+ *   resonator_match_weight()
+ *
+ *************/
+
+/* DOCUMENTATION
+Try to match the given term against the installed resonators.  If
+any resonator matches (first-match-wins), store that resonator's
+weight in *wt_out and return TRUE.  Otherwise return FALSE and
+leave *wt_out unchanged.  Wos semantics: every variable position
+in the resonator pattern is an independent wildcard matching any
+subterm.
+*/
+
+/* PUBLIC */
+BOOL resonator_match_weight(Term t, double *wt_out)
+{
+  Plist p;
+  for (p = Resonators; p; p = p->next) {
+    struct resonator *r = p->v;
+    if (match_resonator(r->pattern, t)) {
+      if (wt_out)
+        *wt_out = r->wt;
+      Num_resonator_matches++;
+      return TRUE;
+    }
+  }
+  return FALSE;
+}  /* resonator_match_weight */
+
+/*************
+ *
+ *   number_of_resonators()
+ *
+ *************/
+
+/* PUBLIC */
+int number_of_resonators(void)
+{
+  return Num_resonators;
+}  /* number_of_resonators */
+
+/*************
+ *
+ *   number_of_resonator_matches()
+ *
+ *************/
+
+/* PUBLIC */
+int number_of_resonator_matches(void)
+{
+  return Num_resonator_matches;
+}  /* number_of_resonator_matches */
 
 /*************
  *
@@ -384,6 +501,16 @@ double weight(Term t, Context subst)
   if (VARIABLE(t))
     return Variable_weight;
 
+  /* Resonators take precedence over ordinary weight rules.  A
+     resonator match yields a flat weight (no arithmetic RHS), and
+     because Wos-matching uses no binding there is no substitution
+     to undo. */
+  {
+    double rwt;
+    if (resonator_match_weight(t, &rwt))
+      return rwt;
+  }
+
   /* Check if a rule matches the top-level term. */
   {
     Plist p;
@@ -453,6 +580,15 @@ double weight(Term t, Context subst)
       if (VARIABLE(ch)) {
         stack[top].wt += Variable_weight;
         continue;
+      }
+
+      /* Resonators take precedence over ordinary weight rules. */
+      {
+        double rwt;
+        if (resonator_match_weight(ch, &rwt)) {
+          stack[top].wt += rwt;
+          continue;
+        }
       }
 
       /* Check if a rule matches this child. */

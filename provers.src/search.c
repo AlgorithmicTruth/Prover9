@@ -122,6 +122,7 @@ static struct {
 
   Plist actions;
   Plist weights;
+  Plist resonators;
   Plist kbo_weights;
   Plist interps;
   Plist given_selection;
@@ -213,6 +214,8 @@ Prover_options init_prover_options(void)
   p->back_subsume           = init_flag("back_subsume",            TRUE);
   p->back_subsume_skip_used = init_flag("back_subsume_skip_used", FALSE);
   p->back_subsume_skip_limbo= init_flag("back_subsume_skip_limbo",FALSE);
+  p->ancestor_subsume       = init_flag("ancestor_subsume",       FALSE);
+  p->proof_weight           = init_flag("proof_weight",           FALSE);
   p->unit_deletion          = init_flag("unit_deletion",          FALSE);
   p->factor                 = init_flag("factor",                 FALSE);
   p->cac_redundancy         = init_flag("cac_redundancy",          TRUE);
@@ -699,6 +702,9 @@ void fprint_prover_stats(FILE *fp, struct prover_stats s, char *stats_level)
 	    comma_num(s.kept_by_rule), comma_num(s.deleted_by_rule));
     fprintf(fp,"Forward_subsumed=%s. Back_subsumed=%s.\n",
 	    comma_num(s.subsumed), comma_num(s.back_subsumed));
+    if (s.anc_subsume_blocked > 0)
+      fprintf(fp,"Anc_subsume_blocked=%s.\n",
+	      comma_num(s.anc_subsume_blocked));
     fprintf(fp,"Sos_limit_deleted=%s. Sos_displaced=%s. Sos_removed=%s.\n",
 	    comma_num(s.sos_limit_deleted), comma_num(s.sos_displaced),
 	    comma_num(s.sos_removed));
@@ -2304,6 +2310,19 @@ BOOL cl_process_delete(Topform c)
     Topform subsumer;
     clock_start(Clocks.subsume);
     subsumer = forward_subsumption(c);
+    /* Ancestor-subsumption refinement (Otter anc_subsume): when the
+       subsumer and c are alphabetic variants, keep c if its proof is
+       strictly shorter.  Always safe; merely retains more clauses. */
+    if (subsumer != NULL && flag(Opt->ancestor_subsume)) {
+      if (!anc_subsume(subsumer, c, flag(Opt->proof_weight))) {
+        Stats.anc_subsume_blocked++;
+        if (flag(Opt->print_gen))
+          printf("%ssubsumption blocked by ancestor_subsume"
+                 " (subsumer %llu vs c).\n",
+                 TPTP_PFX, subsumer->id);
+        subsumer = NULL;  /* keep c */
+      }
+    }
     clock_stop(Clocks.subsume);
     if (subsumer != NULL && !c->used) {
       if (flag(Opt->print_gen))
@@ -2669,6 +2688,19 @@ void limbo_process(BOOL pre_search)
 	   in the same limbo_process() loop.  The limbo clause will be
 	   handled in its own iteration of the loop. */
 	if (flag(Opt->back_subsume_skip_limbo) && clist_member(d, Glob.limbo)) {
+	  subsumees = plist_pop(subsumees);
+	  continue;
+	}
+	/* Ancestor-subsumption refinement (Otter anc_subsume): when c
+	   and d are alphabetic variants, keep d if d's proof is strictly
+	   shorter.  Always safe; merely retains more clauses. */
+	if (flag(Opt->ancestor_subsume) &&
+	    !anc_subsume(c, d, flag(Opt->proof_weight))) {
+	  Stats.anc_subsume_blocked++;
+	  if (flag(Opt->print_kept))
+	    printf("%s    back subsumption of %llu by %llu blocked"
+		   " by ancestor_subsume.\n",
+		   TPTP_PFX, d->id, c->id);
 	  subsumees = plist_pop(subsumees);
 	  continue;
 	}
@@ -3312,6 +3344,11 @@ void init_search_early(void)
 	      floatparm(Opt->depth_penalty),
 	      floatparm(Opt->var_penalty),
 	      floatparm(Opt->complexity));
+  init_resonators(Glob.resonators);
+  if (number_of_resonators() > 0 && !flag(Opt->quiet))
+    printf("%% %d resonator%s installed (Wos wildcard matching).\n",
+	   number_of_resonators(),
+	   number_of_resonators() == 1 ? "" : "s");
 
   if (Glob.given_selection == NULL)
     Glob.given_selection = selector_rules_from_options(Opt);
@@ -4752,6 +4789,8 @@ void write_checkpoint_input(const char *dir)
      fwrite_term_list writes list(name). term. ... end_of_list. format. */
   if (Glob.weights)
     fwrite_term_list(fp, Glob.weights, "weights");
+  if (Glob.resonators)
+    fwrite_term_list(fp, Glob.resonators, "resonators");
   if (Glob.kbo_weights)
     fwrite_term_list(fp, Glob.kbo_weights, "kbo_weights");
   else if (stringparm(Opt->order, "kbo")) {
@@ -4835,6 +4874,7 @@ void write_checkpoint(void)
     fprintf(fp, "kept %llu\n", Stats.kept);
     fprintf(fp, "proofs %llu\n", Stats.proofs);
     fprintf(fp, "back_subsumed %llu\n", Stats.back_subsumed);
+    fprintf(fp, "anc_subsume_blocked %llu\n", Stats.anc_subsume_blocked);
     fprintf(fp, "back_demodulated %llu\n", Stats.back_demodulated);
     fprintf(fp, "subsumed %llu\n", Stats.subsumed);
     fprintf(fp, "sos_limit_deleted %llu\n", Stats.sos_limit_deleted);
@@ -5469,6 +5509,7 @@ void resume_load_clauses(const char *dir)
   rewind(fp); Stats.kept = read_metadata_ull(fp, "kept");
   rewind(fp); Stats.proofs = read_metadata_ull(fp, "proofs");
   rewind(fp); Stats.back_subsumed = read_metadata_ull(fp, "back_subsumed");
+  rewind(fp); Stats.anc_subsume_blocked = read_metadata_ull(fp, "anc_subsume_blocked");
   rewind(fp); Stats.back_demodulated = read_metadata_ull(fp, "back_demodulated");
   rewind(fp); Stats.subsumed = read_metadata_ull(fp, "subsumed");
   rewind(fp); Stats.sos_limit_deleted = read_metadata_ull(fp, "sos_limit_deleted");
@@ -6381,6 +6422,7 @@ Prover_results search(Prover_input p)
     Glob.hints   = move_clauses_to_clist(p->hints, "hints", FALSE);
 
     Glob.weights          = tlist_copy(p->weights);
+    Glob.resonators       = tlist_copy(p->resonators);
     Glob.kbo_weights      = tlist_copy(p->kbo_weights);
     Glob.actions          = tlist_copy(p->actions);
     Glob.interps          = tlist_copy(p->interps);

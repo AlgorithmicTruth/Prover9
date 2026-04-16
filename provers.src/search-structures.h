@@ -74,6 +74,8 @@ struct prover_options {
     back_subsume,
     back_subsume_skip_used,
     back_subsume_skip_limbo,
+    ancestor_subsume,       // block subsumption of variant with shorter proof
+    proof_weight,           // anc_subsume metric: tree-leaves vs DAG-nodes
     unit_deletion,
     factor,
     cac_redundancy,
@@ -267,6 +269,7 @@ struct prover_stats {
     deleted_by_rule,
     subsumed,
     back_subsumed,
+    anc_subsume_blocked,
     sos_limit_deleted,
     sos_displaced,
     sos_removed,
@@ -300,7 +303,7 @@ struct prover_input {
   // tformula lists
   Plist usable, sos, demods, goals, hints, unused;
   // term lists
-  Plist actions, weights, kbo_weights, interps;
+  Plist actions, weights, resonators, kbo_weights, interps;
   Plist given_selection, keep_rules, delete_rules;
   // ordinary options
   Prover_options options;
