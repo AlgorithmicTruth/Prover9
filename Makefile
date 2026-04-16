@@ -61,29 +61,6 @@ test6:
 	@echo ""
 	@echo "**** Expected: GaveUp, CounterSatisfiable ****"
 	@echo "**** If both match, mace4 TPTP mode is okay. ****"
-	@echo "**** Next try 'make test7'. ****"
-	@echo ""
-
-test7:
-	@echo "---- Fitelson-Otter: set(ancestor_subsume) on group commutativity ----"
-	@bin/prover9 -t 10 -f prover9.examples/ancestor_subsume.in < /dev/null 2>&1 \
-	  | grep -E '^(THEOREM PROVED|Forward_subsumed=|Back_subsumed=|Anc_subsume_blocked=)'
-	@echo ""
-	@echo "**** Expected: THEOREM PROVED, with Forward_subsumed and Back_subsumed counters. ****"
-	@echo "**** If you see a proof, set(ancestor_subsume) is okay. ****"
-	@echo "**** Next try 'make test8'. ****"
-	@echo ""
-
-test8:
-	@echo "---- Fitelson-Otter: list(resonators) on group commutativity ----"
-	@bin/prover9 -t 10 -f prover9.examples/resonators.in < /dev/null 2>&1 \
-	  | grep -E '^(THEOREM PROVED|% [0-9]+ resonators? installed)'
-	@echo "---- Fitelson-Otter: list(resonators) in sentential calculus ----"
-	@bin/prover9 -t 10 -f prover9.examples/resonators_sc.in < /dev/null 2>&1 \
-	  | grep -E '^(THEOREM PROVED|% [0-9]+ resonators? installed)'
-	@echo ""
-	@echo "**** Expected: 'resonators installed' and THEOREM PROVED for both runs. ****"
-	@echo "**** If both pass, list(resonators) is okay. ****"
 	@echo ""
 	@echo "*** All of the programs are in ./bin, and they can be copied anywhere you like. ***"
 	@echo ""
