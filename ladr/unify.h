@@ -186,6 +186,10 @@ void p_trail(Trail t);
 
 BOOL match_weight(Term t1, Context c1, Term t2, Trail *trp, int *anyvar_ctx);
 
+BOOL match_resonator(Term pattern, Term target);
+
+BOOL is_any_var_sym(int sn);
+
 Ilist vars_in_trail(Trail tr);
 
 Plist context_to_pairs(Ilist varnums, Context c);

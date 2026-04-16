@@ -1,0 +1,42 @@
+%
+% Sample input deck demonstrating resonators in Wos's original
+% setting: two-valued sentential calculus with condensed
+% detachment.  Each axiom, intermediate thesis, and target is a
+% formula P(...) where P is the single "is-a-theorem" predicate
+% and the arguments are built from i (implication), n (negation),
+% and propositional variables.
+%
+% The resonators below are the "shapes" (functional skeletons) of
+% several Łukasiewicz theses.  Named variables x, y, z inside the
+% resonator patterns behave as Wos wildcards -- any variable
+% occurrence matches anything, with no binding consistency.
+%
+% This deck is a tiny teaching example; the literature contains
+% far richer resonator sets (e.g. Wos's 68 sentential-calculus
+% resonators from the 1995 paper cited in Fitelson 2026).
+%
+
+assign(max_weight, 20).
+set(hyper_resolution).
+
+formulas(sos).
+  % Axioms of the Łukasiewicz system.
+  P(i(x, i(y, x))).
+  P(i(i(x, i(y, z)), i(i(x, y), i(x, z)))).
+  P(i(i(n(x), n(y)), i(y, x))).
+  % Condensed detachment rule (as a resolution nucleus).
+  -P(i(x, y)) | -P(x) | P(y).
+end_of_list.
+
+list(resonators).
+  % Identity implication: matches P(i(A, A)) for any A.
+  weight( P(i(x, x)), 0 ).
+  % Thesis shape with three i-nestings.
+  weight( P(i(i(x, y), i(x, z))), 0 ).
+  % Useful intermediate shape.
+  weight( P(i(x, i(i(x, y), y))), 0 ).
+end_of_list.
+
+formulas(goals).
+  P(i(x, x)).
+end_of_list.

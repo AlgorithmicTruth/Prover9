@@ -1061,6 +1061,24 @@ static int any_var(int sn)
   return -1;
 }  /* any_var */
 
+/*************
+ *
+ *   is_any_var_sym()
+ *
+ *************/
+
+/* DOCUMENTATION
+Return TRUE if sn is the symbol number of an any-variable symbol
+("_" or "_1" .. "_9").  Exposed so that other matching modes
+(e.g., the Wos resonator matcher) can detect these positions.
+*/
+
+/* PUBLIC */
+BOOL is_any_var_sym(int sn)
+{
+  return any_var(sn) != -1;
+}  /* is_any_var_sym */
+
 static BOOL match_anyvar(int anyvar, Term t2, int *anyvar_ctx)
 {
   int i;
@@ -1160,6 +1178,62 @@ fail:
   }
   return FALSE;
 }  /* match_weight */
+
+/*************
+ *
+ *   match_resonator()
+ *
+ *************/
+
+/* DOCUMENTATION
+Wos-style resonator matching for weight templates.
+<P>
+A resonator is a formula schema in which every variable position
+is an independent wildcard: it matches ANY subterm (variable OR
+complex) with NO binding consistency across occurrences.  This
+generalizes Otter's wt_match semantics (which matched only
+variables, suitable for sentential calculus) to the full-term
+regime needed for resonators in algebraic settings like group
+theory or Robbins algebra.
+<P>
+Specifically, within the pattern <I>pattern</I>:
+<UL>
+<LI> Any true variable position matches anything in <I>target</I>.
+<LI> Any any-variable symbol ("_" or "_1" .. "_9") also matches
+     anything -- the normal binding rules of match_weight are
+     <B>not</B> imposed here.
+<LI> Constant and compound positions must match structurally
+     (same symbol, same arity, recursively matching arguments).
+</UL>
+<P>
+No Context/Trail is needed because nothing is bound.  This is the
+matching semantics that makes Wos's resonance strategy expressible.
+*/
+
+/* PUBLIC */
+BOOL match_resonator(Term pattern, Term target)
+{
+  if (VARIABLE(pattern))
+    return TRUE;
+  if (any_var(SYMNUM(pattern)) != -1)
+    return TRUE;
+  /* Pattern is a constant or compound; target must share its shape. */
+  if (VARIABLE(target))
+    return FALSE;
+  if (SYMNUM(pattern) != SYMNUM(target))
+    return FALSE;
+  {
+    int i;
+    int n = ARITY(pattern);
+    if (n != ARITY(target))
+      return FALSE;
+    for (i = 0; i < n; i++) {
+      if (!match_resonator(ARG(pattern, i), ARG(target, i)))
+        return FALSE;
+    }
+  }
+  return TRUE;
+}  /* match_resonator */
 
 /*************
  *

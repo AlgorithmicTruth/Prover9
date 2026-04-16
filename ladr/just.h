@@ -211,6 +211,8 @@ Plist get_clause_ancestors(Topform c);
 
 int proof_length(Plist proof);
 
+int proof_tree_weight(Topform c);
+
 void map_just(Just just, I2list map);
 
 int just_count(Just j);

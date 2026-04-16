@@ -1156,6 +1156,7 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
 
   accept_list("actions",         TERMS, FALSE, &(pi->actions));
   accept_list("weights",         TERMS, FALSE, &(pi->weights));
+  accept_list("resonators",      TERMS, FALSE, &(pi->resonators));
   accept_list("kbo_weights",     TERMS, FALSE, &(pi->kbo_weights));
   accept_list("interpretations", TERMS, FALSE, &(pi->interps));
   accept_list("given_selection", TERMS, FALSE, &(pi->given_selection));

@@ -1,0 +1,37 @@
+%
+% Sample input deck demonstrating set(ancestor_subsume), ported
+% from Otter.  Ancestor subsumption refines ordinary subsumption
+% for proof-elegance work: when two clauses are alphabetic
+% variants (mutually subsume each other), ordinary subsumption
+% discards whichever arrived later, regardless of derivation
+% length.  Ancestor subsumption preserves the variant with the
+% shorter proof, at the cost of retaining one extra clause per
+% blocked subsumption.
+%
+% Blocking a subsumption is always sound (keeps more clauses, not
+% fewer); it only costs search performance.  Turn it on for
+% proof-shortening work or iterative resonance/hint pipelines
+% where short derivations of intermediate lemmas matter.
+%
+% The companion flag set(proof_weight) switches the tie-breaking
+% metric from proof_length (distinct ancestors, DAG size) to
+% proof tree weight (input-clause leaves, counted with
+% multiplicity).  Default is proof_length.
+%
+% See Fitelson (2026) Section 4 for a detailed treatment, and
+% Otter's clause.c lines 1188-1204 for the original implementation.
+%
+
+set(ancestor_subsume).
+% set(proof_weight).   % uncomment to use tree-leaf count instead
+
+formulas(sos).
+  e * x = x.
+  x' * x = e.
+  (x * y) * z = x * (y * z).
+  x * x = e.
+end_of_list.
+
+formulas(goals).
+  x * y = y * x.
+end_of_list.

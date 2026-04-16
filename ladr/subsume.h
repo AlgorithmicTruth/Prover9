@@ -38,6 +38,8 @@ BOOL subsumes(Topform c, Topform d);
 
 BOOL subsumes_bt(Topform c, Topform d);
 
+BOOL anc_subsume(Topform c, Topform d, BOOL use_prf_weight);
+
 Topform forward_subsume(Topform d, Lindex idx);
 
 Plist back_subsume(Topform c, Lindex idx);

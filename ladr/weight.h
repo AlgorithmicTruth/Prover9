@@ -43,8 +43,16 @@ void init_weight(Plist rules,
 		 double var_penalty,
 		 double complexity);
 
+void init_resonators(Plist resonators);
+
+BOOL resonator_match_weight(Term t, double *wt_out);
+
 double weight(Term t, Context subst);
 
 double clause_weight(Literals lits);
+
+int number_of_resonators(void);
+
+int number_of_resonator_matches(void);
 
 #endif  /* conditional compilation of whole file */
