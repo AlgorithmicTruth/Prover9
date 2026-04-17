@@ -47,9 +47,12 @@
 /* Everything from here to cores_from_scan() uses fork/mmap/signals
    which are unavailable in WebAssembly.  WASM mode runs single-strategy. */
 
+#ifndef NO_OPEN_MEMSTREAM
 /* Signal-safe child PID tracking for cleanup on parent death.
    Tombstone array: slots are 0 (empty) or a live child PID.
-   Signal handler scans the full array — no counter needed. */
+   Signal handler scans the full array — no counter needed.
+   Only used by the -cores N sliding-window scheduler (requires
+   open_memstream), so guarded by NO_OPEN_MEMSTREAM. */
 #define MAX_CHILD_PIDS 128
 static volatile pid_t Child_pids[MAX_CHILD_PIDS];
 
@@ -100,6 +103,7 @@ static void install_parent_death_handler(void)
   sigaction(SIGXCPU, &sa, NULL);
   sigaction(SIGINT, &sa, NULL);
 }
+#endif /* !NO_OPEN_MEMSTREAM */
 
 /*************
  *

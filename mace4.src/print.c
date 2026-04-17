@@ -297,7 +297,7 @@ void print_model_tptp(FILE *fp)
   int i, j;
   BOOL has_functions = FALSE;
   BOOL has_relations = FALSE;
-  int conjunct_count;
+  int conjunct_count = 0;
 
   /* Check what kind of symbols we have */
   for (s = Symbols; s != NULL; s = s->next) {
