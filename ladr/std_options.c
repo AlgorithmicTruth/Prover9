@@ -25,6 +25,7 @@
 static int Prolog_style_variables = -1;       /* delayed effect */
 static int Ignore_option_dependencies = -1;   /* immediate effect */
 static int Clocks = -1;                       /* delayed effect */
+static int Otter_style_demod = -1;            /* delayed effect */
 
 /*************
  *
@@ -42,6 +43,7 @@ void init_standard_options(void)
   Prolog_style_variables     = init_flag("prolog_style_variables",     FALSE);
   Ignore_option_dependencies = init_flag("ignore_option_dependencies", FALSE);
   Clocks                     = init_flag("clocks",                     FALSE);
+  Otter_style_demod          = init_flag("otter_style_demod",          FALSE);
 
 }  /* init_standard_options */
 
@@ -102,3 +104,15 @@ int prolog_style_variables_id(void)
 {
   return Prolog_style_variables;
 }  /* prolog_style_variables_id */
+
+/*************
+ *
+ *   otter_style_demod_id()
+ *
+ *************/
+
+/* PUBLIC */
+int otter_style_demod_id(void)
+{
+  return Otter_style_demod;
+}  /* otter_style_demod_id */

@@ -40,4 +40,6 @@ int clocks_id(void);
 
 int prolog_style_variables_id(void);
 
+int otter_style_demod_id(void);
+
 #endif  /* conditional compilation of whole file */

@@ -677,10 +677,13 @@ void symbol_check_and_declare(void)
     fatal_input_error(stdout, sb_to_malloc_string(sb), NULL);
   }
 
-  /* Check if any symbol is used as both a relation and function symbol. */
+  /* Check if any symbol is used as both a relation and function symbol.
+     Relaxed when set(otter_style_demod): Otter does not distinguish
+     predicates from functions, so demodulators like t(junk) = $T are
+     allowed.  The user is opting in to Otter-compatible behavior. */
 
   bad = ilist_intersect(fsyms_all, rsyms_all);
-  if (bad) {
+  if (bad && !flag(otter_style_demod_id())) {
     Ilist g;
     String_buf sb = init_string_buf("The following symbols/arities are used as"
 				    " both relation and function symbols: ");
@@ -694,10 +697,13 @@ void symbol_check_and_declare(void)
     fatal_input_error(stdout, sb_to_malloc_string(sb), NULL);
   }
 
-  /* Check if any symbol is used with multiple arities. */
+  /* Check if any symbol is used with multiple arities.
+     Also relaxed under otter_style_demod: the same symbol appearing
+     in both fsyms and rsyms at the same arity is expected when
+     demodulators reference predicate symbols. */
 
   bad = arity_check(fsyms_all, rsyms_all);
-  if (bad) {
+  if (bad && !flag(otter_style_demod_id())) {
     Ilist g;
     String_buf sb = init_string_buf("The following symbols are used with"
 				    " multiple arities: ");

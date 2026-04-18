@@ -19,6 +19,7 @@
 #include "search.h"
 #include "provers.h"
 #include "../ladr/ac_redun.h"
+#include "../ladr/std_options.h"
 #include "../ladr/memory.h"
 #include "../ladr/string.h"
 #include "../ladr/sine.h"
@@ -2043,6 +2044,26 @@ void cl_process_simplify(Topform c)
       fwrite_clause(stdout, c, CL_FORM_STD);
     }
     clock_stop(Clocks.demod);
+
+    /* Otter-style demod: after subterm demodulators rewrite arguments
+       to "junk", any positive literal whose argument contains "junk"
+       is effectively a tautology (matching Otter's t(junk) = $T).
+       Replace such literals with $T so the tautology check deletes
+       the clause. */
+    if (flag(otter_style_demod_id())) {
+      static int junk_sn = -2;  /* -2 = not yet looked up */
+      if (junk_sn == -2)
+        junk_sn = str_to_sn("junk", 0);
+      if (junk_sn >= 0) {
+        Literals lit;
+        for (lit = c->literals; lit; lit = lit->next) {
+          if (lit->sign && symbol_in_term(junk_sn, lit->atom)) {
+            zap_term(lit->atom);
+            lit->atom = get_rigid_term(true_sym(), 0);
+          }
+        }
+      }
+    }
   }
 
   orient_equalities(c, TRUE);

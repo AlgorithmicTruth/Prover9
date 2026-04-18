@@ -1629,8 +1629,11 @@ Plist get_clanc(int id, Plist anc)
 
     c = find_clause_by_id(cur_id);
     if (c == NULL) {
-      printf("get_clanc, clause with id=%d not found.\n", cur_id);
-      fatal_error("get_clanc, clause not found.");
+      /* Parent clause was deleted (back-subsumed, weight-limited, etc.).
+         Skip this branch — ancestor set is incomplete but safe.
+         ancestor_subsume will be conservative (fewer ancestors means
+         fewer subsumption opportunities, never unsound). */
+      continue;
     }
 
     if (!plist_member(anc, c)) {
