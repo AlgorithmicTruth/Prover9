@@ -1,6 +1,8 @@
 # Prover9 and Mace4 -- LADR-2026
 
-**Website:** [prover9.org](https://prover9.org) | **Manual:** [prover9.org/manual-2026](https://prover9.org/manual-2026/) | **Build Instructions:** [Building from Source](https://prover9.org/manual-2026/install.html)
+**Website:** [prover9.org](https://prover9.org)
+**Manual:** [prover9.org/manual-2026](https://prover9.org/manual-2026/)
+**Build Instructions:** [Building from Source](https://prover9.org/manual-2026/install.html)
 
 Jeffrey Machado and Larry Lesyna present a backwards compatible, comprehensive modernization of William McCune's Prover9 and Mace4 within the LADR framework.  Prover9 is an automated theorem prover for first-order and equational logic, and Mace4 searches for finite models and counterexamples.
 
