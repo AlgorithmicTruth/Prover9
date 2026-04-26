@@ -2287,6 +2287,7 @@ BOOL skip_black_white_tests(Topform c)
 	  (c->matching_hint  != NULL && !flag(Opt->limit_hint_matchers)));
 }  /* skip_black_white_tests */
 
+
 static
 BOOL cl_process_delete(Topform c)
 {

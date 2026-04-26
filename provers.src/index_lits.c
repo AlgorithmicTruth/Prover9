@@ -370,6 +370,32 @@ Topform forward_subsumption(Topform d)
 
 /*************
  *
+ *   forward_subsumption_filter()
+ *
+ *   Variant of forward_subsumption that skips candidates rejected by
+ *   accept_cb.  Used to support set(ancestor_subsume): when the first
+ *   subsumer is an alphabetic variant whose proof is longer than the
+ *   new clause's, skip it and try the next candidate.  Matches Otter's
+ *   forward_subsume which iterates past anc_subsume blocks.
+ *
+ *************/
+
+/* PUBLIC */
+Topform forward_subsumption_filter(Topform d,
+                                   BOOL (*accept_cb)(Topform subsumer,
+                                                     Topform new_clause,
+                                                     void *arg),
+                                   void *cb_arg)
+{
+  Topform subsumer = forward_subsume_filter(d, Unit_discrim_idx,
+                                            accept_cb, cb_arg);
+  if (!subsumer)
+    subsumer = forward_feature_subsume(d, Nonunit_features_idx);
+  return subsumer;
+}  /* forward_subsumption_filter */
+
+/*************
+ *
  *   back_subsumption()
  *
  *************/

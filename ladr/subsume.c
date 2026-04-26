@@ -365,6 +365,27 @@ BOOL anc_subsume(Topform c, Topform d, BOOL use_prf_weight)
 /* PUBLIC */
 Topform forward_subsume(Topform d, Lindex idx)
 {
+  return forward_subsume_filter(d, idx, NULL, NULL);
+}  /* forward_subsume */
+
+/*************
+ *
+ *   forward_subsume_filter()
+ *
+ *   Iterate candidate subsumers; when an accept_cb is provided, skip
+ *   candidates for which it returns FALSE.  This matches Otter's
+ *   forward_subsume which iterates past anc_subsume blocks instead of
+ *   bailing on the first hit (clause.c:1380-1466).
+ *
+ *************/
+
+/* PUBLIC */
+Topform forward_subsume_filter(Topform d, Lindex idx,
+                               BOOL (*accept_cb)(Topform subsumer,
+                                                 Topform new_clause,
+                                                 void *arg),
+                               void *cb_arg)
+{
   Literals dlit;
   Topform subsumer = NULL;
   Context subst = get_context();
@@ -393,8 +414,14 @@ Topform forward_subsume(Topform d, Lindex idx)
 	if (nc == 1 || (nc <= nd && (backtrack
 				     ? subsumes_bt(c,d)
 				     : subsumes(c,d)))) {
-	  subsumer = c;
-	  mindex_retrieve_cancel(pos);
+	  /* Candidate found.  If a filter is supplied, ask whether to
+	     accept it.  Otter's anc_subsume returns FALSE here to skip
+	     a variant whose proof is longer than the new clause's. */
+	  if (accept_cb == NULL || accept_cb(c, d, cb_arg)) {
+	    subsumer = c;
+	    mindex_retrieve_cancel(pos);
+	  }
+	  /* else: leave subsumer NULL, fall through to next candidate */
 	}
       }
       if (subsumer == NULL)
@@ -403,7 +430,7 @@ Topform forward_subsume(Topform d, Lindex idx)
   }
   free_context(subst);
   return subsumer;
-}  /* forward_subsume */
+}  /* forward_subsume_filter */
 
 /*************
  *

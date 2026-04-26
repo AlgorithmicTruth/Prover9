@@ -42,6 +42,19 @@ BOOL anc_subsume(Topform c, Topform d, BOOL use_prf_weight);
 
 Topform forward_subsume(Topform d, Lindex idx);
 
+/* Like forward_subsume, but skips candidates rejected by accept_cb.
+   accept_cb(subsumer, new_clause, cb_arg) returns TRUE to accept this
+   subsumer (return it) or FALSE to skip it and try the next candidate.
+   Used to support set(ancestor_subsume): if the first candidate is an
+   alphabetic variant with longer proof, the caller wants to keep the
+   new clause AND check whether other non-blocked subsumers exist.
+   Matches Otter's forward_subsume behavior (clause.c). */
+Topform forward_subsume_filter(Topform d, Lindex idx,
+                               BOOL (*accept_cb)(Topform subsumer,
+                                                 Topform new_clause,
+                                                 void *arg),
+                               void *cb_arg);
+
 Plist back_subsume(Topform c, Lindex idx);
 
 Topform back_subsume_one(Topform c, Lindex idx);

@@ -48,6 +48,12 @@ Plist back_unit_deletable(Topform c);
 
 Topform forward_subsumption(Topform d);
 
+Topform forward_subsumption_filter(Topform d,
+                                   BOOL (*accept_cb)(Topform subsumer,
+                                                     Topform new_clause,
+                                                     void *arg),
+                                   void *cb_arg);
+
 Plist back_subsumption(Topform c);
 
 void lits_idx_report(void);

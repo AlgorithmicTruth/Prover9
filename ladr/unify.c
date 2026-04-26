@@ -1213,8 +1213,13 @@ matching semantics that makes Wos's resonance strategy expressible.
 /* PUBLIC */
 BOOL match_resonator(Term pattern, Term target)
 {
+  /* Otter-compatible type matching: a variable in the pattern only
+     matches a variable in the target (not a complex term or constant).
+     This matches Otter's wt_match semantics for weight_list templates,
+     where weight(t(i(A,A)),2) only matches clauses with variables at
+     the A positions, not arbitrary subterms. */
   if (VARIABLE(pattern))
-    return TRUE;
+    return VARIABLE(target);
   if (any_var(SYMNUM(pattern)) != -1)
     return TRUE;
   /* Pattern is a constant or compound; target must share its shape. */
