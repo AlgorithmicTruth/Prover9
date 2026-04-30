@@ -102,6 +102,7 @@ struct prover_options {
     print_labeled,
     print_proofs,
     print_proof_goal,
+    print_expanded_proof,   // unroll compound rewrite/resolve steps
     default_output,
     print_clause_properties,
 

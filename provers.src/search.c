@@ -242,6 +242,7 @@ Prover_options init_prover_options(void)
   p->print_labeled          = init_flag("print_labeled",          FALSE);
   p->print_proofs           = init_flag("print_proofs",            TRUE);
   p->print_proof_goal       = init_flag("print_proof_goal",       FALSE);
+  p->print_expanded_proof   = init_flag("print_expanded_proof",   FALSE);
   p->default_output         = init_flag("default_output",          TRUE);
   p->print_clause_properties= init_flag("print_clause_properties",FALSE);
 
@@ -1849,8 +1850,52 @@ void handle_proof_and_maybe_exit(Topform empty_clause)
       printf("%% Given clauses in proof: %d (%d new hints)\n\n",
 	     pf_total_given, pf_nothint_given);
     }
-    for (p = proof; p; p = p->next)
-      fwrite_clause(stdout, p->v, CL_FORM_STD);
+    {
+      /* Expand compound justifications (rewrite chains, etc.) into
+         separate paramodulation steps when set(print_expanded_proof)
+         or the -expand CLI switch is in effect.  Helpful for users
+         learning Prover9: a step like [copy(16),rewrite([7(2),4(6)])]
+         becomes one paramod inference per rewrite, with the
+         intermediate clause body shown explicitly.
+
+         expand_proof rewrites goal/non-clause formula bodies as a
+         side effect of its internal CNF-style processing; for the LADR
+         print we restore the original body of any such clause so the
+         user sees the goal as written.  TPTP output is unaffected
+         (it relies on the rewritten form for clausify inferences). */
+      Plist proof_to_print = proof;
+      I3list jmap = NULL;
+      if (flag(Opt->print_expanded_proof)) {
+        proof_to_print = expand_proof(proof, &jmap);
+        /* Restore original goal/input bodies — expand_proof may rewrite
+           a goal body as a side effect of CNF processing.  Deep-copy
+           literals/formula so renumber_proof's uplink check stays
+           consistent. */
+        Plist q;
+        for (q = proof_to_print; q; q = q->next) {
+          Topform c = (Topform) q->v;
+          if (c->is_formula || has_goal_just(c) || has_input_just(c)) {
+            Topform orig = proof_id_to_clause(proof, c->id);
+            if (orig != NULL && orig != c) {
+              if (orig->is_formula && orig->formula) {
+                c->formula = formula_copy(orig->formula);
+                c->is_formula = TRUE;
+              } else if (orig->literals) {
+                c->literals = copy_literals(orig->literals);
+                upward_clause_links(c);
+              }
+            }
+          }
+        }
+        /* Sequential numbering from 1 so intermediate steps don't get
+           awkward high IDs (12, 13 inserted between 6 and 7). */
+        renumber_proof(proof_to_print, 1);
+      }
+      for (p = proof_to_print; p; p = p->next)
+        fwrite_clause(stdout, p->v, CL_FORM_STD);
+      if (jmap)
+        zap_i3list(jmap);
+    }
     print_separator(stdout, "end of proof", TRUE);
   }
   else {

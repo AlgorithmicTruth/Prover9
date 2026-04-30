@@ -226,6 +226,7 @@ static char Help_string[] =
 "  -tptp_out  TPTP/TSTP output mode (SZS status + TSTP proofs).\n"
 "  -ladr_out  Native Prover9 output on TPTP input (override TSTP).\n"
 "  -fastPE   5-second timeout on predicate elimination.\n"
+"  -expand    Unroll compound proof steps (each rewrite as its own step).\n"
 "  -strategy N  Force portfolio strategy N (0-indexed, single-core).\n"
 "  -cores N    Sliding-window scheduler: N concurrent children.\n"
 "  -comp n   Competition mode: -cores <cpus> -fastPE -t n.\n"
@@ -249,6 +250,7 @@ struct arg_options {
   BOOL fast_pred_elim;  /* 5-second pred elim timeout */
   int  cores;              /* sliding-window cores (-1 = use parm default) */
   BOOL read_stdin;         /* read LADR overrides from stdin (-stdin flag) */
+  BOOL expand_proof;       /* -expand: unroll compound proof steps */
 };
 
 /*************
@@ -341,6 +343,10 @@ struct arg_options get_command_line_args(int argc, char **argv)
     }
     else if (strcmp(argv[i], "-fastPE") == 0) {
       opts.fast_pred_elim = TRUE;
+      argv[i] = "-_";  /* neutralize so getopt skips it */
+    }
+    else if (strcmp(argv[i], "-expand") == 0) {
+      opts.expand_proof = TRUE;
       argv[i] = "-_";  /* neutralize so getopt skips it */
     }
     else if (strcmp(argv[i], "-stdin") == 0) {
@@ -523,6 +529,10 @@ void process_command_line_args_1(struct arg_options command_opt,
 
   if (command_opt.fast_pred_elim) {
     set_flag(prover_opt->fast_pred_elim, FALSE);  // FALSE = no echo
+  }
+
+  if (command_opt.expand_proof) {
+    set_flag(prover_opt->print_expanded_proof, FALSE);  // FALSE = no echo
   }
 
   if (command_opt.cores > 0) {
