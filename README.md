@@ -65,13 +65,3 @@ LADR-2026 is an implementation-level modernization of a historically significant
 - **License:** Open source under GPLv2, consistent with the original LADR license.
 - **Artifacts:** Source code and build instructions are included in each release.
 
----
-
-## Fitelson-Otter Branch: Resonators and Ancestor Subsumption
-
-This branch adds two opt-in features ported from Otter:
-
-- **`list(resonators)`** — Wos-style weight templates where every variable position is an independent wildcard matching any subterm (variable or complex term), with no binding consistency across occurrences. Implements Wos's resonance strategy for proof-shape-guided search.
-- **`set(ancestor_subsume)`** — refinement of subsumption that retains the shorter-proof variant when two clauses are alphabetic variants. Companion flag `set(proof_weight)` selects the tie-break metric.
-
-Both features are off by default and do not affect the default calculus. See `README.fitelson-otter` for syntax, examples, soundness notes, and implementation details. Regression tests: `make test7` (ancestor subsumption) and `make test8` (resonators).
