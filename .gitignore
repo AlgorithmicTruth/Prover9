@@ -86,3 +86,6 @@ web-mace4/
 verification/agmv_submit.py
 verification/agmv_local.py
 verification/gdv_local.py
+
+# Internal docs (not for public release)
+README.fitelson-otter
