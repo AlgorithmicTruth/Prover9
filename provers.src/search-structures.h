@@ -103,6 +103,7 @@ struct prover_options {
     print_proofs,
     print_proof_goal,
     print_expanded_proof,   // unroll compound rewrite/resolve steps
+    print_substitutions,    // append {var <- term, ...} rider after each para step
     default_output,
     print_clause_properties,
 

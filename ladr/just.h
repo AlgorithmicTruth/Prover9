@@ -239,4 +239,11 @@ void sb_tagged_write_just(String_buf sb, Just just, I3list map);
 
 const char *tptp_rule_name(Just_type type);
 
+/* When set, sb_write_just adds a "{var <- term, ...}" rider after each
+   PARA step showing the unifier (the assignment direction matches what
+   para does: each variable receives the term).  Caller must clear (pass
+   NULL) when done to avoid stale references.  Activated by
+   set(print_substitutions); independent of print_expanded_proof. */
+void set_para_subst_proof(Plist proof);
+
 #endif  /* conditional compilation of whole file */

@@ -258,6 +258,7 @@ Prover_options init_prover_options(void)
   p->print_proofs           = init_flag("print_proofs",            TRUE);
   p->print_proof_goal       = init_flag("print_proof_goal",       FALSE);
   p->print_expanded_proof   = init_flag("print_expanded_proof",   FALSE);
+  p->print_substitutions    = init_flag("print_substitutions",    FALSE);
   p->default_output         = init_flag("default_output",          TRUE);
   p->print_clause_properties= init_flag("print_clause_properties",FALSE);
 
@@ -1906,8 +1907,11 @@ void handle_proof_and_maybe_exit(Topform empty_clause)
            awkward high IDs (12, 13 inserted between 6 and 7). */
         renumber_proof(proof_to_print, 1);
       }
+      if (flag(Opt->print_substitutions))
+        set_para_subst_proof(proof_to_print);
       for (p = proof_to_print; p; p = p->next)
         fwrite_clause(stdout, p->v, CL_FORM_STD);
+      set_para_subst_proof(NULL);  /* restore: avoid stale references */
       if (jmap)
         zap_i3list(jmap);
     }

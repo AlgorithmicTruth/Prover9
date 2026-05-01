@@ -1157,6 +1157,198 @@ void sb_write_ids(String_buf sb, Ilist p, I3list map)
 
 /*************
  *
+ *   set_para_subst_proof() / sb_append_para_subst()
+ *
+ *   When non-NULL, sb_write_just appends "{var <- term, ...}" after
+ *   PARA steps to show the unifier.  The arrow direction matches the
+ *   assignment semantics of para (each variable receives the term).
+ *   Optional, off by default, activated by set(print_substitutions);
+ *   independent of print_expanded_proof.
+ *
+ *************/
+
+#include "xproofs.h"   /* proof_id_to_clause */
+#include "literals.h"  /* ith_literal */
+
+static Plist Para_subst_proof = NULL;
+
+/* PUBLIC */
+void set_para_subst_proof(Plist proof)
+{
+  Para_subst_proof = proof;
+}  /* set_para_subst_proof */
+
+/* Build a marker name "_x", "_y", "_z", "_u", "_w", "_v5", ... from a
+   small index.  Stored in caller-provided buf for thread-safety. */
+static
+void fresh_metavar_name(int n, char *buf, int bufsize)
+{
+  static const char letters[] = "xyzuw";
+  if (n >= 0 && n < 5)
+    snprintf(buf, bufsize, "_%c", letters[n]);
+  else
+    snprintf(buf, bufsize, "_v%d", n);
+}  /* fresh_metavar_name */
+
+/* Deep-copy `t`, replacing any variable whose varnum is outside the
+   "keep" set with a *constant* whose name is "_x", "_y", "_z", ...
+   The constant form makes the metavariable visually distinct from
+   real clause variables in the rider output (e.g. {x -> _y'} rather
+   than {x -> y'}, where y might also appear in the clause body).
+   `var_map` is a varnum -> fresh-index map; -1 means not yet assigned.
+   Same source variable maps to the same fresh metavar throughout. */
+static
+Term copy_term_with_var_remap(Term t, int *keep,
+                              int *var_map, int map_size,
+                              int *fresh_count)
+{
+  if (VARIABLE(t)) {
+    int orig = VARNUM(t);
+    char buf[16];
+    if (orig >= 0 && orig < MAX_VARS && keep[orig])
+      return get_variable_term(orig);
+    if (orig < 0 || orig >= map_size)
+      return get_variable_term(orig);  /* fall back */
+    if (var_map[orig] == -1)
+      var_map[orig] = (*fresh_count)++;
+    fresh_metavar_name(var_map[orig], buf, sizeof(buf));
+    return get_rigid_term(buf, 0);
+  } else {
+    Term out = get_rigid_term_dangerously(SYMNUM(t), ARITY(t));
+    int i;
+    for (i = 0; i < ARITY(t); i++)
+      ARG(out, i) = copy_term_with_var_remap(ARG(t, i), keep, var_map,
+                                             map_size, fresh_count);
+    return out;
+  }
+}  /* copy_term_with_var_remap */
+
+static
+void sb_append_para_subst(String_buf sb, Parajust pj)
+{
+  if (Para_subst_proof == NULL || pj == NULL)
+    return;
+
+  Topform from_cl = proof_id_to_clause(Para_subst_proof, pj->from_id);
+  Topform into_cl = proof_id_to_clause(Para_subst_proof, pj->into_id);
+  if (from_cl == NULL || into_cl == NULL)
+    return;
+  if (pj->from_pos == NULL || pj->into_pos == NULL)
+    return;
+
+  /* Position lists start with the literal number (1-based). */
+  Literals from_lit = ith_literal(from_cl->literals, pj->from_pos->i);
+  Literals into_lit = ith_literal(into_cl->literals, pj->into_pos->i);
+  if (from_lit == NULL || into_lit == NULL)
+    return;
+
+  Term source_term = term_at_pos(from_lit->atom, pj->from_pos->next);
+  Term target_term = term_at_pos(into_lit->atom, pj->into_pos->next);
+  if (source_term == NULL || target_term == NULL)
+    return;
+
+  /* Run unification with separate var spaces.  get_context() already
+     reserves distinct multipliers; do NOT mutate ->multiplier directly
+     (free_context checks the Multipliers table). */
+  Context c1 = get_context();
+  Context c2 = get_context();
+  Trail tr = NULL;
+  if (!unify(source_term, c1, target_term, c2, &tr)) {
+    free_context(c1);
+    free_context(c2);
+    return;
+  }
+
+  /* Walk the TARGET context (c2) for non-trivial bindings.
+     Those are the variables in the into-clause that para "pinned"
+     when it folded the source equation in.  This is the educationally
+     useful direction: it tells the reader which variables of the
+     into-clause became which terms.  Source-side bindings are mostly
+     a renaming artifact.
+
+     We also rename multiplier-shifted variables on the right-hand
+     side of bindings back to plain letters: c1's x (multiplier 0,
+     varnum N) and c2's x (multiplier M, varnum M*MAX_VARS+N) print
+     differently by default, but for display we want both to read
+     as x/y/z. */
+  /* Pure var-to-var bindings are multiplier artefacts and add no
+     information; we skip them below.  Bindings with constant or
+     compound RHS show actual structural pinning.  Within those RHS
+     terms, variables from the OTHER context print with multiplier-
+     shifted varnums (e.g. v500); copy_term_with_var_remap replaces
+     them with marker constants ("_x", "_y", ...) so they're clearly
+     distinct from real clause-body variables.
+
+     `keep[]` is the set of varnums that DO appear as a binding LHS
+     in either context (those keep their identity as variables in
+     the printed rider).  `var_map[]` records which fresh-metavar
+     index each non-kept source varnum was given; reused so the same
+     source var gets the same metavar across the rider. */
+  int keep[MAX_VARS];
+  int var_map[MAX_VARS * 8];
+  int fresh_count = 0;
+  {
+    int k;
+    for (k = 0; k < MAX_VARS; k++) keep[k] = 0;
+    for (k = 0; k < MAX_VARS * 8; k++) var_map[k] = -1;
+    for (k = 0; k < MAX_VARS; k++)
+      if (c1->terms[k] != NULL || c2->terms[k] != NULL)
+        keep[k] = 1;
+  }
+
+  /* Walk c1 (FROM-equation context).  These are the universal variables
+     of the rewriting equation that got instantiated by the INTO clause
+     -- the educationally interesting bindings.  Walk c2 second to catch
+     non-trivial INTO bindings (rare, but happens when INTO has free
+     variables in the rewritten subterm). */
+  BOOL any = FALSE;
+  int pass;
+  for (pass = 0; pass < 2; pass++) {
+    Context cx = (pass == 0 ? c1 : c2);
+    int i;
+    for (i = 0; i < MAX_VARS; i++) {
+      if (cx->terms[i] == NULL)
+        continue;
+      Term bound = apply(cx->terms[i], cx->contexts[i]);
+      if (VARIABLE(bound)) {
+        zap_term(bound);
+        continue;
+      }
+      if (!any) {
+        sb_append(sb, " {");
+        any = TRUE;
+      } else {
+        sb_append(sb, ", ");
+      }
+      Term v = get_variable_term(i);
+      sb_write_term(sb, v);
+      zap_term(v);
+      sb_append(sb, " <- ");
+      Term renamed = copy_term_with_var_remap(bound, keep, var_map,
+                                              MAX_VARS * 8,
+                                              &fresh_count);
+      /* Wrap RHS in parens when it's compound (arity >= 2), i.e. not a
+         single value, variable, metavariable, or unary application.
+         Makes binary infix terms ("_x * _y") visually grouped without
+         relying on the reader to know the operator's precedence. */
+      BOOL wrap = (ARITY(renamed) >= 2);
+      if (wrap) sb_append(sb, "(");
+      sb_write_term(sb, renamed);
+      if (wrap) sb_append(sb, ")");
+      zap_term(renamed);
+      zap_term(bound);
+    }
+  }
+  if (any)
+    sb_append(sb, "}");
+
+  undo_subst(tr);
+  free_context(c1);
+  free_context(c2);
+}  /* sb_append_para_subst */
+
+/*************
+ *
  *   sb_write_just()
  *
  *************/
@@ -1287,6 +1479,10 @@ void sb_write_just(String_buf sb, Just just, I3list map)
       sb_write_position(sb, p->into_pos);
 
       sb_append(sb, ")");
+
+      /* When -expand is on, append the unifier so newcomers can see
+         which variables got substituted across the clause. */
+      sb_append_para_subst(sb, p);
     }
     else if (rule == INSTANCE_JUST) {
       Plist p;
