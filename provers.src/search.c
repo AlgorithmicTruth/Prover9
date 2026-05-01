@@ -108,6 +108,21 @@ static Topform To_trace_cl = NULL;
 static int HIT_LIST[MAX_HSIZE];
 static int Hsize = 0;
 
+/* Callback for forward_subsumption_filter: accept a candidate subsumer
+   if anc_subsume allows it; otherwise increment the blocked counter and
+   reject so the iteration continues to the next candidate.  Matches
+   Otter's forward_subsume behavior (clause.c:1380-1466) of skipping past
+   anc_subsume-blocked candidates rather than bailing on the first hit. */
+static
+BOOL anc_subsume_accept_cb(Topform subsumer, Topform new_clause, void *arg)
+{
+  BOOL use_prf_weight = arg ? *(BOOL *)arg : FALSE;
+  if (anc_subsume(subsumer, new_clause, use_prf_weight))
+    return TRUE;
+  Stats.anc_subsume_blocked++;
+  return FALSE;
+}
+
 // The following is a global structure for this file.
 
 static struct {
@@ -2376,19 +2391,18 @@ BOOL cl_process_delete(Topform c)
   {
     Topform subsumer;
     clock_start(Clocks.subsume);
-    subsumer = forward_subsumption(c);
-    /* Ancestor-subsumption refinement (Otter anc_subsume): when the
-       subsumer and c are alphabetic variants, keep c if its proof is
-       strictly shorter.  Always safe; merely retains more clauses. */
-    if (subsumer != NULL && flag(Opt->ancestor_subsume)) {
-      if (!anc_subsume(subsumer, c, flag(Opt->proof_weight))) {
-        Stats.anc_subsume_blocked++;
-        if (flag(Opt->print_gen))
-          printf("%ssubsumption blocked by ancestor_subsume"
-                 " (subsumer %llu vs c).\n",
-                 TPTP_PFX, subsumer->id);
-        subsumer = NULL;  /* keep c */
-      }
+    if (flag(Opt->ancestor_subsume)) {
+      /* Iterate through ALL generalizers (not just the first the index
+         returns) and accept the first whose proof is no longer than c's.
+         If the index's first hit happens to be a high-cost variant,
+         anc_subsume blocks it -- without iteration we'd miss a low-cost
+         variant later in the same index that would have been a valid
+         subsumer.  Otter's clause.c:1380-1466 does this iteration. */
+      BOOL use_prf_weight = flag(Opt->proof_weight);
+      subsumer = forward_subsumption_filter(c, anc_subsume_accept_cb,
+                                            &use_prf_weight);
+    } else {
+      subsumer = forward_subsumption(c);
     }
     clock_stop(Clocks.subsume);
     if (subsumer != NULL && !c->used) {

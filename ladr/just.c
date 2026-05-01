@@ -1664,8 +1664,33 @@ If any of the ancestors are compressed, they are uncompressed
 /* PUBLIC */
 Plist get_clause_ancestors(Topform c)
 {
-  Plist ancestors = get_clanc(c->id, NULL);
-  return ancestors;
+  if (c == NULL) return NULL;
+  if (c->id != 0)
+    return get_clanc(c->id, NULL);
+
+  /* Root clause has no ID yet (called from anc_subsume during forward
+     subsumption, before assign_clause_id).  Insert c itself, then walk
+     its parents via the justification chain directly.  Without this,
+     get_clanc(0) returns empty because find_clause_by_id(0) fails --
+     making proof_length(c) = 0 and breaking the cost comparison in
+     anc_subsume (every existing subsumer's proof_length >= 1, so
+     cost_c <= cost_d evaluates FALSE and forward subsumption is
+     blocked unconditionally under set(ancestor_subsume). */
+  Plist anc = insert_clause_into_plist(NULL, c, TRUE);
+  Ilist parents = get_parents(c->justification, TRUE);
+  Ilist p;
+  for (p = parents; p; p = p->next) {
+    Plist sub, q;
+    if (p->i == 0) continue;
+    sub = get_clanc(p->i, NULL);
+    for (q = sub; q; q = q->next) {
+      if (!plist_member(anc, q->v))
+        anc = insert_clause_into_plist(anc, q->v, TRUE);
+    }
+    zap_plist(sub);
+  }
+  zap_ilist(parents);
+  return anc;
 }  /* get_clause_ancestors */
 
 /*************
