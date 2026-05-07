@@ -1212,23 +1212,27 @@ void clause_var_name(int local_varnum, int clause_id, char *buf, int bufsize)
     snprintf(buf, bufsize, "v%d_%d", local_varnum, clause_id);
 }  /* clause_var_name */
 
-/* Map a possibly-multiplier-shifted varnum back to (local, source_clause_id).
-   Returns -1 in *id_out if the multiplier doesn't match either context
-   (shouldn't happen in our setup but is a safety fallback). */
+/* Map a possibly-multiplier-shifted varnum back to (local_varnum,
+   source_clause_id) given parallel arrays of context multipliers and
+   their corresponding clause IDs.  Used by both paramod (2 contexts:
+   FROM and INTO) and resolution-family riders (1 nucleus + N satellites).
+   Returns -1 in *id_out if the multiplier doesn't match any provided
+   context. */
 static
 void resolve_var_source(int rendered_varnum,
-                        int c1_mult, int from_id,
-                        int c2_mult, int into_id,
+                        int *mults, int *ids, int n_ctx,
                         int *local_out, int *id_out)
 {
   int multiplier = rendered_varnum / MAX_VARS;
+  int i;
   *local_out = rendered_varnum % MAX_VARS;
-  if (multiplier == c1_mult)
-    *id_out = from_id;
-  else if (multiplier == c2_mult)
-    *id_out = into_id;
-  else
-    *id_out = -1;
+  *id_out = -1;
+  for (i = 0; i < n_ctx; i++) {
+    if (multiplier == mults[i]) {
+      *id_out = ids[i];
+      return;
+    }
+  }
 }  /* resolve_var_source */
 
 /* Map size for the internal-varnum -> canonical-varnum table.  Holds
@@ -1240,32 +1244,27 @@ void resolve_var_source(int rendered_varnum,
 
 /* Deep-copy `t`, replacing each variable with one of:
    * the result clause's canonical letter, IF the variable's internal
-     varnum is in the int_to_canon map -- this surfaces Larry's #answer-
-     style end-to-end substitution (e.g. {z_3 <- y} where y is the
-     result's y);
+     varnum is in the int_to_canon map (paramod uses this; resolution
+     v1 passes NULL/empty map so this branch is always taken second);
    * a clause-tagged constant (e.g. "x_7"), if the variable can be
-     resolved to a source clause but doesn't appear in the result map;
-   * a verbatim variable, as a fallback for unresolvable cases. */
+     resolved to a source clause via the (mults, ids) arrays;
+   * a verbatim variable, as a fallback for unresolvable cases.
+   `mults` and `ids` are parallel arrays of length `n_ctx`. */
 static
 Term copy_term_with_canonical(Term t,
-                              int c1_mult, int from_id,
-                              int c2_mult, int into_id,
+                              int *mults, int *ids, int n_ctx,
                               int *int_to_canon)
 {
   if (VARIABLE(t)) {
     int orig = VARNUM(t);
     int local, id;
     char buf[32];
-    /* First: did this variable land in the result clause?  If so,
-       render it as the result's canonical letter (x,y,z,u,w,v5,...)
-       via the standard variable printer. */
-    if (orig >= 0 && orig < INT_VARNUM_MAX && int_to_canon[orig] >= 0)
+    if (int_to_canon != NULL &&
+        orig >= 0 && orig < INT_VARNUM_MAX && int_to_canon[orig] >= 0)
       return get_variable_term(int_to_canon[orig]);
-    /* Otherwise fall back to clause-tagged constant. */
-    resolve_var_source(orig, c1_mult, from_id, c2_mult, into_id,
-                       &local, &id);
+    resolve_var_source(orig, mults, ids, n_ctx, &local, &id);
     if (id < 0)
-      return get_variable_term(orig);  /* fallback: unknown context */
+      return get_variable_term(orig);
     clause_var_name(local, id, buf, sizeof(buf));
     return get_rigid_term(buf, 0);
   } else {
@@ -1273,8 +1272,7 @@ Term copy_term_with_canonical(Term t,
     int i;
     for (i = 0; i < ARITY(t); i++)
       ARG(out, i) = copy_term_with_canonical(ARG(t, i),
-                                             c1_mult, from_id,
-                                             c2_mult, into_id,
+                                             mults, ids, n_ctx,
                                              int_to_canon);
     return out;
   }
@@ -1385,6 +1383,142 @@ int collect_clause_vars(Topform c, int *out, int max_out)
   return n;
 }  /* collect_clause_vars */
 
+/* Shared rider entry struct -- one per (input clause variable, fate). */
+struct subst_entry {
+  char  lhs[32];
+  char *rhs;        /* malloc'd */
+  int   local;      /* LHS local varnum */
+  int   rhs_canon;  /* canonical varnum if RHS is a bare result-clause variable, else -1 */
+};
+
+#define MAX_RIDER_INPUTS 16  /* nucleus + up to 15 satellites for hyperres */
+#define MAX_RIDER_ENTRIES (MAX_VARS * MAX_RIDER_INPUTS)
+
+/* Build the rider for a list of input clauses sharing one unifier.
+   - cls/ctxs/ids: parallel arrays of length n_ctx giving each input's
+     clause, context, and clause id (for tagging).
+   - int_to_canon: optional internal-varnum -> canonical-varnum map for
+     surviving variables in the result clause; pass NULL to fall back to
+     clause-tagged rendering for all RHS variables.
+   Iterates each input clause's variables, applies the unifier, builds
+   rider entries, applies the level-aware filter, and emits the
+   "{ ... }" rider into sb. */
+static
+void emit_subst_rider(String_buf sb,
+                      Topform *cls, Context *ctxs, int *ids, int n_ctx,
+                      int *int_to_canon)
+{
+  if (n_ctx <= 0 || n_ctx > MAX_RIDER_INPUTS)
+    return;
+
+  int mults[MAX_RIDER_INPUTS];
+  int i;
+  for (i = 0; i < n_ctx; i++)
+    mults[i] = ctxs[i]->multiplier;
+
+  struct subst_entry entries[MAX_RIDER_ENTRIES];
+  int n_entries = 0;
+  int count_by_canon[MAX_VARS];
+  int k;
+  for (k = 0; k < MAX_VARS; k++) count_by_canon[k] = 0;
+
+  for (i = 0; i < n_ctx; i++) {
+    Topform cl = cls[i];
+    Context cx = ctxs[i];
+    int src_id = ids[i];
+    if (cl == NULL || cx == NULL) continue;
+
+    int vars[MAX_VARS];
+    int nv = collect_clause_vars(cl, vars, MAX_VARS);
+
+    int vi;
+    for (vi = 0; vi < nv; vi++) {
+      int local = vars[vi];
+      if (local < 0 || local >= MAX_VARS) continue;
+      if (n_entries >= MAX_RIDER_ENTRIES) break;
+
+      Term as_var = get_variable_term(local);
+      Term resolved = apply(as_var, cx);
+      zap_term(as_var);
+
+      Term rhs_term = copy_term_with_canonical(resolved,
+                                               mults, ids, n_ctx,
+                                               int_to_canon);
+
+      String_buf rhs_sb = get_string_buf();
+      BOOL wrap = (ARITY(rhs_term) >= 2);
+      if (wrap) sb_append(rhs_sb, "(");
+      sb_write_term(rhs_sb, rhs_term);
+      if (wrap) sb_append(rhs_sb, ")");
+      char *rhs_str = sb_to_malloc_string(rhs_sb);
+      zap_string_buf(rhs_sb);
+
+      char lhs_buf[32];
+      clause_var_name(local, src_id, lhs_buf, sizeof(lhs_buf));
+
+      /* Identity-string suppression: only at level < 3. */
+      if (Para_subst_level < 3 &&
+          rhs_str && strcmp(lhs_buf, rhs_str) == 0) {
+        free(rhs_str);
+        zap_term(rhs_term);
+        zap_term(resolved);
+        continue;
+      }
+
+      strncpy(entries[n_entries].lhs, lhs_buf, sizeof(entries[n_entries].lhs)-1);
+      entries[n_entries].lhs[sizeof(entries[n_entries].lhs)-1] = 0;
+      entries[n_entries].rhs = rhs_str;
+      entries[n_entries].local = local;
+      entries[n_entries].rhs_canon = (VARIABLE(rhs_term)
+                                      ? VARNUM(rhs_term) : -1);
+      if (entries[n_entries].rhs_canon >= 0 &&
+          entries[n_entries].rhs_canon < MAX_VARS)
+        count_by_canon[entries[n_entries].rhs_canon]++;
+      n_entries++;
+
+      zap_term(rhs_term);
+      zap_term(resolved);
+    }
+  }
+
+  /* Detect trivial-aliasing groups for level 1. */
+  BOOL trivial_group[MAX_VARS];
+  for (k = 0; k < MAX_VARS; k++)
+    trivial_group[k] = (count_by_canon[k] > 0);
+  int ei2;
+  for (ei2 = 0; ei2 < n_entries; ei2++) {
+    int rc = entries[ei2].rhs_canon;
+    if (rc >= 0 && rc < MAX_VARS && entries[ei2].local != rc)
+      trivial_group[rc] = FALSE;
+  }
+
+  /* Emit with level-aware filtering. */
+  BOOL any = FALSE;
+  int ei;
+  for (ei = 0; ei < n_entries; ei++) {
+    BOOL drop = FALSE;
+    int rc = entries[ei].rhs_canon;
+
+    if (Para_subst_level <= 2 && rc >= 0 && rc < MAX_VARS &&
+        rc == entries[ei].local && count_by_canon[rc] == 1)
+      drop = TRUE;
+    if (Para_subst_level == 1 && rc >= 0 && rc < MAX_VARS &&
+        trivial_group[rc])
+      drop = TRUE;
+
+    if (!drop) {
+      if (!any) { sb_append(sb, " {"); any = TRUE; }
+      else      { sb_append(sb, ", "); }
+      sb_append(sb, entries[ei].lhs);
+      sb_append(sb, " <- ");
+      sb_append(sb, entries[ei].rhs);
+    }
+    free(entries[ei].rhs);
+  }
+  if (any)
+    sb_append(sb, "}");
+}  /* emit_subst_rider */
+
 static
 void sb_append_para_subst(String_buf sb, Parajust pj)
 {
@@ -1465,133 +1599,102 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
     }
   }
 
-  /* Collect entries first so we can filter "obvious survivor" entries
-     in a second pass (one input var alone mapping to its same-letter
-     result var conveys nothing; aliasing -- multiple input vars to the
-     same result var -- IS informative and must stay). */
-  struct subst_entry {
-    char lhs[32];
-    char *rhs;        /* malloc'd, freed after emit */
-    int local;        /* LHS local varnum */
-    int rhs_canon;    /* RHS canonical varnum if RHS is a bare variable, else -1 */
-  } entries[MAX_VARS * 2];
-  int n_entries = 0;
-  int count_by_canon[MAX_VARS];
-  for (k = 0; k < MAX_VARS; k++) count_by_canon[k] = 0;
-
-  int pass;
-  for (pass = 0; pass < 2; pass++) {
-    Topform cl     = (pass == 0 ? from_cl : into_cl);
-    Context cx     = (pass == 0 ? c1 : c2);
-    int     src_id = (pass == 0 ? pj->from_id : pj->into_id);
-
-    int vars[MAX_VARS];
-    int nv = collect_clause_vars(cl, vars, MAX_VARS);
-
-    int vi;
-    for (vi = 0; vi < nv; vi++) {
-      int local = vars[vi];
-      if (local < 0 || local >= MAX_VARS) continue;
-      if (n_entries >= (int)(sizeof(entries) / sizeof(entries[0]))) break;
-
-      Term as_var = get_variable_term(local);
-      Term resolved = apply(as_var, cx);
-      zap_term(as_var);
-
-      Term rhs_term = copy_term_with_canonical(resolved,
-                                               c1->multiplier, pj->from_id,
-                                               c2->multiplier, pj->into_id,
-                                               int_to_canon);
-
-      /* Build RHS string (with paren-wrap for arity>=2). */
-      String_buf rhs_sb = get_string_buf();
-      BOOL wrap = (ARITY(rhs_term) >= 2);
-      if (wrap) sb_append(rhs_sb, "(");
-      sb_write_term(rhs_sb, rhs_term);
-      if (wrap) sb_append(rhs_sb, ")");
-      char *rhs_str = sb_to_malloc_string(rhs_sb);
-      zap_string_buf(rhs_sb);
-
-      char lhs_buf[32];
-      clause_var_name(local, src_id, lhs_buf, sizeof(lhs_buf));
-
-      /* Identity-string suppression (clause-tag fallback on both sides,
-         "x_7 <- x_7"): suppressed at levels 1 and 2; kept at level 3. */
-      if (Para_subst_level < 3 &&
-          rhs_str && strcmp(lhs_buf, rhs_str) == 0) {
-        free(rhs_str);
-        zap_term(rhs_term);
-        zap_term(resolved);
-        continue;
-      }
-
-      strncpy(entries[n_entries].lhs, lhs_buf, sizeof(entries[n_entries].lhs)-1);
-      entries[n_entries].lhs[sizeof(entries[n_entries].lhs)-1] = 0;
-      entries[n_entries].rhs = rhs_str;
-      entries[n_entries].local = local;
-      entries[n_entries].rhs_canon = (VARIABLE(rhs_term)
-                                      ? VARNUM(rhs_term) : -1);
-      if (entries[n_entries].rhs_canon >= 0 &&
-          entries[n_entries].rhs_canon < MAX_VARS)
-        count_by_canon[entries[n_entries].rhs_canon]++;
-      n_entries++;
-
-      zap_term(rhs_term);
-      zap_term(resolved);
-    }
-  }
-
-  /* For level 1, identify "trivial-aliasing groups": canonical varnums
-     where every entry mapping to that canonical has matching LHS letter
-     (local == rhs_canon).  Such groups convey only that the unifier did
-     the rote alignment of same-named vars across input clauses; level 1
-     drops them.  Level 2 keeps them (treats as informative aliasing). */
-  BOOL trivial_group[MAX_VARS];
-  int  k2;
-  for (k2 = 0; k2 < MAX_VARS; k2++)
-    trivial_group[k2] = (count_by_canon[k2] > 0);  /* assume trivial; falsify below */
-  int ei2;
-  for (ei2 = 0; ei2 < n_entries; ei2++) {
-    int rc = entries[ei2].rhs_canon;
-    if (rc >= 0 && rc < MAX_VARS && entries[ei2].local != rc)
-      trivial_group[rc] = FALSE;
-  }
-
-  /* Emit, applying level-aware filtering. */
-  BOOL any = FALSE;
-  int ei;
-  for (ei = 0; ei < n_entries; ei++) {
-    BOOL drop = FALSE;
-    int rc = entries[ei].rhs_canon;
-
-    if (Para_subst_level <= 2 && rc >= 0 && rc < MAX_VARS &&
-        rc == entries[ei].local && count_by_canon[rc] == 1) {
-      /* Obvious survivor: alone in canonical group, letter matches. */
-      drop = TRUE;
-    }
-    if (Para_subst_level == 1 && rc >= 0 && rc < MAX_VARS &&
-        trivial_group[rc]) {
-      /* Trivial-aliasing group: every entry on this canonical has letter
-         match.  Drop the whole group at level 1. */
-      drop = TRUE;
-    }
-
-    if (!drop) {
-      if (!any) { sb_append(sb, " {"); any = TRUE; }
-      else      { sb_append(sb, ", "); }
-      sb_append(sb, entries[ei].lhs);
-      sb_append(sb, " <- ");
-      sb_append(sb, entries[ei].rhs);
-    }
-    free(entries[ei].rhs);
-  }
-  if (any)
-    sb_append(sb, "}");
+  /* Build rider via shared helper. */
+  Topform cls[2]  = { from_cl, into_cl };
+  Context ctxs[2] = { c1, c2 };
+  int     ids[2]  = { pj->from_id, pj->into_id };
+  emit_subst_rider(sb, cls, ctxs, ids, 2, int_to_canon);
 
   undo_subst(tr);
   free_context(c1);
   free_context(c2);
 }  /* sb_append_para_subst */
+
+/* Rider for binary resolution, hyperresolution, UR resolution.  The
+   Ilist data has form [nuc_id, nuc_lit_1, sat_id_1, sat_lit_1,
+                        nuc_lit_2, sat_id_2, sat_lit_2, ...]
+   where each (nuc_lit, sat_id, sat_lit) triple is one resolution step
+   (binary res has one triple, hyperres has many).  Negative sat_lit
+   indicates a "flip" (atom args swapped) -- not handled in v1; flipped
+   steps will fail to unify and emit no rider, which is conservative
+   degradation. */
+static
+void sb_append_res_subst(String_buf sb, Just g)
+{
+  if (Para_subst_proof == NULL || g == NULL || g->u.lst == NULL)
+    return;
+
+  Ilist p = g->u.lst;
+  int nuc_id = p->i;
+  Topform nuc_cl = proof_id_to_clause(Para_subst_proof, nuc_id);
+  if (nuc_cl == NULL)
+    return;
+
+  Context c_nuc = get_context();
+  Trail tr = NULL;
+
+  Topform sat_cls[MAX_RIDER_INPUTS - 1];
+  Context sat_ctxs[MAX_RIDER_INPUTS - 1];
+  int     sat_ids[MAX_RIDER_INPUTS - 1];
+  int n_sats = 0;
+  BOOL bail = FALSE;
+
+  Ilist q;
+  for (q = p->next;
+       q != NULL && q->next != NULL && q->next->next != NULL;
+       q = q->next->next->next) {
+    int nuc_lit = q->i;
+    int sat_id  = q->next->i;
+    int sat_lit = q->next->next->i;
+    if (sat_id == 0)
+      continue;  /* xx-style step; skip */
+    if (sat_lit < 0)
+      sat_lit = -sat_lit;  /* drop flip flag; unify may fail and we'll bail */
+    if (n_sats >= MAX_RIDER_INPUTS - 1) break;
+
+    Topform sat_cl = proof_id_to_clause(Para_subst_proof, sat_id);
+    if (sat_cl == NULL)
+      continue;
+    Literals nuc_l = ith_literal(nuc_cl->literals, nuc_lit);
+    Literals sat_l = ith_literal(sat_cl->literals, sat_lit);
+    if (nuc_l == NULL || sat_l == NULL ||
+        nuc_l->atom == NULL || sat_l->atom == NULL)
+      continue;
+
+    Context c_sat = get_context();
+    if (!unify(nuc_l->atom, c_nuc, sat_l->atom, c_sat, &tr)) {
+      free_context(c_sat);
+      bail = TRUE;
+      break;
+    }
+
+    sat_cls[n_sats]  = sat_cl;
+    sat_ctxs[n_sats] = c_sat;
+    sat_ids[n_sats]  = sat_id;
+    n_sats++;
+  }
+
+  if (!bail && n_sats > 0) {
+    Topform cls[MAX_RIDER_INPUTS];
+    Context ctxs[MAX_RIDER_INPUTS];
+    int     ids[MAX_RIDER_INPUTS];
+    cls[0]  = nuc_cl;
+    ctxs[0] = c_nuc;
+    ids[0]  = nuc_id;
+    int i;
+    for (i = 0; i < n_sats; i++) {
+      cls[1 + i]  = sat_cls[i];
+      ctxs[1 + i] = sat_ctxs[i];
+      ids[1 + i]  = sat_ids[i];
+    }
+    emit_subst_rider(sb, cls, ctxs, ids, 1 + n_sats, NULL);
+  }
+
+  if (tr) undo_subst(tr);
+  free_context(c_nuc);
+  int i;
+  for (i = 0; i < n_sats; i++) free_context(sat_ctxs[i]);
+}  /* sb_append_res_subst */
 
 /*************
  *
@@ -1617,6 +1720,7 @@ void sb_write_just(String_buf sb, Just just, I3list map)
 	     rule==HYPER_RES_JUST ||
 	     rule==UR_RES_JUST) {
       sb_write_res_just(sb, g, map);
+      sb_append_res_subst(sb, g);
     }
     else if (rule == DEMOD_JUST) {
       I3list p;
