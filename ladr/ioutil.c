@@ -216,8 +216,11 @@ void sb_write_clause_jmap(String_buf sb, Topform c,
     else
       sb_write_term(sb, t);
     sb_append(sb, ".  ");
-    if (format == CL_FORM_STD)
+    if (format == CL_FORM_STD) {
+      set_para_subst_clause(c);
       sb_write_just(sb, c->justification, map);
+      set_para_subst_clause(NULL);
+    }
     else {
       /* CL_FORM_PARENTS */
       Ilist parents = get_parents(c->justification, TRUE);

@@ -246,4 +246,11 @@ const char *tptp_rule_name(Just_type type);
    set(print_substitutions); independent of print_expanded_proof. */
 void set_para_subst_proof(Plist proof);
 
+/* Set the result clause whose justification is about to be printed.
+   sb_append_para_subst uses this to derive the canonical-rename map
+   so input variables that survive into the result are shown by their
+   final letter.  Set/clear around each sb_write_just call from
+   sb_write_clause_jmap. */
+void set_para_subst_clause(Topform c);
+
 #endif  /* conditional compilation of whole file */

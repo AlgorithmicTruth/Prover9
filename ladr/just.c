@@ -1171,6 +1171,7 @@ void sb_write_ids(String_buf sb, Ilist p, I3list map)
 #include "literals.h"  /* ith_literal */
 
 static Plist Para_subst_proof = NULL;
+static Topform Para_subst_clause = NULL;
 
 /* PUBLIC */
 void set_para_subst_proof(Plist proof)
@@ -1178,50 +1179,202 @@ void set_para_subst_proof(Plist proof)
   Para_subst_proof = proof;
 }  /* set_para_subst_proof */
 
-/* Build a marker name "_x", "_y", "_z", "_u", "_w", "_v5", ... from a
-   small index.  Stored in caller-provided buf for thread-safety. */
+/* PUBLIC -- set per-clause context for the rider.  Must be set before
+   sb_write_just is called for the clause's justification, and cleared
+   (NULL) after, so a sb_append_para_subst can find the result clause's
+   literals to derive the canonical-rename map.  Called from
+   sb_write_clause_jmap in ioutil.c. */
+void set_para_subst_clause(Topform c)
+{
+  Para_subst_clause = c;
+}  /* set_para_subst_clause */
+
+/* Build a name like "x_7", "y_6", "v5_12" combining the standard letter
+   for `local_varnum` (Prover9's x,y,z,u,w,v5,...) with the originating
+   clause's id, joined by underscore so the name is an ordinary identifier
+   (no quoting needed at print time). */
 static
-void fresh_metavar_name(int n, char *buf, int bufsize)
+void clause_var_name(int local_varnum, int clause_id, char *buf, int bufsize)
 {
   static const char letters[] = "xyzuw";
-  if (n >= 0 && n < 5)
-    snprintf(buf, bufsize, "_%c", letters[n]);
+  if (local_varnum >= 0 && local_varnum < 5)
+    snprintf(buf, bufsize, "%c_%d", letters[local_varnum], clause_id);
   else
-    snprintf(buf, bufsize, "_v%d", n);
-}  /* fresh_metavar_name */
+    snprintf(buf, bufsize, "v%d_%d", local_varnum, clause_id);
+}  /* clause_var_name */
 
-/* Deep-copy `t`, replacing any variable whose varnum is outside the
-   "keep" set with a *constant* whose name is "_x", "_y", "_z", ...
-   The constant form makes the metavariable visually distinct from
-   real clause variables in the rider output (e.g. {x -> _y'} rather
-   than {x -> y'}, where y might also appear in the clause body).
-   `var_map` is a varnum -> fresh-index map; -1 means not yet assigned.
-   Same source variable maps to the same fresh metavar throughout. */
+/* Map a possibly-multiplier-shifted varnum back to (local, source_clause_id).
+   Returns -1 in *id_out if the multiplier doesn't match either context
+   (shouldn't happen in our setup but is a safety fallback). */
 static
-Term copy_term_with_var_remap(Term t, int *keep,
-                              int *var_map, int map_size,
-                              int *fresh_count)
+void resolve_var_source(int rendered_varnum,
+                        int c1_mult, int from_id,
+                        int c2_mult, int into_id,
+                        int *local_out, int *id_out)
+{
+  int multiplier = rendered_varnum / MAX_VARS;
+  *local_out = rendered_varnum % MAX_VARS;
+  if (multiplier == c1_mult)
+    *id_out = from_id;
+  else if (multiplier == c2_mult)
+    *id_out = into_id;
+  else
+    *id_out = -1;
+}  /* resolve_var_source */
+
+/* Map size for the internal-varnum -> canonical-varnum table.  Holds
+   varnums for c1's multiplier-block and c2's multiplier-block; in our
+   setup they're typically multipliers 0,1 (varnums 0..199 with
+   MAX_VARS=100), but we size generously to handle higher multipliers
+   from concurrent context use. */
+#define INT_VARNUM_MAX (MAX_VARS * 8)
+
+/* Deep-copy `t`, replacing each variable with one of:
+   * the result clause's canonical letter, IF the variable's internal
+     varnum is in the int_to_canon map -- this surfaces Larry's #answer-
+     style end-to-end substitution (e.g. {z_3 <- y} where y is the
+     result's y);
+   * a clause-tagged constant (e.g. "x_7"), if the variable can be
+     resolved to a source clause but doesn't appear in the result map;
+   * a verbatim variable, as a fallback for unresolvable cases. */
+static
+Term copy_term_with_canonical(Term t,
+                              int c1_mult, int from_id,
+                              int c2_mult, int into_id,
+                              int *int_to_canon)
 {
   if (VARIABLE(t)) {
     int orig = VARNUM(t);
-    char buf[16];
-    if (orig >= 0 && orig < MAX_VARS && keep[orig])
-      return get_variable_term(orig);
-    if (orig < 0 || orig >= map_size)
-      return get_variable_term(orig);  /* fall back */
-    if (var_map[orig] == -1)
-      var_map[orig] = (*fresh_count)++;
-    fresh_metavar_name(var_map[orig], buf, sizeof(buf));
+    int local, id;
+    char buf[32];
+    /* First: did this variable land in the result clause?  If so,
+       render it as the result's canonical letter (x,y,z,u,w,v5,...)
+       via the standard variable printer. */
+    if (orig >= 0 && orig < INT_VARNUM_MAX && int_to_canon[orig] >= 0)
+      return get_variable_term(int_to_canon[orig]);
+    /* Otherwise fall back to clause-tagged constant. */
+    resolve_var_source(orig, c1_mult, from_id, c2_mult, into_id,
+                       &local, &id);
+    if (id < 0)
+      return get_variable_term(orig);  /* fallback: unknown context */
+    clause_var_name(local, id, buf, sizeof(buf));
     return get_rigid_term(buf, 0);
   } else {
     Term out = get_rigid_term_dangerously(SYMNUM(t), ARITY(t));
     int i;
     for (i = 0; i < ARITY(t); i++)
-      ARG(out, i) = copy_term_with_var_remap(ARG(t, i), keep, var_map,
-                                             map_size, fresh_count);
+      ARG(out, i) = copy_term_with_canonical(ARG(t, i),
+                                             c1_mult, from_id,
+                                             c2_mult, into_id,
+                                             int_to_canon);
     return out;
   }
-}  /* copy_term_with_var_remap */
+}  /* copy_term_with_canonical */
+
+/* Walk two terms in parallel; where both are variables, record
+   map[expected_varnum] = actual_varnum.  `actual` carries canonical
+   (result-clause) varnums; `expected` carries internal (multiplier-
+   shifted) varnums.  Returns FALSE if structure diverges (e.g.
+   demodulation reshaped the result between paramod and final print);
+   in that case map is partial and rendering falls back to clause-tags. */
+static
+BOOL collect_var_map(Term actual, Term expected, int *map)
+{
+  if (VARIABLE(actual) && VARIABLE(expected)) {
+    int internal = VARNUM(expected);
+    int canon = VARNUM(actual);
+    if (internal >= 0 && internal < INT_VARNUM_MAX && map[internal] == -1)
+      map[internal] = canon;
+    return TRUE;
+  }
+  if (VARIABLE(actual) || VARIABLE(expected))
+    return FALSE;
+  if (SYMNUM(actual) != SYMNUM(expected) || ARITY(actual) != ARITY(expected))
+    return FALSE;
+  int i;
+  for (i = 0; i < ARITY(actual); i++) {
+    if (!collect_var_map(ARG(actual, i), ARG(expected, i), map))
+      return FALSE;
+  }
+  return TRUE;
+}  /* collect_var_map */
+
+/* Build the expected pre-renumber paramod result for the targeted
+   literal: apply c2 to into_atom and apply c1 to replacement, then
+   substitute the (apply'd) replacement into the (apply'd) into_atom
+   at into_pos_in_lit.  Caller must zap_term the returned term. */
+static
+Term build_expected_atom(Term into_atom, Ilist into_pos_in_lit,
+                         Term replacement_term,
+                         Context c1, Context c2)
+{
+  Term expected = apply(into_atom, c2);
+  Term replacement_applied = apply(replacement_term, c1);
+
+  if (into_pos_in_lit == NULL) {
+    /* targeted the whole atom -- shouldn't happen for paramod (you'd
+       be replacing the equation itself), but handle gracefully. */
+    zap_term(expected);
+    return replacement_applied;
+  }
+
+  /* Walk down to the parent of the target subterm. */
+  Ilist p = into_pos_in_lit;
+  Term cur = expected;
+  while (p && p->next) {
+    int idx = p->i - 1;
+    if (idx < 0 || idx >= ARITY(cur)) {
+      zap_term(replacement_applied);
+      return expected;  /* invalid path; map will be partial */
+    }
+    cur = ARG(cur, idx);
+    p = p->next;
+  }
+  /* p now points at the final position step; replace at this index. */
+  int idx = p->i - 1;
+  if (idx < 0 || idx >= ARITY(cur)) {
+    zap_term(replacement_applied);
+    return expected;
+  }
+  zap_term(ARG(cur, idx));
+  ARG(cur, idx) = replacement_applied;
+  return expected;
+}  /* build_expected_atom */
+
+/* Collect distinct varnums that appear in a term, into a small array
+   `out`.  Returns count.  Variables seen are only recorded once. */
+static
+int collect_term_vars(Term t, int *out, int already, int max_out)
+{
+  if (VARIABLE(t)) {
+    int n = VARNUM(t);
+    int j;
+    for (j = 0; j < already; j++)
+      if (out[j] == n) return already;
+    if (already < max_out) {
+      out[already] = n;
+      already++;
+    }
+    return already;
+  }
+  int i;
+  for (i = 0; i < ARITY(t); i++)
+    already = collect_term_vars(ARG(t, i), out, already, max_out);
+  return already;
+}  /* collect_term_vars */
+
+static
+int collect_clause_vars(Topform c, int *out, int max_out)
+{
+  int n = 0;
+  Literals lit;
+  if (c == NULL) return 0;
+  for (lit = c->literals; lit != NULL; lit = lit->next) {
+    if (lit->atom)
+      n = collect_term_vars(lit->atom, out, n, max_out);
+  }
+  return n;
+}  /* collect_clause_vars */
 
 static
 void sb_append_para_subst(String_buf sb, Parajust pj)
@@ -1236,20 +1389,30 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
   if (pj->from_pos == NULL || pj->into_pos == NULL)
     return;
 
-  /* Position lists start with the literal number (1-based). */
   Literals from_lit = ith_literal(from_cl->literals, pj->from_pos->i);
   Literals into_lit = ith_literal(into_cl->literals, pj->into_pos->i);
   if (from_lit == NULL || into_lit == NULL)
     return;
 
-  Term source_term = term_at_pos(from_lit->atom, pj->from_pos->next);
-  Term target_term = term_at_pos(into_lit->atom, pj->into_pos->next);
+  Ilist from_pos_in_lit = pj->from_pos->next;
+  Ilist into_pos_in_lit = pj->into_pos->next;
+
+  Term source_term = term_at_pos(from_lit->atom, from_pos_in_lit);
+  Term target_term = term_at_pos(into_lit->atom, into_pos_in_lit);
   if (source_term == NULL || target_term == NULL)
     return;
 
-  /* Run unification with separate var spaces.  get_context() already
-     reserves distinct multipliers; do NOT mutate ->multiplier directly
-     (free_context checks the Multipliers table). */
+  /* Determine the FROM equation's "other side" (the replacement).
+     from_pos_in_lit->i is 1 (LHS source -> RHS replaces) or 2 (vice
+     versa).  Without that we can't build the expected pre-renumber
+     atom, so we silently degrade to clause-tag-only rendering. */
+  Term replacement_term = NULL;
+  if (from_pos_in_lit && ARITY(from_lit->atom) == 2) {
+    int side = from_pos_in_lit->i;
+    if (side == 1)      replacement_term = ARG(from_lit->atom, 1);
+    else if (side == 2) replacement_term = ARG(from_lit->atom, 0);
+  }
+
   Context c1 = get_context();
   Context c2 = get_context();
   Trail tr = NULL;
@@ -1259,84 +1422,102 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
     return;
   }
 
-  /* Walk the TARGET context (c2) for non-trivial bindings.
-     Those are the variables in the into-clause that para "pinned"
-     when it folded the source equation in.  This is the educationally
-     useful direction: it tells the reader which variables of the
-     into-clause became which terms.  Source-side bindings are mostly
-     a renaming artifact.
+  /* Build internal-varnum -> result-canonical-varnum map by walking the
+     expected pre-renumber atom in parallel with the actual result
+     clause's atom for the same literal index.  When this succeeds, the
+     rider can show "x_3 <- y" (input variable surviving as result's y).
+     When it fails (e.g. demod reshaped the result), fall back to
+     clause-tagged rendering. */
+  int int_to_canon[INT_VARNUM_MAX];
+  int k;
+  for (k = 0; k < INT_VARNUM_MAX; k++) int_to_canon[k] = -1;
 
-     We also rename multiplier-shifted variables on the right-hand
-     side of bindings back to plain letters: c1's x (multiplier 0,
-     varnum N) and c2's x (multiplier M, varnum M*MAX_VARS+N) print
-     differently by default, but for display we want both to read
-     as x/y/z. */
-  /* Pure var-to-var bindings are multiplier artefacts and add no
-     information; we skip them below.  Bindings with constant or
-     compound RHS show actual structural pinning.  Within those RHS
-     terms, variables from the OTHER context print with multiplier-
-     shifted varnums (e.g. v500); copy_term_with_var_remap replaces
-     them with marker constants ("_x", "_y", ...) so they're clearly
-     distinct from real clause-body variables.
-
-     `keep[]` is the set of varnums that DO appear as a binding LHS
-     in either context (those keep their identity as variables in
-     the printed rider).  `var_map[]` records which fresh-metavar
-     index each non-kept source varnum was given; reused so the same
-     source var gets the same metavar across the rider. */
-  int keep[MAX_VARS];
-  int var_map[MAX_VARS * 8];
-  int fresh_count = 0;
-  {
-    int k;
-    for (k = 0; k < MAX_VARS; k++) keep[k] = 0;
-    for (k = 0; k < MAX_VARS * 8; k++) var_map[k] = -1;
-    for (k = 0; k < MAX_VARS; k++)
-      if (c1->terms[k] != NULL || c2->terms[k] != NULL)
-        keep[k] = 1;
+  if (Para_subst_clause != NULL && replacement_term != NULL) {
+    Literals actual_lit = ith_literal(Para_subst_clause->literals,
+                                      pj->into_pos->i);
+    if (actual_lit && actual_lit->atom) {
+      Term expected = build_expected_atom(into_lit->atom, into_pos_in_lit,
+                                          replacement_term, c1, c2);
+      BOOL ok = collect_var_map(actual_lit->atom, expected, int_to_canon);
+      /* If direct walk diverges and the atom is a binary equation, try
+         swapping the actual's args -- this handles the common flip(a)
+         secondary justification without needing to inspect the just
+         chain.  (Demodulation interleaved with paramod still falls
+         through to clause-tag rendering; that's accepted degradation.) */
+      if (!ok && ARITY(actual_lit->atom) == 2) {
+        for (k = 0; k < INT_VARNUM_MAX; k++) int_to_canon[k] = -1;
+        Term swapped = get_rigid_term_dangerously(SYMNUM(actual_lit->atom), 2);
+        ARG(swapped, 0) = copy_term(ARG(actual_lit->atom, 1));
+        ARG(swapped, 1) = copy_term(ARG(actual_lit->atom, 0));
+        collect_var_map(swapped, expected, int_to_canon);
+        zap_term(swapped);
+      }
+      zap_term(expected);
+    }
   }
 
-  /* Walk c1 (FROM-equation context).  These are the universal variables
-     of the rewriting equation that got instantiated by the INTO clause
-     -- the educationally interesting bindings.  Walk c2 second to catch
-     non-trivial INTO bindings (rare, but happens when INTO has free
-     variables in the rewritten subterm). */
+  /* Render: iterate ALL variables in each input clause (FROM then INTO),
+     showing each variable's effective fate -- bound term, surviving as
+     a result canonical variable, or aliased to another input variable.
+     Skip the entry only if the variable maps to ITSELF unchanged AND
+     wasn't bound (no information conveyed). */
   BOOL any = FALSE;
   int pass;
   for (pass = 0; pass < 2; pass++) {
-    Context cx = (pass == 0 ? c1 : c2);
-    int i;
-    for (i = 0; i < MAX_VARS; i++) {
-      if (cx->terms[i] == NULL)
-        continue;
-      Term bound = apply(cx->terms[i], cx->contexts[i]);
-      if (VARIABLE(bound)) {
-        zap_term(bound);
+    Topform cl     = (pass == 0 ? from_cl : into_cl);
+    Context cx     = (pass == 0 ? c1 : c2);
+    int     src_id = (pass == 0 ? pj->from_id : pj->into_id);
+
+    int vars[MAX_VARS];
+    int nv = collect_clause_vars(cl, vars, MAX_VARS);
+
+    int vi;
+    for (vi = 0; vi < nv; vi++) {
+      int local = vars[vi];
+      if (local < 0 || local >= MAX_VARS) continue;
+
+      /* Resolve through unifier. */
+      Term as_var = get_variable_term(local);
+      Term resolved = apply(as_var, cx);
+      zap_term(as_var);
+
+      /* Render the LHS first (clause-tagged form). */
+      char lhs[32];
+      clause_var_name(local, src_id, lhs, sizeof(lhs));
+
+      /* Build the RHS rendering -- using canonical map where possible. */
+      Term rhs_term = copy_term_with_canonical(resolved,
+                                               c1->multiplier, pj->from_id,
+                                               c2->multiplier, pj->into_id,
+                                               int_to_canon);
+
+      /* Suppress identity entries (LHS string == RHS string).  These
+         arise when the rename-map walker bailed out (e.g. demod ran
+         after paramod) and the variable falls back to its clause-tag
+         on both sides -- "x_7 <- x_7" conveys nothing. */
+      String_buf rhs_sb = get_string_buf();
+      BOOL wrap = (ARITY(rhs_term) >= 2);
+      if (wrap) sb_append(rhs_sb, "(");
+      sb_write_term(rhs_sb, rhs_term);
+      if (wrap) sb_append(rhs_sb, ")");
+      char *rhs_str = sb_to_malloc_string(rhs_sb);
+      zap_string_buf(rhs_sb);
+
+      if (rhs_str && strcmp(lhs, rhs_str) == 0) {
+        free(rhs_str);
+        zap_term(rhs_term);
+        zap_term(resolved);
         continue;
       }
-      if (!any) {
-        sb_append(sb, " {");
-        any = TRUE;
-      } else {
-        sb_append(sb, ", ");
-      }
-      Term v = get_variable_term(i);
-      sb_write_term(sb, v);
-      zap_term(v);
+
+      if (!any) { sb_append(sb, " {"); any = TRUE; }
+      else      { sb_append(sb, ", "); }
+      sb_append(sb, lhs);
       sb_append(sb, " <- ");
-      Term renamed = copy_term_with_var_remap(bound, keep, var_map,
-                                              MAX_VARS * 8,
-                                              &fresh_count);
-      /* Wrap RHS in parens when it's compound (arity >= 2), i.e. not a
-         single value, variable, metavariable, or unary application.
-         Makes binary infix terms ("_x * _y") visually grouped without
-         relying on the reader to know the operator's precedence. */
-      BOOL wrap = (ARITY(renamed) >= 2);
-      if (wrap) sb_append(sb, "(");
-      sb_write_term(sb, renamed);
-      if (wrap) sb_append(sb, ")");
-      zap_term(renamed);
-      zap_term(bound);
+      sb_append(sb, rhs_str);
+      free(rhs_str);
+      zap_term(rhs_term);
+      zap_term(resolved);
     }
   }
   if (any)
