@@ -1189,6 +1189,15 @@ void set_para_subst_clause(Topform c)
   Para_subst_clause = c;
 }  /* set_para_subst_clause */
 
+/* Verbosity level for the rider; see just.h for semantics. */
+static int Para_subst_level = 0;
+
+/* PUBLIC */
+void set_para_subst_level(int level)
+{
+  Para_subst_level = level;
+}  /* set_para_subst_level */
+
 /* Build a name like "x_7", "y_6", "v5_12" combining the standard letter
    for `local_varnum` (Prover9's x,y,z,u,w,v5,...) with the originating
    clause's id, joined by underscore so the name is an ordinary identifier
@@ -1506,9 +1515,10 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
       char lhs_buf[32];
       clause_var_name(local, src_id, lhs_buf, sizeof(lhs_buf));
 
-      /* Identity-string suppression: clause-tag fallback on both sides
-         (walker bailed out due to demod). */
-      if (rhs_str && strcmp(lhs_buf, rhs_str) == 0) {
+      /* Identity-string suppression (clause-tag fallback on both sides,
+         "x_7 <- x_7"): suppressed at levels 1 and 2; kept at level 3. */
+      if (Para_subst_level < 3 &&
+          rhs_str && strcmp(lhs_buf, rhs_str) == 0) {
         free(rhs_str);
         zap_term(rhs_term);
         zap_term(resolved);
@@ -1531,18 +1541,42 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
     }
   }
 
-  /* Emit, suppressing entries that are "obvious survivors":
-     RHS is a bare canonical variable, the LHS letter matches the RHS
-     letter (local == rhs_canon), and no other entry shares that RHS
-     varnum (no aliasing being flagged). */
+  /* For level 1, identify "trivial-aliasing groups": canonical varnums
+     where every entry mapping to that canonical has matching LHS letter
+     (local == rhs_canon).  Such groups convey only that the unifier did
+     the rote alignment of same-named vars across input clauses; level 1
+     drops them.  Level 2 keeps them (treats as informative aliasing). */
+  BOOL trivial_group[MAX_VARS];
+  int  k2;
+  for (k2 = 0; k2 < MAX_VARS; k2++)
+    trivial_group[k2] = (count_by_canon[k2] > 0);  /* assume trivial; falsify below */
+  int ei2;
+  for (ei2 = 0; ei2 < n_entries; ei2++) {
+    int rc = entries[ei2].rhs_canon;
+    if (rc >= 0 && rc < MAX_VARS && entries[ei2].local != rc)
+      trivial_group[rc] = FALSE;
+  }
+
+  /* Emit, applying level-aware filtering. */
   BOOL any = FALSE;
   int ei;
   for (ei = 0; ei < n_entries; ei++) {
-    BOOL obvious = (entries[ei].rhs_canon >= 0 &&
-                    entries[ei].rhs_canon < MAX_VARS &&
-                    entries[ei].rhs_canon == entries[ei].local &&
-                    count_by_canon[entries[ei].rhs_canon] == 1);
-    if (!obvious) {
+    BOOL drop = FALSE;
+    int rc = entries[ei].rhs_canon;
+
+    if (Para_subst_level <= 2 && rc >= 0 && rc < MAX_VARS &&
+        rc == entries[ei].local && count_by_canon[rc] == 1) {
+      /* Obvious survivor: alone in canonical group, letter matches. */
+      drop = TRUE;
+    }
+    if (Para_subst_level == 1 && rc >= 0 && rc < MAX_VARS &&
+        trivial_group[rc]) {
+      /* Trivial-aliasing group: every entry on this canonical has letter
+         match.  Drop the whole group at level 1. */
+      drop = TRUE;
+    }
+
+    if (!drop) {
       if (!any) { sb_append(sb, " {"); any = TRUE; }
       else      { sb_append(sb, ", "); }
       sb_append(sb, entries[ei].lhs);

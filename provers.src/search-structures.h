@@ -103,7 +103,6 @@ struct prover_options {
     print_proofs,
     print_proof_goal,
     print_expanded_proof,   // unroll compound rewrite/resolve steps
-    print_substitutions,    // append {var <- term, ...} rider after each para step
     default_output,
     print_clause_properties,
 
@@ -155,6 +154,7 @@ struct prover_options {
     max_days,
     cnf_clause_limit,
     definitional_cnf,
+    print_substitutions,    // 0 off, 1 cleanest, 2 keep trivial alignments, 3 raw
 
     new_constants,        // inference
     para_lit_limit,
