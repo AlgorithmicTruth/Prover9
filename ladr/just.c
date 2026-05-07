@@ -1456,12 +1456,20 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
     }
   }
 
-  /* Render: iterate ALL variables in each input clause (FROM then INTO),
-     showing each variable's effective fate -- bound term, surviving as
-     a result canonical variable, or aliased to another input variable.
-     Skip the entry only if the variable maps to ITSELF unchanged AND
-     wasn't bound (no information conveyed). */
-  BOOL any = FALSE;
+  /* Collect entries first so we can filter "obvious survivor" entries
+     in a second pass (one input var alone mapping to its same-letter
+     result var conveys nothing; aliasing -- multiple input vars to the
+     same result var -- IS informative and must stay). */
+  struct subst_entry {
+    char lhs[32];
+    char *rhs;        /* malloc'd, freed after emit */
+    int local;        /* LHS local varnum */
+    int rhs_canon;    /* RHS canonical varnum if RHS is a bare variable, else -1 */
+  } entries[MAX_VARS * 2];
+  int n_entries = 0;
+  int count_by_canon[MAX_VARS];
+  for (k = 0; k < MAX_VARS; k++) count_by_canon[k] = 0;
+
   int pass;
   for (pass = 0; pass < 2; pass++) {
     Topform cl     = (pass == 0 ? from_cl : into_cl);
@@ -1475,26 +1483,18 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
     for (vi = 0; vi < nv; vi++) {
       int local = vars[vi];
       if (local < 0 || local >= MAX_VARS) continue;
+      if (n_entries >= (int)(sizeof(entries) / sizeof(entries[0]))) break;
 
-      /* Resolve through unifier. */
       Term as_var = get_variable_term(local);
       Term resolved = apply(as_var, cx);
       zap_term(as_var);
 
-      /* Render the LHS first (clause-tagged form). */
-      char lhs[32];
-      clause_var_name(local, src_id, lhs, sizeof(lhs));
-
-      /* Build the RHS rendering -- using canonical map where possible. */
       Term rhs_term = copy_term_with_canonical(resolved,
                                                c1->multiplier, pj->from_id,
                                                c2->multiplier, pj->into_id,
                                                int_to_canon);
 
-      /* Suppress identity entries (LHS string == RHS string).  These
-         arise when the rename-map walker bailed out (e.g. demod ran
-         after paramod) and the variable falls back to its clause-tag
-         on both sides -- "x_7 <- x_7" conveys nothing. */
+      /* Build RHS string (with paren-wrap for arity>=2). */
       String_buf rhs_sb = get_string_buf();
       BOOL wrap = (ARITY(rhs_term) >= 2);
       if (wrap) sb_append(rhs_sb, "(");
@@ -1503,22 +1503,53 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
       char *rhs_str = sb_to_malloc_string(rhs_sb);
       zap_string_buf(rhs_sb);
 
-      if (rhs_str && strcmp(lhs, rhs_str) == 0) {
+      char lhs_buf[32];
+      clause_var_name(local, src_id, lhs_buf, sizeof(lhs_buf));
+
+      /* Identity-string suppression: clause-tag fallback on both sides
+         (walker bailed out due to demod). */
+      if (rhs_str && strcmp(lhs_buf, rhs_str) == 0) {
         free(rhs_str);
         zap_term(rhs_term);
         zap_term(resolved);
         continue;
       }
 
-      if (!any) { sb_append(sb, " {"); any = TRUE; }
-      else      { sb_append(sb, ", "); }
-      sb_append(sb, lhs);
-      sb_append(sb, " <- ");
-      sb_append(sb, rhs_str);
-      free(rhs_str);
+      strncpy(entries[n_entries].lhs, lhs_buf, sizeof(entries[n_entries].lhs)-1);
+      entries[n_entries].lhs[sizeof(entries[n_entries].lhs)-1] = 0;
+      entries[n_entries].rhs = rhs_str;
+      entries[n_entries].local = local;
+      entries[n_entries].rhs_canon = (VARIABLE(rhs_term)
+                                      ? VARNUM(rhs_term) : -1);
+      if (entries[n_entries].rhs_canon >= 0 &&
+          entries[n_entries].rhs_canon < MAX_VARS)
+        count_by_canon[entries[n_entries].rhs_canon]++;
+      n_entries++;
+
       zap_term(rhs_term);
       zap_term(resolved);
     }
+  }
+
+  /* Emit, suppressing entries that are "obvious survivors":
+     RHS is a bare canonical variable, the LHS letter matches the RHS
+     letter (local == rhs_canon), and no other entry shares that RHS
+     varnum (no aliasing being flagged). */
+  BOOL any = FALSE;
+  int ei;
+  for (ei = 0; ei < n_entries; ei++) {
+    BOOL obvious = (entries[ei].rhs_canon >= 0 &&
+                    entries[ei].rhs_canon < MAX_VARS &&
+                    entries[ei].rhs_canon == entries[ei].local &&
+                    count_by_canon[entries[ei].rhs_canon] == 1);
+    if (!obvious) {
+      if (!any) { sb_append(sb, " {"); any = TRUE; }
+      else      { sb_append(sb, ", "); }
+      sb_append(sb, entries[ei].lhs);
+      sb_append(sb, " <- ");
+      sb_append(sb, entries[ei].rhs);
+    }
+    free(entries[ei].rhs);
   }
   if (any)
     sb_append(sb, "}");
