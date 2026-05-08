@@ -258,6 +258,7 @@ Prover_options init_prover_options(void)
   p->print_proofs           = init_flag("print_proofs",            TRUE);
   p->print_proof_goal       = init_flag("print_proof_goal",       FALSE);
   p->print_expanded_proof   = init_flag("print_expanded_proof",   FALSE);
+  p->print_substitutions    = init_flag("print_substitutions",    FALSE);
   p->default_output         = init_flag("default_output",          TRUE);
   p->print_clause_properties= init_flag("print_clause_properties",FALSE);
 
@@ -308,7 +309,6 @@ Prover_options init_prover_options(void)
 #endif
   p->cnf_clause_limit = init_parm("cnf_clause_limit",      0,      0,INT_MAX);
   p->definitional_cnf = init_parm("definitional_cnf",      0,      0,INT_MAX);
-  p->print_substitutions = init_parm("print_substitutions", 0,      0,      3);
   p->max_seconds =      init_parm("max_seconds",          -1,     -1,INT_MAX);
   p->max_minutes =      init_parm("max_minutes",          -1,     -1,INT_MAX);
   p->max_hours =        init_parm("max_hours",          -1,     -1,INT_MAX);
@@ -1907,14 +1907,11 @@ void handle_proof_and_maybe_exit(Topform empty_clause)
            awkward high IDs (12, 13 inserted between 6 and 7). */
         renumber_proof(proof_to_print, 1);
       }
-      if (parm(Opt->print_substitutions) > 0) {
-        set_para_subst_level(parm(Opt->print_substitutions));
+      if (flag(Opt->print_substitutions))
         set_para_subst_proof(proof_to_print);
-      }
       for (p = proof_to_print; p; p = p->next)
         fwrite_clause(stdout, p->v, CL_FORM_STD);
       set_para_subst_proof(NULL);  /* restore: avoid stale references */
-      set_para_subst_level(0);
       if (jmap)
         zap_i3list(jmap);
     }

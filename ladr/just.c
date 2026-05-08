@@ -1189,14 +1189,6 @@ void set_para_subst_clause(Topform c)
   Para_subst_clause = c;
 }  /* set_para_subst_clause */
 
-/* Verbosity level for the rider; see just.h for semantics. */
-static int Para_subst_level = 0;
-
-/* PUBLIC */
-void set_para_subst_level(int level)
-{
-  Para_subst_level = level;
-}  /* set_para_subst_level */
 
 /* Build a name like "x_7", "y_6", "v5_12" combining the standard letter
    for `local_varnum` (Prover9's x,y,z,u,w,v5,...) with the originating
@@ -1498,9 +1490,6 @@ void emit_subst_rider(String_buf sb,
 
   struct subst_entry entries[MAX_RIDER_ENTRIES];
   int n_entries = 0;
-  int count_by_canon[MAX_VARS];
-  int k;
-  for (k = 0; k < MAX_VARS; k++) count_by_canon[k] = 0;
 
   for (i = 0; i < n_ctx; i++) {
     Topform cl = cls[i];
@@ -1536,9 +1525,10 @@ void emit_subst_rider(String_buf sb,
       char lhs_buf[32];
       clause_var_name(local, src_id, lhs_buf, sizeof(lhs_buf));
 
-      /* Identity-string suppression: only at level < 3. */
-      if (Para_subst_level < 3 &&
-          rhs_str && strcmp(lhs_buf, rhs_str) == 0) {
+      /* Identity-string suppression: when LHS and RHS render identically,
+         the entry conveys nothing (typically the rename-map walker
+         bailed and both sides fell back to clause-tag form). */
+      if (rhs_str && strcmp(lhs_buf, rhs_str) == 0) {
         free(rhs_str);
         zap_term(rhs_term);
         zap_term(resolved);
@@ -1551,9 +1541,6 @@ void emit_subst_rider(String_buf sb,
       entries[n_entries].local = local;
       entries[n_entries].rhs_canon = (VARIABLE(rhs_term)
                                       ? VARNUM(rhs_term) : -1);
-      if (entries[n_entries].rhs_canon >= 0 &&
-          entries[n_entries].rhs_canon < MAX_VARS)
-        count_by_canon[entries[n_entries].rhs_canon]++;
       n_entries++;
 
       zap_term(rhs_term);
@@ -1561,27 +1548,15 @@ void emit_subst_rider(String_buf sb,
     }
   }
 
-  /* Emit with level-aware filtering.
-     Level 1 (Larry's rule): drop entries whose LHS letter matches the
-       RHS canonical letter (local == rhs_canon).  Same-letter survival
-       conveys no real change; the meaningful aliasing is communicated
-       by the letter-mismatched entries that remain.
-     Level 2: drop only "obvious survivors" (single entry, letter match,
-       no aliasing at that canonical varnum).
-     Level 3: drop nothing (identity-string fallbacks already filtered
-       at collection time only when level < 3). */
+  /* Emit with Larry's filter: drop entries whose LHS letter matches
+     the RHS canonical letter (local == rhs_canon).  Same-letter
+     survival conveys no real change; the meaningful aliasing is
+     communicated by the letter-mismatched entries that remain. */
   BOOL any = FALSE;
   int ei;
   for (ei = 0; ei < n_entries; ei++) {
-    BOOL drop = FALSE;
     int rc = entries[ei].rhs_canon;
-
-    if (Para_subst_level == 1 && rc >= 0 && rc < MAX_VARS &&
-        rc == entries[ei].local)
-      drop = TRUE;
-    if (Para_subst_level == 2 && rc >= 0 && rc < MAX_VARS &&
-        rc == entries[ei].local && count_by_canon[rc] == 1)
-      drop = TRUE;
+    BOOL drop = (rc >= 0 && rc < MAX_VARS && rc == entries[ei].local);
 
     if (!drop) {
       if (!any) { sb_append(sb, " {"); any = TRUE; }
@@ -1717,6 +1692,9 @@ void sb_append_res_subst(String_buf sb, Just g)
   Topform sat_cls[MAX_RIDER_INPUTS - 1];
   Context sat_ctxs[MAX_RIDER_INPUTS - 1];
   int     sat_ids[MAX_RIDER_INPUTS - 1];
+  int     sat_lits_consumed[MAX_RIDER_INPUTS - 1];
+  int     nuc_lits_consumed[64];
+  int     n_nuc_consumed = 0;
   int n_sats = 0;
   BOOL bail = FALSE;
 
@@ -1752,7 +1730,10 @@ void sb_append_res_subst(String_buf sb, Just g)
     sat_cls[n_sats]  = sat_cl;
     sat_ctxs[n_sats] = c_sat;
     sat_ids[n_sats]  = sat_id;
+    sat_lits_consumed[n_sats] = sat_lit;
     n_sats++;
+    if (n_nuc_consumed < (int)(sizeof(nuc_lits_consumed) / sizeof(int)))
+      nuc_lits_consumed[n_nuc_consumed++] = nuc_lit;
   }
 
   if (!bail && n_sats > 0) {
@@ -1768,7 +1749,62 @@ void sb_append_res_subst(String_buf sb, Just g)
       ctxs[1 + i] = sat_ctxs[i];
       ids[1 + i]  = sat_ids[i];
     }
-    emit_subst_rider(sb, cls, ctxs, ids, 1 + n_sats, NULL);
+
+    /* Build canonical-rename map.  For each non-consumed input literal,
+       apply unifier through that input's context; this is the "expected
+       pre-renumber" form.  Walk these in lockstep with the actual result
+       clause's literals; collect_var_map records (internal varnum ->
+       canonical varnum) at each variable position.  When the structures
+       align, emit_subst_rider can render surviving variables with the
+       result's bare letter (x, y, z, ...) instead of the clause-tagged
+       form. */
+    int int_to_canon[INT_VARNUM_MAX];
+    int k;
+    for (k = 0; k < INT_VARNUM_MAX; k++) int_to_canon[k] = -1;
+
+    if (Para_subst_clause != NULL) {
+      Term expected_atoms[64];
+      int n_expected = 0;
+      Literals lit;
+      int li;
+
+      /* Surviving nucleus literals. */
+      for (lit = nuc_cl->literals, li = 1;
+           lit != NULL && n_expected < 64;
+           lit = lit->next, li++) {
+        BOOL consumed = FALSE;
+        int j;
+        for (j = 0; j < n_nuc_consumed; j++)
+          if (nuc_lits_consumed[j] == li) { consumed = TRUE; break; }
+        if (!consumed && lit->atom)
+          expected_atoms[n_expected++] = apply(lit->atom, c_nuc);
+      }
+
+      /* Surviving satellite literals (per electron). */
+      for (i = 0; i < n_sats; i++) {
+        for (lit = sat_cls[i]->literals, li = 1;
+             lit != NULL && n_expected < 64;
+             lit = lit->next, li++) {
+          if (li == sat_lits_consumed[i]) continue;
+          if (lit->atom)
+            expected_atoms[n_expected++] = apply(lit->atom, sat_ctxs[i]);
+        }
+      }
+
+      /* Walk expected list lockstep with actual result literals. */
+      Literals actual = Para_subst_clause->literals;
+      int idx = 0;
+      while (actual != NULL && idx < n_expected) {
+        if (actual->atom != NULL)
+          collect_var_map(actual->atom, expected_atoms[idx], int_to_canon);
+        actual = actual->next;
+        idx++;
+      }
+
+      for (k = 0; k < n_expected; k++) zap_term(expected_atoms[k]);
+    }
+
+    emit_subst_rider(sb, cls, ctxs, ids, 1 + n_sats, int_to_canon);
   }
 
   if (tr) undo_subst(tr);

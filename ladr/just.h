@@ -253,11 +253,5 @@ void set_para_subst_proof(Plist proof);
    sb_write_clause_jmap. */
 void set_para_subst_clause(Topform c);
 
-/* Set the verbosity level for the rider:
-     0 -- off (no rider)
-     1 -- cleanest: drop obvious survivors AND trivial-aliasing groups
-     2 -- drop obvious survivors only (keep trivial alignments)
-     3 -- no filter (raw, includes identity-string fallbacks). */
-void set_para_subst_level(int level);
 
 #endif  /* conditional compilation of whole file */
