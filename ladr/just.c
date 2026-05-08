@@ -1383,6 +1383,86 @@ int collect_clause_vars(Topform c, int *out, int max_out)
   return n;
 }  /* collect_clause_vars */
 
+/* Post-process a rider string (LHS or RHS) to convert clause-tag
+   notation from "x_12" form to "x[12]" form, per Larry's pedagogical
+   preference (the brackets visually communicate "the x of step 12"
+   rather than "a new variable x_12").
+
+   We keep underscore form in the term-construction path because
+   sb_write_term renders underscored identifiers without quoting; the
+   bracket characters are non-ordinary, so a constant named "x[12]"
+   gets quoted to 'x[12]'.  Post-processing the rendered string lets us
+   have the better notation without fighting the term writer.
+
+   Pattern matched (only at identifier boundaries):
+     [xyzuw]_<digits>     ->  same letter + [<digits>]
+     v<digits>_<digits>   ->  v<digits> + [<digits>]
+   Returns a malloc'd transformed string; caller must free.  False
+   positives are bounded because we only call this on rider content,
+   not on user clause bodies. */
+static
+BOOL is_id_char(char c)
+{
+  return (c >= 'a' && c <= 'z') ||
+         (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9') ||
+         c == '_' || c == '$';
+}
+
+static
+char *bracketize_clause_tags(const char *s)
+{
+  size_t len = strlen(s);
+  /* Allocate generous: each "x_N" (3 chars) becomes "x[N]" (4 chars).
+     Worst case is ~33% growth, but doubling is simpler and safe. */
+  char *out = (char *) safe_malloc(len * 2 + 4);
+  size_t oi = 0;
+  size_t i = 0;
+  while (i < len) {
+    BOOL at_boundary = (i == 0 || !is_id_char(s[i-1]));
+    if (at_boundary) {
+      /* Try [xyzuw]_<digits> */
+      char c = s[i];
+      if ((c == 'x' || c == 'y' || c == 'z' || c == 'u' || c == 'w') &&
+          i + 2 < len && s[i+1] == '_' && s[i+2] >= '0' && s[i+2] <= '9') {
+        size_t end = i + 2;
+        while (end < len && s[end] >= '0' && s[end] <= '9') end++;
+        if (end == len || !is_id_char(s[end])) {
+          out[oi++] = c;
+          out[oi++] = '[';
+          size_t k;
+          for (k = i + 2; k < end; k++) out[oi++] = s[k];
+          out[oi++] = ']';
+          i = end;
+          continue;
+        }
+      }
+      /* Try v<digits>_<digits> */
+      if (c == 'v' && i + 1 < len && s[i+1] >= '0' && s[i+1] <= '9') {
+        size_t k = i + 1;
+        while (k < len && s[k] >= '0' && s[k] <= '9') k++;
+        if (k < len && s[k] == '_' && k + 1 < len &&
+            s[k+1] >= '0' && s[k+1] <= '9') {
+          size_t end = k + 1;
+          while (end < len && s[end] >= '0' && s[end] <= '9') end++;
+          if (end == len || !is_id_char(s[end])) {
+            size_t m;
+            for (m = i; m < k; m++) out[oi++] = s[m];
+            out[oi++] = '[';
+            for (m = k + 1; m < end; m++) out[oi++] = s[m];
+            out[oi++] = ']';
+            i = end;
+            continue;
+          }
+        }
+      }
+    }
+    out[oi++] = s[i++];
+  }
+  out[oi] = '\0';
+  return out;
+}
+
 /* Shared rider entry struct -- one per (input clause variable, fate). */
 struct subst_entry {
   char  lhs[32];
@@ -1481,37 +1561,38 @@ void emit_subst_rider(String_buf sb,
     }
   }
 
-  /* Detect trivial-aliasing groups for level 1. */
-  BOOL trivial_group[MAX_VARS];
-  for (k = 0; k < MAX_VARS; k++)
-    trivial_group[k] = (count_by_canon[k] > 0);
-  int ei2;
-  for (ei2 = 0; ei2 < n_entries; ei2++) {
-    int rc = entries[ei2].rhs_canon;
-    if (rc >= 0 && rc < MAX_VARS && entries[ei2].local != rc)
-      trivial_group[rc] = FALSE;
-  }
-
-  /* Emit with level-aware filtering. */
+  /* Emit with level-aware filtering.
+     Level 1 (Larry's rule): drop entries whose LHS letter matches the
+       RHS canonical letter (local == rhs_canon).  Same-letter survival
+       conveys no real change; the meaningful aliasing is communicated
+       by the letter-mismatched entries that remain.
+     Level 2: drop only "obvious survivors" (single entry, letter match,
+       no aliasing at that canonical varnum).
+     Level 3: drop nothing (identity-string fallbacks already filtered
+       at collection time only when level < 3). */
   BOOL any = FALSE;
   int ei;
   for (ei = 0; ei < n_entries; ei++) {
     BOOL drop = FALSE;
     int rc = entries[ei].rhs_canon;
 
-    if (Para_subst_level <= 2 && rc >= 0 && rc < MAX_VARS &&
-        rc == entries[ei].local && count_by_canon[rc] == 1)
-      drop = TRUE;
     if (Para_subst_level == 1 && rc >= 0 && rc < MAX_VARS &&
-        trivial_group[rc])
+        rc == entries[ei].local)
+      drop = TRUE;
+    if (Para_subst_level == 2 && rc >= 0 && rc < MAX_VARS &&
+        rc == entries[ei].local && count_by_canon[rc] == 1)
       drop = TRUE;
 
     if (!drop) {
       if (!any) { sb_append(sb, " {"); any = TRUE; }
       else      { sb_append(sb, ", "); }
-      sb_append(sb, entries[ei].lhs);
+      char *lhs_b = bracketize_clause_tags(entries[ei].lhs);
+      char *rhs_b = bracketize_clause_tags(entries[ei].rhs);
+      sb_append(sb, lhs_b);
       sb_append(sb, " <- ");
-      sb_append(sb, entries[ei].rhs);
+      sb_append(sb, rhs_b);
+      free(lhs_b);
+      free(rhs_b);
     }
     free(entries[ei].rhs);
   }
