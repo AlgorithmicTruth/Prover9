@@ -1759,6 +1759,76 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
   free_context(c2);
 }  /* sb_append_para_subst */
 
+/* Rider for factoring.  Just data: [parent_id, lit1, lit2].  Factoring
+   unifies two literals of the same clause in a single context, drops
+   lit2, and applies the unifier to the rest.  We rebuild the unifier
+   the same way binary_factors does and emit a {var <- term} rider. */
+static
+void sb_append_factor_subst(String_buf sb, Just g)
+{
+  if (Para_subst_proof == NULL || g == NULL || g->u.lst == NULL)
+    return;
+  Ilist p = g->u.lst;
+  if (p->next == NULL || p->next->next == NULL)
+    return;
+  int parent_id = p->i;
+  int lit1 = p->next->i;
+  int lit2 = p->next->next->i;
+
+  Topform parent_cl = proof_id_to_clause(Para_subst_proof, parent_id);
+  if (parent_cl == NULL)
+    return;
+  Literals l1 = ith_literal(parent_cl->literals, lit1);
+  Literals l2 = ith_literal(parent_cl->literals, lit2);
+  if (l1 == NULL || l2 == NULL || l1->atom == NULL || l2->atom == NULL)
+    return;
+
+  Context c = get_context();
+  Trail tr = NULL;
+  if (!unify(l1->atom, c, l2->atom, c, &tr)) {
+    free_context(c);
+    return;
+  }
+
+  /* Canonical-rename map: walk surviving parent literals (all except
+     lit2, in parent order) under context c against the actual result
+     clause's literals.  Same lockstep pattern as resolution. */
+  int int_to_canon[INT_VARNUM_MAX];
+  int k;
+  for (k = 0; k < INT_VARNUM_MAX; k++) int_to_canon[k] = -1;
+
+  if (Para_subst_clause != NULL) {
+    Term expected_atoms[64];
+    int n_expected = 0;
+    Literals lit;
+    int li;
+    for (lit = parent_cl->literals, li = 1;
+         lit != NULL && n_expected < 64;
+         lit = lit->next, li++) {
+      if (li == lit2) continue;
+      if (lit->atom)
+        expected_atoms[n_expected++] = apply(lit->atom, c);
+    }
+    Literals actual = Para_subst_clause->literals;
+    int idx = 0;
+    while (actual != NULL && idx < n_expected) {
+      if (actual->atom != NULL)
+        collect_var_map(actual->atom, expected_atoms[idx], int_to_canon);
+      actual = actual->next;
+      idx++;
+    }
+    for (k = 0; k < n_expected; k++) zap_term(expected_atoms[k]);
+  }
+
+  Topform cls[1]  = { parent_cl };
+  Context ctxs[1] = { c };
+  int     ids[1]  = { parent_id };
+  emit_subst_rider(sb, cls, ctxs, ids, 1, NULL, NULL, 0, int_to_canon);
+
+  if (tr) undo_subst(tr);
+  free_context(c);
+}  /* sb_append_factor_subst */
+
 /* Rider for binary resolution, hyperresolution, UR resolution.  The
    Ilist data has form [nuc_id, nuc_lit_1, sat_id_1, sat_lit_1,
                         nuc_lit_2, sat_id_2, sat_lit_2, ...]
@@ -2435,6 +2505,7 @@ void sb_write_just(String_buf sb, Just just, I3list map)
       sb_append(sb, ",");
       sb_append_char(sb, itoc(p->next->next->i));
       sb_append(sb, ")");
+      sb_append_factor_subst(sb, g);
     }
     else if (rule == XXRES_JUST) {
       Ilist p = g->u.lst;
