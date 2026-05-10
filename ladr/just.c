@@ -1901,6 +1901,36 @@ Term find_nth_blr_nonvar(Term t, int target, int *counter)
   return NULL;
 }  /* find_nth_blr_nonvar */
 
+/* Find the N-th nonvariable subterm across an array of atoms.  Mirrors
+   Prover9's flatdemod which walks all literals' atoms in order with a
+   single shared sequence counter.  Returns the matched subterm (and
+   sets *out_lit_idx to which atom contained it), or NULL if not found. */
+static
+Term find_nth_in_atoms(Term *atoms, int n_atoms, int target,
+                       int *counter, int *out_lit_idx)
+{
+  int i;
+  *out_lit_idx = -1;
+  for (i = 0; i < n_atoms; i++) {
+    if (atoms[i] == NULL) continue;
+    Term r = find_nth_blr_nonvar(atoms[i], target, counter);
+    if (r) {
+      *out_lit_idx = i;
+      return r;
+    }
+  }
+  return NULL;
+}  /* find_nth_in_atoms */
+
+/* Walk an atom array and replace the N-th non-var subterm with the
+   replacement.  Counter persists across atoms.  If the target falls at
+   the root of an atom, that atom slot is updated to the replacement
+   (caller-visible mutation).  Returns when target is hit or all atoms
+   exhausted. */
+static
+void replace_nth_in_atoms(Term *atoms, int n_atoms, int target,
+                          int *counter, Term replacement);
+
 /* Walk t and replace the N-th non-var subterm (BLR order) with
    replacement.  Returns the (possibly new) tree.  If target is hit at
    the root (t itself), returns replacement.  Otherwise mutates t's
@@ -1926,66 +1956,91 @@ Term replace_nth_blr_nonvar(Term t, int target, int *counter,
   return t;
 }  /* replace_nth_blr_nonvar */
 
-/* Compute the atom for the targeted literal AFTER the primary inference
-   but BEFORE any secondary justification (demod, flip).  Caller owns
-   the returned term and must zap_term it.  Returns NULL if the primary
-   type isn't supported (rider then degrades to no-op). */
 static
-Term compute_post_primary_atom(Just primary, int lit_idx)
+void replace_nth_in_atoms(Term *atoms, int n_atoms, int target,
+                          int *counter, Term replacement)
+{
+  int i;
+  for (i = 0; i < n_atoms; i++) {
+    if (atoms[i] == NULL) continue;
+    if (*counter >= target) return;
+    Term old = atoms[i];
+    Term updated = replace_nth_blr_nonvar(atoms[i], target, counter,
+                                          replacement);
+    if (updated != old) {
+      /* target hit at the atom root; replacement now occupies the slot */
+      atoms[i] = updated;
+      zap_term(old);
+      return;
+    }
+    /* otherwise mutation happened in place; counter has advanced */
+  }
+}  /* replace_nth_in_atoms */
+
+#define MAX_DEMOD_ATOMS 16
+
+/* Compute the post-primary atoms (one per literal of the parent clause)
+   for use by demod chain replay.  Returns the number of atoms written
+   into out_atoms[], or 0 if the primary type isn't supported.  Caller
+   owns the atoms and must zap_term each.  Mirrors Prover9's flatdemod
+   which walks ALL literals' atoms in order with one shared sequence
+   counter, so for multi-literal parents we need the whole list. */
+static
+int compute_post_primary_atoms(Just primary, Term *out_atoms,
+                               int max_atoms)
 {
   if (primary == NULL || Para_subst_proof == NULL)
-    return NULL;
+    return 0;
   Just_type rule = primary->type;
 
   if (rule == COPY_JUST || rule == BACK_DEMOD_JUST ||
       rule == BACK_UNIT_DEL_JUST || rule == DENY_JUST ||
       rule == CLAUSIFY_JUST || rule == NEW_SYMBOL_JUST ||
       rule == PROPOSITIONAL_JUST) {
-    /* Single-parent operations: post-primary atom is a copy of the
-       parent clause's targeted literal atom.  Skip multi-literal
-       parents -- our walker counts a single atom only, so positions
-       wouldn't align with Prover9's flatdemod which spans all literals. */
+    /* Single-parent operations: post-primary atoms are copies of each
+       of the parent clause's literal atoms, in order. */
     int parent_id = primary->u.id;
     Topform parent = proof_id_to_clause(Para_subst_proof, parent_id);
-    if (parent == NULL) return NULL;
-    if (parent->literals == NULL || parent->literals->next != NULL)
-      return NULL;
-    Literals lit = ith_literal(parent->literals, lit_idx);
-    if (lit == NULL || lit->atom == NULL) return NULL;
-    return copy_term(lit->atom);
+    if (parent == NULL) return 0;
+    int n = 0;
+    Literals lit;
+    for (lit = parent->literals;
+         lit != NULL && n < max_atoms;
+         lit = lit->next) {
+      if (lit->atom)
+        out_atoms[n++] = copy_term(lit->atom);
+    }
+    return n;
   }
   if (rule == PARA_JUST || rule == PARA_FX_JUST ||
       rule == PARA_IX_JUST || rule == PARA_FX_IX_JUST) {
-    /* Paramod primary: reconstruct the post-paramod atom by re-running
-       the unification and substituting the FROM RHS into the INTO atom
-       at the targeted position. */
+    /* Paramod primary: build_expected_atom for the targeted literal,
+       apply unifier through c2 for any other surviving literals.  The
+       from_clause's other literals don't appear in the result. */
     Parajust pj = primary->u.para;
     if (pj == NULL || pj->from_pos == NULL || pj->into_pos == NULL)
-      return NULL;
+      return 0;
     Topform from_cl = proof_id_to_clause(Para_subst_proof, pj->from_id);
     Topform into_cl = proof_id_to_clause(Para_subst_proof, pj->into_id);
-    if (from_cl == NULL || into_cl == NULL) return NULL;
-    if (into_cl->literals == NULL || into_cl->literals->next != NULL)
-      return NULL;
+    if (from_cl == NULL || into_cl == NULL) return 0;
     Literals from_lit = ith_literal(from_cl->literals, pj->from_pos->i);
     Literals into_lit = ith_literal(into_cl->literals, pj->into_pos->i);
-    if (from_lit == NULL || into_lit == NULL) return NULL;
-    if (from_lit->atom == NULL || into_lit->atom == NULL) return NULL;
+    if (from_lit == NULL || into_lit == NULL) return 0;
+    if (from_lit->atom == NULL || into_lit->atom == NULL) return 0;
 
     Ilist from_pos_in_lit = pj->from_pos->next;
     Ilist into_pos_in_lit = pj->into_pos->next;
     Term source_term = term_at_pos(from_lit->atom, from_pos_in_lit);
     Term target_term = term_at_pos(into_lit->atom, into_pos_in_lit);
-    if (source_term == NULL || target_term == NULL) return NULL;
+    if (source_term == NULL || target_term == NULL) return 0;
 
-    /* Determine the "other side" replacement of the FROM equation. */
-    if (ARITY(from_lit->atom) != 2) return NULL;
-    if (from_pos_in_lit == NULL) return NULL;
+    if (ARITY(from_lit->atom) != 2) return 0;
+    if (from_pos_in_lit == NULL) return 0;
     int side = from_pos_in_lit->i;
     Term replacement_term = NULL;
     if (side == 1)      replacement_term = ARG(from_lit->atom, 1);
     else if (side == 2) replacement_term = ARG(from_lit->atom, 0);
-    if (replacement_term == NULL) return NULL;
+    if (replacement_term == NULL) return 0;
 
     Context c1 = get_context();
     Context c2 = get_context();
@@ -1993,18 +2048,36 @@ Term compute_post_primary_atom(Just primary, int lit_idx)
     if (!unify(source_term, c1, target_term, c2, &tr)) {
       free_context(c1);
       free_context(c2);
-      return NULL;
+      return 0;
     }
-    Term result = build_expected_atom(into_lit->atom, into_pos_in_lit,
-                                      replacement_term, c1, c2);
+
+    /* Walk INTO clause's literals, building the post-paramod atoms.
+       The targeted literal gets the substitution-and-replace; others
+       just get the unifier applied. */
+    int n = 0;
+    Literals lit;
+    int li = 1;
+    for (lit = into_cl->literals;
+         lit != NULL && n < max_atoms;
+         lit = lit->next, li++) {
+      if (lit->atom == NULL) continue;
+      if (li == pj->into_pos->i) {
+        out_atoms[n++] = build_expected_atom(into_lit->atom,
+                                             into_pos_in_lit,
+                                             replacement_term, c1, c2);
+      } else {
+        out_atoms[n++] = apply(lit->atom, c2);
+      }
+    }
+
     undo_subst(tr);
     free_context(c1);
     free_context(c2);
-    return result;
+    return n;
   }
   /* Other primary types not handled in v1; rider degrades to no-op. */
-  return NULL;
-}  /* compute_post_primary_atom */
+  return 0;
+}  /* compute_post_primary_atoms */
 
 /* Walk t; return TRUE iff every variable encountered has its varnum
    in the local clause range (< MAX_VARS).  Multiplier-shifted varnums
@@ -2082,16 +2155,18 @@ void sb_append_demod_step_subst(String_buf sb,
   free_context(c2);
 }  /* sb_append_demod_step_subst */
 
-/* Replay a demod chain on the given starting atom, emitting each
-   entry's "id(pos[,R])" plus an optional "{...}" rider.  Returns the
-   atom after the chain has been applied (caller owns it).  If
+/* Replay a demod chain across the given list of starting atoms (one
+   per literal of the parent clause), emitting each entry's
+   "id(pos[,R])" plus an optional "{...}" rider.  The atoms are
+   modified in-place as the replay applies each rewrite.  If
    reconstruction fails partway, falls back to no-rider rendering for
    the rest of the chain. */
 static
-Term sb_emit_demod_chain(String_buf sb, I3list chain, Term initial_atom,
+void sb_emit_demod_chain(String_buf sb, I3list chain,
+                         Term *atoms, int n_atoms,
                          I3list map)
 {
-  Term cur = initial_atom;  /* caller-allocated, we own and may replace */
+  BOOL bailed = FALSE;
   I3list p;
   for (p = chain; p; p = p->next) {
     /* Emit the "id(pos[,R])" text first (existing format). */
@@ -2104,19 +2179,18 @@ Term sb_emit_demod_chain(String_buf sb, I3list chain, Term initial_atom,
       sb_append(sb, ")");
     }
 
-    /* Try to compute and emit the rider, if we still have a valid atom
-       and Para_subst_proof is set. */
-    if (cur != NULL && Para_subst_proof != NULL && p->j > 0) {
+    /* Try to compute and emit the rider. */
+    if (!bailed && atoms != NULL && Para_subst_proof != NULL && p->j > 0) {
       Topform demod = proof_id_to_clause(Para_subst_proof, p->i);
       if (demod != NULL) {
         int counter = 0;
-        Term matched = find_nth_blr_nonvar(cur, p->j, &counter);
+        int lit_idx = -1;
+        Term matched = find_nth_in_atoms(atoms, n_atoms, p->j, &counter,
+                                         &lit_idx);
         if (matched != NULL) {
           sb_append_demod_step_subst(sb, demod, matched);
 
-          /* Apply the rewrite so the next step's position is meaningful.
-             Replace matched subterm with the demodulator's other side
-             (with unifier applied). */
+          /* Apply the rewrite so the next step's position is meaningful. */
           if (demod->literals && demod->literals->atom &&
               ARITY(demod->literals->atom) == 2) {
             Term datom = demod->literals->atom;
@@ -2132,15 +2206,13 @@ Term sb_emit_demod_chain(String_buf sb, I3list chain, Term initial_atom,
               if (!unify(pattern, c1, matched, c2, &tr)) {
                 free_context(c1);
                 free_context(c2);
-                /* Couldn't replay; bail to no-rewrite for rest. */
-                if (cur != initial_atom) zap_term(cur);
-                cur = NULL;
+                bailed = TRUE;
                 goto next_step;
               }
             }
             Term applied_other = apply(other, c1);
             int ctr2 = 0;
-            cur = replace_nth_blr_nonvar(cur, p->j, &ctr2, applied_other);
+            replace_nth_in_atoms(atoms, n_atoms, p->j, &ctr2, applied_other);
             undo_subst(tr);
             free_context(c1);
             free_context(c2);
@@ -2151,7 +2223,6 @@ Term sb_emit_demod_chain(String_buf sb, I3list chain, Term initial_atom,
    next_step:
     if (p->next) sb_append(sb, ",");
   }
-  return cur;
 }  /* sb_emit_demod_chain */
 
 /*************
@@ -2185,19 +2256,20 @@ void sb_write_just(String_buf sb, Just just, I3list map)
       sb_append(sb, "([");
       /* When print_substitutions is on, replay the chain to emit each
          step's "id(pos[,R])" plus an optional "{...}" rider showing
-         the unifier.  Replay needs the post-primary atom, computed from
-         the primary justification's parent clause (NOT the result clause,
-         which may be empty -- e.g. $F).  For multi-literal parents or
-         unsupported primary types, compute_post_primary_atom returns
-         NULL and rider emission is skipped. */
-      Term initial_atom = NULL;
+         the unifier.  Replay needs the post-primary atoms (one per
+         literal of the parent clause), since Prover9's flatdemod walks
+         all literals' atoms with a single shared sequence counter.
+         For unsupported primary types, compute_post_primary_atoms
+         returns 0 and rider emission is skipped. */
+      Term atoms[MAX_DEMOD_ATOMS];
+      int n_atoms = 0;
       if (Para_subst_proof != NULL)
-        initial_atom = compute_post_primary_atom(just, 1);
-      Term final_atom = sb_emit_demod_chain(sb, g->u.demod, initial_atom, map);
-      if (final_atom != NULL && final_atom != initial_atom)
-        zap_term(final_atom);
-      else if (initial_atom != NULL && final_atom == initial_atom)
-        zap_term(initial_atom);
+        n_atoms = compute_post_primary_atoms(just, atoms, MAX_DEMOD_ATOMS);
+      sb_emit_demod_chain(sb, g->u.demod,
+                          (n_atoms > 0 ? atoms : NULL), n_atoms, map);
+      int ai;
+      for (ai = 0; ai < n_atoms; ai++)
+        if (atoms[ai] != NULL) zap_term(atoms[ai]);
       sb_append(sb, "])");
     }
     else if (rule == UNIT_DEL_JUST) {
