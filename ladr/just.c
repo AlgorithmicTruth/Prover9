@@ -3027,42 +3027,33 @@ multiplicity in the result.
 int proof_tree_weight(Topform c)
 {
   /* Memoized DAG evaluation computing the tree-leaf count.
-     We compute f(c) = 1 if c has no clause parents; else sum of f(p)
-     over clause parents p.  Memoization is keyed on clause id.  We
-     use a two-phase postorder: first push every node, then compute
-     bottom-up.  Cycles (which should not occur in a well-formed
-     proof DAG) are guarded by a "visiting" mark.
+     f(c) = 1 if c has no clause parents; else sum of f(p) over
+     clause parents p (DAG, so shared ancestors are counted with
+     multiplicity in the result).  Iterative postorder DFS with
+     the per-clause cache used both as the persistent store and
+     as the in-call "computed" marker.
 
-     Per-clause cache: results are also written into
-     c->proof_tree_weight_cache for every ancestor we compute,
-     amortizing the cost across the many anc_subsume calls that the
-     same clause's weight typically participates in.  Justifications
-     are immutable, so the cache value never goes stale.  The only
-     subtle case is "parent vanished from id table" (back-subsumed,
-     gc); a cached value snapshots the more accurate answer at the
-     time the parent was still findable, which is the conservative
-     direction (larger weight, preferring c's earlier alternative
-     in tie-breaking). */
-  enum { MARK_VISITING = -1 };
-  Plist worklist = NULL;     /* nodes to process (DFS stack, via plist_prepend) */
-  I2list memo = NULL;        /* clause_id -> computed weight (or MARK_VISITING) */
-  Plist ancestors;
-  Plist a;
+     Per-clause cache amortizes cost across the many anc_subsume
+     calls that re-evaluate the same clause's weight.
+     Justifications are immutable so cached values never go stale.
+     The "parent vanished from id table" (gc) case: the cache
+     snapshots the more accurate value computed before the purge,
+     which is the conservative direction (larger weight, preferring
+     c's earlier alternative in tie-breaking).
+
+     Lazy DFS: seed the worklist with c only; push parents only
+     when we hit a non-cached node.  Cached nodes prune the walk
+     immediately.  This avoids the previous get_clause_ancestors
+     pre-pass that walked the entire DAG even when most subtrees
+     were cached. */
+  Plist worklist;
 
   if (c == NULL)
     return 0;
   if (c->proof_tree_weight_cache >= 0)
     return c->proof_tree_weight_cache;
 
-  /* Collect ancestors to bound the memo table and to pre-uncompress
-     any compressed justifications (get_clause_ancestors does this). */
-  ancestors = get_clause_ancestors(c);
-
-  /* Seed the worklist with every ancestor; iterative postorder pass. */
-  for (a = ancestors; a; a = a->next) {
-    Topform ca = a->v;
-    worklist = plist_prepend(worklist, ca);
-  }
+  worklist = plist_prepend(NULL, c);
 
   while (worklist != NULL) {
     Topform cur = worklist->v;
@@ -3070,15 +3061,8 @@ int proof_tree_weight(Topform c)
     BOOL all_done;
     int sum;
 
-    if (assoc(memo, cur->id) != INT_MIN) {
-      worklist = plist_pop(worklist);
-      continue;
-    }
-
-    /* If we've cached this ancestor on a previous call, reuse it
-       and skip its subtree entirely. */
+    /* Already computed (in this call or a prior one): pop and continue. */
     if (cur->proof_tree_weight_cache >= 0) {
-      memo = alist_insert(memo, cur->id, cur->proof_tree_weight_cache);
       worklist = plist_pop(worklist);
       continue;
     }
@@ -3086,64 +3070,40 @@ int proof_tree_weight(Topform c)
     parents = get_parents(cur->justification, TRUE);
     if (parents == NULL) {
       /* Input clause: leaf contributes 1. */
-      memo = alist_insert(memo, cur->id, 1);
+      cur->proof_tree_weight_cache = 1;
       worklist = plist_pop(worklist);
       continue;
     }
 
-    /* Check that all parents are memoized; if not, push them first. */
+    /* Sum cached parent weights; push uncached parents and revisit. */
     all_done = TRUE;
     sum = 0;
     {
       Ilist p;
       for (p = parents; p; p = p->next) {
-        int pv = assoc(memo, p->i);
-        if (pv == INT_MIN) {
-          Topform pc = find_clause_by_id(p->i);
-          if (pc == NULL) {
-            /* Parent vanished (e.g., purged by gc).  Treat as leaf
-               with weight 1 -- conservative, keeps the metric finite. */
-            sum += 1;
-          } else if (pc->proof_tree_weight_cache >= 0) {
-            /* Parent's weight already cached; use it without recursing. */
-            sum += pc->proof_tree_weight_cache;
-          } else {
-            worklist = plist_prepend(worklist, pc);
-            all_done = FALSE;
-          }
+        Topform pc = find_clause_by_id(p->i);
+        if (pc == NULL) {
+          /* Parent vanished (e.g., purged by gc).  Treat as leaf
+             with weight 1 -- conservative, keeps the metric finite. */
+          sum += 1;
+        } else if (pc->proof_tree_weight_cache >= 0) {
+          sum += pc->proof_tree_weight_cache;
         } else {
-          sum += pv;
+          worklist = plist_prepend(worklist, pc);
+          all_done = FALSE;
         }
       }
     }
     zap_ilist(parents);
 
     if (all_done) {
-      memo = alist_insert(memo, cur->id, sum == 0 ? 1 : sum);
+      cur->proof_tree_weight_cache = (sum == 0 ? 1 : sum);
       worklist = plist_pop(worklist);
     }
     /* else: parents were pushed; revisit cur after they're done. */
   }
 
-  /* Write computed weights back into per-clause caches so future
-     proof_tree_weight calls on these clauses are O(1). */
-  for (a = ancestors; a; a = a->next) {
-    Topform ca = a->v;
-    if (ca->proof_tree_weight_cache < 0) {
-      int v = assoc(memo, ca->id);
-      if (v != INT_MIN && v >= 0)
-        ca->proof_tree_weight_cache = v;
-    }
-  }
-
-  {
-    int result = assoc(memo, c->id);
-    if (result == INT_MIN)
-      result = 1;
-    zap_i2list(memo);
-    zap_plist(ancestors);
-    return result;
-  }
+  return c->proof_tree_weight_cache >= 0 ? c->proof_tree_weight_cache : 1;
 }  /* proof_tree_weight */
 
 /*************
