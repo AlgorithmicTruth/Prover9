@@ -41,6 +41,7 @@ static unsigned Topform_gets, Topform_frees;
 Topform get_topform(void)
 {
   Topform p = get_cmem(PTRS_TOPFORM);
+  p->proof_tree_weight_cache = -1;  /* unset sentinel */
   Topform_gets++;
   return(p);
 }  /* get_topform */

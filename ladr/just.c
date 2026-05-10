@@ -3031,7 +3031,18 @@ int proof_tree_weight(Topform c)
      over clause parents p.  Memoization is keyed on clause id.  We
      use a two-phase postorder: first push every node, then compute
      bottom-up.  Cycles (which should not occur in a well-formed
-     proof DAG) are guarded by a "visiting" mark. */
+     proof DAG) are guarded by a "visiting" mark.
+
+     Per-clause cache: results are also written into
+     c->proof_tree_weight_cache for every ancestor we compute,
+     amortizing the cost across the many anc_subsume calls that the
+     same clause's weight typically participates in.  Justifications
+     are immutable, so the cache value never goes stale.  The only
+     subtle case is "parent vanished from id table" (back-subsumed,
+     gc); a cached value snapshots the more accurate answer at the
+     time the parent was still findable, which is the conservative
+     direction (larger weight, preferring c's earlier alternative
+     in tie-breaking). */
   enum { MARK_VISITING = -1 };
   Plist worklist = NULL;     /* nodes to process (DFS stack, via plist_prepend) */
   I2list memo = NULL;        /* clause_id -> computed weight (or MARK_VISITING) */
@@ -3040,6 +3051,8 @@ int proof_tree_weight(Topform c)
 
   if (c == NULL)
     return 0;
+  if (c->proof_tree_weight_cache >= 0)
+    return c->proof_tree_weight_cache;
 
   /* Collect ancestors to bound the memo table and to pre-uncompress
      any compressed justifications (get_clause_ancestors does this). */
@@ -3058,6 +3071,14 @@ int proof_tree_weight(Topform c)
     int sum;
 
     if (assoc(memo, cur->id) != INT_MIN) {
+      worklist = plist_pop(worklist);
+      continue;
+    }
+
+    /* If we've cached this ancestor on a previous call, reuse it
+       and skip its subtree entirely. */
+    if (cur->proof_tree_weight_cache >= 0) {
+      memo = alist_insert(memo, cur->id, cur->proof_tree_weight_cache);
       worklist = plist_pop(worklist);
       continue;
     }
@@ -3083,6 +3104,9 @@ int proof_tree_weight(Topform c)
             /* Parent vanished (e.g., purged by gc).  Treat as leaf
                with weight 1 -- conservative, keeps the metric finite. */
             sum += 1;
+          } else if (pc->proof_tree_weight_cache >= 0) {
+            /* Parent's weight already cached; use it without recursing. */
+            sum += pc->proof_tree_weight_cache;
           } else {
             worklist = plist_prepend(worklist, pc);
             all_done = FALSE;
@@ -3099,6 +3123,17 @@ int proof_tree_weight(Topform c)
       worklist = plist_pop(worklist);
     }
     /* else: parents were pushed; revisit cur after they're done. */
+  }
+
+  /* Write computed weights back into per-clause caches so future
+     proof_tree_weight calls on these clauses are O(1). */
+  for (a = ancestors; a; a = a->next) {
+    Topform ca = a->v;
+    if (ca->proof_tree_weight_cache < 0) {
+      int v = assoc(memo, ca->id);
+      if (v != INT_MIN && v >= 0)
+        ca->proof_tree_weight_cache = v;
+    }
   }
 
   {
