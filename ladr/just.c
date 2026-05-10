@@ -1947,9 +1947,19 @@ void sb_write_just(String_buf sb, Just just, I3list map)
 
       sb_append(sb, ")");
 
-      /* When -expand is on, append the unifier so newcomers can see
-         which variables got substituted across the clause. */
+      /* When print_substitutions is on, append the unifier so newcomers
+         can see which variables got substituted across the clause. */
       sb_append_para_subst(sb, p);
+      /* And append "[from] into [into]" direction so the reader can
+         tell which clause provided the rewrite source vs which clause
+         got rewritten.  Same gating as the rider. */
+      if (Para_subst_proof != NULL) {
+        sb_append(sb, " : [");
+        sb_append_id(sb, p->from_id, map);
+        sb_append(sb, "] into [");
+        sb_append_id(sb, p->into_id, map);
+        sb_append(sb, "]");
+      }
     }
     else if (rule == INSTANCE_JUST) {
       Plist p;
