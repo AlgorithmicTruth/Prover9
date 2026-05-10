@@ -1759,6 +1759,104 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
   free_context(c2);
 }  /* sb_append_para_subst */
 
+/* Rider for [copy(N), flip(a)] chains.  Pure copy + flip preserves
+   the parent's variables but Prover9 canonically renumbers them
+   left-to-right after the flip, so the result clause may use
+   different names for the same variables.  Larry asked for a
+   {x[N] <- y, ...} rider showing the rename.
+
+   Approach: build the expected pre-renumber atoms (parent's
+   literals with literal lit_pos flipped, no substitution applied),
+   walk lockstep against the actual result clause to populate the
+   int_to_canon map, and emit via the shared rider helper with an
+   empty context. */
+static
+void sb_append_copy_flip_subst(String_buf sb, int parent_id, int lit_pos)
+{
+  if (Para_subst_proof == NULL || Para_subst_clause == NULL)
+    return;
+  Topform parent_cl = proof_id_to_clause(Para_subst_proof, parent_id);
+  if (parent_cl == NULL)
+    return;
+  Literals flip_lit = ith_literal(parent_cl->literals, lit_pos);
+  if (flip_lit == NULL || flip_lit->atom == NULL)
+    return;
+  if (ARITY(flip_lit->atom) != 2)
+    return;  /* not an equation; nothing to flip */
+
+  /* Build expected atoms: parent's literals in order, with the one
+     at lit_pos's args swapped.  No subst (copy doesn't apply one). */
+  Term expected_atoms[64];
+  int n_expected = 0;
+  Literals lit;
+  int li;
+  for (lit = parent_cl->literals, li = 1;
+       lit != NULL && n_expected < 64;
+       lit = lit->next, li++) {
+    if (lit->atom == NULL) continue;
+    if (li == lit_pos) {
+      Term swapped = get_rigid_term_dangerously(SYMNUM(lit->atom), 2);
+      ARG(swapped, 0) = copy_term(ARG(lit->atom, 1));
+      ARG(swapped, 1) = copy_term(ARG(lit->atom, 0));
+      expected_atoms[n_expected++] = swapped;
+    } else {
+      expected_atoms[n_expected++] = copy_term(lit->atom);
+    }
+  }
+
+  /* Lockstep canonical map. */
+  int int_to_canon[INT_VARNUM_MAX];
+  int k;
+  for (k = 0; k < INT_VARNUM_MAX; k++) int_to_canon[k] = -1;
+
+  Literals actual = Para_subst_clause->literals;
+  int idx = 0;
+  while (actual != NULL && idx < n_expected) {
+    if (actual->atom != NULL)
+      collect_var_map(actual->atom, expected_atoms[idx], int_to_canon);
+    actual = actual->next;
+    idx++;
+  }
+
+  for (k = 0; k < n_expected; k++) zap_term(expected_atoms[k]);
+
+  /* Build the rider directly: for each parent variable i, the entry is
+     "x[N] <- <canonical>" where canonical comes from int_to_canon[i].
+     We don't go through emit_subst_rider because that path assumes a
+     non-empty context and applies its multiplier to the parent
+     variables before consulting the canonical map -- here our map is
+     keyed on unshifted varnums.  Same Larry filter applies (drop
+     entries where parent var i maps to canonical i, since same letter
+     conveys nothing). */
+  int parent_vars[MAX_VARS];
+  int n_parent_vars = collect_clause_vars(parent_cl, parent_vars, MAX_VARS);
+  static const char letters[] = "xyzuw";
+  BOOL any = FALSE;
+  int vi;
+  for (vi = 0; vi < n_parent_vars; vi++) {
+    int local = parent_vars[vi];
+    if (local < 0 || local >= INT_VARNUM_MAX) continue;
+    int canon = int_to_canon[local];
+    if (canon < 0) continue;          /* no mapping recorded */
+    if (canon == local) continue;     /* Larry filter: same letter */
+    char lhs_buf[32];
+    clause_var_name(local, parent_id, 0, lhs_buf, sizeof(lhs_buf));
+    char *lhs_b = bracketize_clause_tags(lhs_buf);
+    char rhs_buf[8];
+    if (canon >= 0 && canon < (int)sizeof(letters) - 1)
+      snprintf(rhs_buf, sizeof(rhs_buf), "%c", letters[canon]);
+    else
+      snprintf(rhs_buf, sizeof(rhs_buf), "v%d", canon);
+    if (!any) { sb_append(sb, " {"); any = TRUE; }
+    else      { sb_append(sb, ", "); }
+    sb_append(sb, lhs_b);
+    sb_append(sb, " <- ");
+    sb_append(sb, rhs_buf);
+    free(lhs_b);
+  }
+  if (any) sb_append(sb, "}");
+}  /* sb_append_copy_flip_subst */
+
 /* Rider for factoring.  Just data: [parent_id, lit1, lit2].  Factoring
    unifies two literals of the same clause in a single context, drops
    lit2, and applies the unifier to the rest.  We rebuild the unifier
@@ -2546,6 +2644,11 @@ void sb_write_just(String_buf sb, Just just, I3list map)
       sb_append(sb, "(");
       sb_append_char(sb, itoc(id));
       sb_append(sb, ")");
+      /* When the chain is [copy(N), flip(a)], Prover9 renumbers
+         the result's variables canonically; Larry asked for a
+         {x[N] <- y, ...} rider showing the rename. */
+      if (rule == FLIP_JUST && just != NULL && just->type == COPY_JUST)
+        sb_append_copy_flip_subst(sb, just->u.id, id);
     }
     else if (rule == EVAL_JUST) {
       int id = g->u.id;
