@@ -1813,6 +1813,278 @@ void sb_append_res_subst(String_buf sb, Just g)
   for (i = 0; i < n_sats; i++) free_context(sat_ctxs[i]);
 }  /* sb_append_res_subst */
 
+/* Find the N-th nonvariable subterm in t, in bottom-up left-to-right
+   order (post-order, skipping variables).  Mirrors flatdemod.c's
+   counting convention.  Counter starts at 0 and is incremented for
+   each non-variable node visited; returns the node when counter
+   reaches target. */
+static
+Term find_nth_blr_nonvar(Term t, int target, int *counter)
+{
+  if (t == NULL || VARIABLE(t)) return NULL;
+  int i;
+  for (i = 0; i < ARITY(t); i++) {
+    Term r = find_nth_blr_nonvar(ARG(t, i), target, counter);
+    if (r) return r;
+  }
+  (*counter)++;
+  if (*counter == target) return t;
+  return NULL;
+}  /* find_nth_blr_nonvar */
+
+/* Walk t and replace the N-th non-var subterm (BLR order) with
+   replacement.  Returns the (possibly new) tree.  If target is hit at
+   the root (t itself), returns replacement.  Otherwise mutates t's
+   ARG slots and returns t.  Caller owns the returned tree. */
+static
+Term replace_nth_blr_nonvar(Term t, int target, int *counter,
+                            Term replacement)
+{
+  if (t == NULL || VARIABLE(t)) return t;
+  int i;
+  for (i = 0; i < ARITY(t); i++) {
+    Term old_child = ARG(t, i);
+    Term new_child = replace_nth_blr_nonvar(old_child, target, counter,
+                                            replacement);
+    if (new_child != old_child) {
+      ARG(t, i) = new_child;
+      zap_term(old_child);
+      if (*counter >= target) return t;  /* done */
+    }
+  }
+  (*counter)++;
+  if (*counter == target) return replacement;
+  return t;
+}  /* replace_nth_blr_nonvar */
+
+/* Compute the atom for the targeted literal AFTER the primary inference
+   but BEFORE any secondary justification (demod, flip).  Caller owns
+   the returned term and must zap_term it.  Returns NULL if the primary
+   type isn't supported (rider then degrades to no-op). */
+static
+Term compute_post_primary_atom(Just primary, int lit_idx)
+{
+  if (primary == NULL || Para_subst_proof == NULL)
+    return NULL;
+  Just_type rule = primary->type;
+
+  if (rule == COPY_JUST || rule == BACK_DEMOD_JUST ||
+      rule == BACK_UNIT_DEL_JUST || rule == DENY_JUST ||
+      rule == CLAUSIFY_JUST || rule == NEW_SYMBOL_JUST ||
+      rule == PROPOSITIONAL_JUST) {
+    /* Single-parent operations: post-primary atom is a copy of the
+       parent clause's targeted literal atom.  Skip multi-literal
+       parents -- our walker counts a single atom only, so positions
+       wouldn't align with Prover9's flatdemod which spans all literals. */
+    int parent_id = primary->u.id;
+    Topform parent = proof_id_to_clause(Para_subst_proof, parent_id);
+    if (parent == NULL) return NULL;
+    if (parent->literals == NULL || parent->literals->next != NULL)
+      return NULL;
+    Literals lit = ith_literal(parent->literals, lit_idx);
+    if (lit == NULL || lit->atom == NULL) return NULL;
+    return copy_term(lit->atom);
+  }
+  if (rule == PARA_JUST || rule == PARA_FX_JUST ||
+      rule == PARA_IX_JUST || rule == PARA_FX_IX_JUST) {
+    /* Paramod primary: reconstruct the post-paramod atom by re-running
+       the unification and substituting the FROM RHS into the INTO atom
+       at the targeted position. */
+    Parajust pj = primary->u.para;
+    if (pj == NULL || pj->from_pos == NULL || pj->into_pos == NULL)
+      return NULL;
+    Topform from_cl = proof_id_to_clause(Para_subst_proof, pj->from_id);
+    Topform into_cl = proof_id_to_clause(Para_subst_proof, pj->into_id);
+    if (from_cl == NULL || into_cl == NULL) return NULL;
+    if (into_cl->literals == NULL || into_cl->literals->next != NULL)
+      return NULL;
+    Literals from_lit = ith_literal(from_cl->literals, pj->from_pos->i);
+    Literals into_lit = ith_literal(into_cl->literals, pj->into_pos->i);
+    if (from_lit == NULL || into_lit == NULL) return NULL;
+    if (from_lit->atom == NULL || into_lit->atom == NULL) return NULL;
+
+    Ilist from_pos_in_lit = pj->from_pos->next;
+    Ilist into_pos_in_lit = pj->into_pos->next;
+    Term source_term = term_at_pos(from_lit->atom, from_pos_in_lit);
+    Term target_term = term_at_pos(into_lit->atom, into_pos_in_lit);
+    if (source_term == NULL || target_term == NULL) return NULL;
+
+    /* Determine the "other side" replacement of the FROM equation. */
+    if (ARITY(from_lit->atom) != 2) return NULL;
+    if (from_pos_in_lit == NULL) return NULL;
+    int side = from_pos_in_lit->i;
+    Term replacement_term = NULL;
+    if (side == 1)      replacement_term = ARG(from_lit->atom, 1);
+    else if (side == 2) replacement_term = ARG(from_lit->atom, 0);
+    if (replacement_term == NULL) return NULL;
+
+    Context c1 = get_context();
+    Context c2 = get_context();
+    Trail tr = NULL;
+    if (!unify(source_term, c1, target_term, c2, &tr)) {
+      free_context(c1);
+      free_context(c2);
+      return NULL;
+    }
+    Term result = build_expected_atom(into_lit->atom, into_pos_in_lit,
+                                      replacement_term, c1, c2);
+    undo_subst(tr);
+    free_context(c1);
+    free_context(c2);
+    return result;
+  }
+  /* Other primary types not handled in v1; rider degrades to no-op. */
+  return NULL;
+}  /* compute_post_primary_atom */
+
+/* Walk t; return TRUE iff every variable encountered has its varnum
+   in the local clause range (< MAX_VARS).  Multiplier-shifted varnums
+   from a primary inference's unifier context fail this check, and we
+   don't want their unrenderable names in the rider. */
+static
+BOOL all_vars_local(Term t)
+{
+  if (t == NULL) return TRUE;
+  if (VARIABLE(t))
+    return (VARNUM(t) >= 0 && VARNUM(t) < MAX_VARS);
+  int i;
+  for (i = 0; i < ARITY(t); i++)
+    if (!all_vars_local(ARG(t, i))) return FALSE;
+  return TRUE;
+}  /* all_vars_local */
+
+/* Append a substitution rider for one demod step: render
+   "{var <- term, ...}" showing the unifier between the demodulator's
+   pattern and the matched subterm.  Used inline within rewrite([...])
+   chains, after each entry's "id(pos)" text.  Skips emission if the
+   matched subterm contains foreign variables (from a primary inference's
+   unifier context) -- those would render as multiplier-shifted names
+   like v1000, which are confusing in the rider. */
+static
+void sb_append_demod_step_subst(String_buf sb,
+                                Topform demodulator,
+                                Term matched_subterm)
+{
+  if (demodulator == NULL || matched_subterm == NULL)
+    return;
+  if (demodulator->literals == NULL || demodulator->literals->atom == NULL)
+    return;
+  if (!all_vars_local(matched_subterm))
+    return;
+
+  /* Determine which side of the demodulator equation is the pattern
+     by trying both.  In a recorded chain, the direction is k (1 = LHS,
+     2 = RHS), but we already know which subterm matched, so just try
+     LHS first; if it fails, try RHS. */
+  Term atom = demodulator->literals->atom;
+  if (ARITY(atom) != 2) return;  /* not an equation */
+  Term lhs = ARG(atom, 0);
+  Term rhs = ARG(atom, 1);
+
+  Context c1 = get_context();
+  Context c2 = get_context();
+  Trail tr = NULL;
+  Term pattern = lhs;
+  if (!unify(pattern, c1, matched_subterm, c2, &tr)) {
+    pattern = rhs;
+    if (!unify(pattern, c1, matched_subterm, c2, &tr)) {
+      free_context(c1);
+      free_context(c2);
+      return;  /* shouldn't happen for a valid chain entry */
+    }
+  }
+
+  /* Render the rider using the shared helper.  Demodulator is the only
+     "input clause" carrying variables; the matched subterm came from
+     the parent clause and its variables print as result-clause vars
+     via the canonical map (which we don't have here, so they fall
+     back to clause-tagged form using parent's id... but we don't have
+     that handy either, so use the demodulator's id as a placeholder
+     for the matched-subterm side and accept that those variables may
+     show as "x[demod_id]" form -- they're typically not present
+     because demodulators are usually ground or simple). */
+  Topform cls[1]  = { demodulator };
+  Context ctxs[1] = { c1 };
+  int     ids[1]  = { demodulator->id };
+  emit_subst_rider(sb, cls, ctxs, ids, 1, NULL);
+
+  undo_subst(tr);
+  free_context(c1);
+  free_context(c2);
+}  /* sb_append_demod_step_subst */
+
+/* Replay a demod chain on the given starting atom, emitting each
+   entry's "id(pos[,R])" plus an optional "{...}" rider.  Returns the
+   atom after the chain has been applied (caller owns it).  If
+   reconstruction fails partway, falls back to no-rider rendering for
+   the rest of the chain. */
+static
+Term sb_emit_demod_chain(String_buf sb, I3list chain, Term initial_atom,
+                         I3list map)
+{
+  Term cur = initial_atom;  /* caller-allocated, we own and may replace */
+  I3list p;
+  for (p = chain; p; p = p->next) {
+    /* Emit the "id(pos[,R])" text first (existing format). */
+    sb_append_int(sb, p->i);
+    if (p->j > 0) {
+      sb_append(sb, "(");
+      sb_append_int(sb, p->j);
+      if (p->k == 2)
+        sb_append(sb, ",R");
+      sb_append(sb, ")");
+    }
+
+    /* Try to compute and emit the rider, if we still have a valid atom
+       and Para_subst_proof is set. */
+    if (cur != NULL && Para_subst_proof != NULL && p->j > 0) {
+      Topform demod = proof_id_to_clause(Para_subst_proof, p->i);
+      if (demod != NULL) {
+        int counter = 0;
+        Term matched = find_nth_blr_nonvar(cur, p->j, &counter);
+        if (matched != NULL) {
+          sb_append_demod_step_subst(sb, demod, matched);
+
+          /* Apply the rewrite so the next step's position is meaningful.
+             Replace matched subterm with the demodulator's other side
+             (with unifier applied). */
+          if (demod->literals && demod->literals->atom &&
+              ARITY(demod->literals->atom) == 2) {
+            Term datom = demod->literals->atom;
+            Term lhs = ARG(datom, 0);
+            Term rhs = ARG(datom, 1);
+            Context c1 = get_context();
+            Context c2 = get_context();
+            Trail tr = NULL;
+            Term pattern = lhs;
+            Term other = rhs;
+            if (!unify(pattern, c1, matched, c2, &tr)) {
+              pattern = rhs; other = lhs;
+              if (!unify(pattern, c1, matched, c2, &tr)) {
+                free_context(c1);
+                free_context(c2);
+                /* Couldn't replay; bail to no-rewrite for rest. */
+                if (cur != initial_atom) zap_term(cur);
+                cur = NULL;
+                goto next_step;
+              }
+            }
+            Term applied_other = apply(other, c1);
+            int ctr2 = 0;
+            cur = replace_nth_blr_nonvar(cur, p->j, &ctr2, applied_other);
+            undo_subst(tr);
+            free_context(c1);
+            free_context(c2);
+          }
+        }
+      }
+    }
+   next_step:
+    if (p->next) sb_append(sb, ",");
+  }
+  return cur;
+}  /* sb_emit_demod_chain */
+
 /*************
  *
  *   sb_write_just()
@@ -1840,21 +2112,23 @@ void sb_write_just(String_buf sb, Just just, I3list map)
       sb_append_res_subst(sb, g);
     }
     else if (rule == DEMOD_JUST) {
-      I3list p;
       sb_append(sb, jstring(g));
       sb_append(sb, "([");
-      for (p = g->u.demod; p; p = p->next) {
-	sb_append_int(sb, p->i);
-	if (p->j > 0) {
-	  sb_append(sb, "(");
-	  sb_append_int(sb, p->j);
-	  if (p->k == 2)
-	    sb_append(sb, ",R");
-	  sb_append(sb, ")");
-	}
-
-	sb_append(sb, p->next ? "," : "");
-      }
+      /* When print_substitutions is on, replay the chain to emit each
+         step's "id(pos[,R])" plus an optional "{...}" rider showing
+         the unifier.  Replay needs the post-primary atom, computed from
+         the primary justification's parent clause (NOT the result clause,
+         which may be empty -- e.g. $F).  For multi-literal parents or
+         unsupported primary types, compute_post_primary_atom returns
+         NULL and rider emission is skipped. */
+      Term initial_atom = NULL;
+      if (Para_subst_proof != NULL)
+        initial_atom = compute_post_primary_atom(just, 1);
+      Term final_atom = sb_emit_demod_chain(sb, g->u.demod, initial_atom, map);
+      if (final_atom != NULL && final_atom != initial_atom)
+        zap_term(final_atom);
+      else if (initial_atom != NULL && final_atom == initial_atom)
+        zap_term(initial_atom);
       sb_append(sb, "])");
     }
     else if (rule == UNIT_DEL_JUST) {
