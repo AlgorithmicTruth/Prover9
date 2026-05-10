@@ -276,10 +276,24 @@ Plist expand_proof(Plist proof, I3list *pmap)
     printf("\nexpanding: "); fprint_clause(stdout, c);
 #endif
 
+    /* Detect flip in a binary-res lst (negative sat_lit anywhere in the
+       triples).  When present, we want to expand so a separate flip
+       step is inserted before the resolve -- cleaner for the rider. */
+    BOOL res_has_flip = FALSE;
+    if (j->type == BINARY_RES_JUST) {
+      Ilist q = j->u.lst;
+      if (q) q = q->next;  /* skip nucleus id */
+      while (q && q->next && q->next->next) {
+	if (q->next->next->i < 0) { res_has_flip = TRUE; break; }
+	q = q->next->next->next;
+      }
+    }
+
     if (j->next == NULL &&
 	j->type != HYPER_RES_JUST &&
 	j->type != UR_RES_JUST &&
-	!(j->type == BINARY_RES_JUST && ilist_count(j->u.lst) > 4)) {
+	!(j->type == BINARY_RES_JUST && ilist_count(j->u.lst) > 4) &&
+	!res_has_flip) {
 
       /* No expansion is necessary for this step.
 	 We take a shortcut by just copying the clause.
@@ -330,6 +344,28 @@ Plist expand_proof(Plist proof, I3list *pmap)
 	  else {
 	    Topform c2 = proof_id_to_clause(proof, sat_id);
 	    int n2 = p->next->next->i;
+	    /* Flip-unrolling: when sat_lit is negative, the resolve was
+	       done against a flipped form of the satellite literal.
+	       Insert an explicit flip step into the expanded proof so the
+	       resolve uses a normal positive sat_lit -- makes the resolve
+	       reading cleaner and lets the substitution rider show the
+	       unifier without the flip annotation getting in the way. */
+	    if (n2 < 0) {
+	      int actual_lit = -n2;
+	      Literals lit_to_flip = ith_literal(c2->literals, actual_lit);
+	      if (lit_to_flip != NULL && lit_to_flip->atom != NULL &&
+		  eq_term(lit_to_flip->atom)) {
+		Topform flip_step = copy_inference(c2);
+		Term atom = ith_literal(flip_step->literals,
+					actual_lit)->atom;
+		flip_eq(atom, actual_lit);
+		map = alist2_insert(map, next_id, old_id, old_id_n++);
+		flip_step->id = next_id++;
+		new_proof = plist_prepend(new_proof, flip_step);
+		c2 = flip_step;
+		n2 = actual_lit;
+	      }
+	    }
 	    resolvent = resolve2(c1, n1, c2, n2, TRUE);
 	    if (resolvent == NULL) {
 	      printf("Lit %d: ",n1); fprint_clause(stdout, c1);
