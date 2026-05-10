@@ -1518,7 +1518,12 @@ struct subst_entry {
 
 /* Build the rider for a list of input clauses sharing one unifier.
    - cls/ctxs/ids: parallel arrays of length n_ctx giving each input's
-     clause, context, and clause id (for tagging).
+     clause, context, and clause id (for tagging and LHS iteration).
+   - aux_mults/aux_ids: optional additional (multiplier, clause_id)
+     pairs used ONLY for RHS variable tagging (not iterated for LHS).
+     Used by demod riders to identify variables that came from the
+     primary inference's unifier context (e.g., paramod's FROM/INTO).
+     Pass NULL/0 if no auxiliary tagging needed.
    - int_to_canon: optional internal-varnum -> canonical-varnum map for
      surviving variables in the result clause; pass NULL to fall back to
      clause-tagged rendering for all RHS variables.
@@ -1528,28 +1533,47 @@ struct subst_entry {
 static
 void emit_subst_rider(String_buf sb,
                       Topform *cls, Context *ctxs, int *ids, int n_ctx,
+                      int *aux_mults, int *aux_ids, int n_aux,
                       int *int_to_canon)
 {
   if (n_ctx <= 0 || n_ctx > MAX_RIDER_INPUTS)
     return;
 
+  /* Combined arrays (input contexts + auxiliary tag-only entries) for
+     RHS variable resolution.  LHS iteration only walks the n_ctx
+     input clauses; the n_aux auxiliaries are appended to the resolution
+     tables so foreign variables in RHS terms can still be tagged. */
   int mults[MAX_RIDER_INPUTS];
+  int all_ids[MAX_RIDER_INPUTS];
   int electron_idx[MAX_RIDER_INPUTS];
+  int n_total;
   int i;
-  for (i = 0; i < n_ctx; i++)
-    mults[i] = ctxs[i]->multiplier;
+  for (i = 0; i < n_ctx && i < MAX_RIDER_INPUTS; i++) {
+    mults[i]   = ctxs[i]->multiplier;
+    all_ids[i] = ids[i];
+  }
+  n_total = (n_ctx < MAX_RIDER_INPUTS ? n_ctx : MAX_RIDER_INPUTS);
+  if (aux_mults != NULL && aux_ids != NULL) {
+    int j;
+    for (j = 0; j < n_aux && n_total < MAX_RIDER_INPUTS; j++) {
+      mults[n_total]   = aux_mults[j];
+      all_ids[n_total] = aux_ids[j];
+      n_total++;
+    }
+  }
 
   /* Compute electron index per input position.  When a clause id appears
      more than once in the inputs (e.g., hyperres reusing the same clause
      as multiple electrons), each occurrence gets a 1-based index for
      disambiguation in the rider.  Inputs with unique clause ids get 0
-     (no suffix added). */
-  for (i = 0; i < n_ctx; i++) {
+     (no suffix added).  We compute over n_total so aux entries also
+     get unique tags if they share an id with primary inputs. */
+  for (i = 0; i < n_total; i++) {
     int dupes = 0;
     int idx = 1;
     int j;
-    for (j = 0; j < n_ctx; j++) {
-      if (ids[j] == ids[i]) {
+    for (j = 0; j < n_total; j++) {
+      if (all_ids[j] == all_ids[i]) {
         dupes++;
         if (j < i) idx++;
       }
@@ -1580,8 +1604,8 @@ void emit_subst_rider(String_buf sb,
       zap_term(as_var);
 
       Term rhs_term = copy_term_with_canonical(resolved,
-                                               mults, ids, electron_idx,
-                                               n_ctx, int_to_canon);
+                                               mults, all_ids, electron_idx,
+                                               n_total, int_to_canon);
 
       String_buf rhs_sb = get_string_buf();
       BOOL wrap = (ARITY(rhs_term) >= 2);
@@ -1728,7 +1752,7 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
   Topform cls[2]  = { from_cl, into_cl };
   Context ctxs[2] = { c1, c2 };
   int     ids[2]  = { pj->from_id, pj->into_id };
-  emit_subst_rider(sb, cls, ctxs, ids, 2, int_to_canon);
+  emit_subst_rider(sb, cls, ctxs, ids, 2, NULL, NULL, 0, int_to_canon);
 
   undo_subst(tr);
   free_context(c1);
@@ -1873,7 +1897,8 @@ void sb_append_res_subst(String_buf sb, Just g)
       for (k = 0; k < n_expected; k++) zap_term(expected_atoms[k]);
     }
 
-    emit_subst_rider(sb, cls, ctxs, ids, 1 + n_sats, int_to_canon);
+    emit_subst_rider(sb, cls, ctxs, ids, 1 + n_sats,
+                     NULL, NULL, 0, int_to_canon);
   }
 
   if (tr) undo_subst(tr);
@@ -1978,17 +2003,54 @@ void replace_nth_in_atoms(Term *atoms, int n_atoms, int target,
 }  /* replace_nth_in_atoms */
 
 #define MAX_DEMOD_ATOMS 16
+#define MAX_PRIMARY_AUX 4
 
 /* Compute the post-primary atoms (one per literal of the parent clause)
    for use by demod chain replay.  Returns the number of atoms written
-   into out_atoms[], or 0 if the primary type isn't supported.  Caller
-   owns the atoms and must zap_term each.  Mirrors Prover9's flatdemod
-   which walks ALL literals' atoms in order with one shared sequence
-   counter, so for multi-literal parents we need the whole list. */
+   into out_atoms[], or 0 if the primary type isn't supported.  Mirrors
+   Prover9's flatdemod which walks ALL literals' atoms in order with
+   one shared sequence counter, so for multi-literal parents we need
+   the whole list.
+
+   Also fills out_aux_mults/out_aux_ids with the primary inference's
+   unifier context info (FROM and INTO multipliers + clause ids for
+   PARA primaries; empty for COPY-family).  Used by demod riders to
+   tag foreign variables that appear in the post-primary atom.
+
+   IMPORTANT: for PARA primaries this allocates contexts (c1, c2) and
+   a unification trail that MUST stay alive while the multipliers in
+   out_aux_mults are referenced -- otherwise freed multipliers can be
+   reused by subsequent get_context() calls and the aux mapping
+   becomes wrong.  Caller must call cleanup_primary_atoms when done.
+   Atoms also need zap_term per element. */
+struct primary_state {
+  Context aux_ctxs[MAX_PRIMARY_AUX];
+  int     n_aux_ctxs;
+  Trail   trail;
+};
+
+static
+void cleanup_primary_state(struct primary_state *ps, Term *atoms, int n_atoms)
+{
+  int i;
+  for (i = 0; i < n_atoms; i++)
+    if (atoms[i] != NULL) zap_term(atoms[i]);
+  if (ps->trail) undo_subst(ps->trail);
+  for (i = 0; i < ps->n_aux_ctxs; i++)
+    free_context(ps->aux_ctxs[i]);
+}
+
 static
 int compute_post_primary_atoms(Just primary, Term *out_atoms,
-                               int max_atoms)
+                               int max_atoms,
+                               int *out_aux_mults, int *out_aux_ids,
+                               int *out_n_aux,
+                               struct primary_state *ps)
 {
+  *out_n_aux = 0;
+  ps->n_aux_ctxs = 0;
+  ps->trail = NULL;
+
   if (primary == NULL || Para_subst_proof == NULL)
     return 0;
   Just_type rule = primary->type;
@@ -2070,100 +2132,168 @@ int compute_post_primary_atoms(Just primary, Term *out_atoms,
       }
     }
 
-    undo_subst(tr);
-    free_context(c1);
-    free_context(c2);
+    /* Record the primary's contexts for downstream demod riders so
+       they can tag foreign variables (e.g., x[from_id] for a c1-shifted
+       variable that ended up in the matched subterm).  The contexts
+       must stay alive while their multipliers are referenced -- caller
+       (cleanup_primary_state) frees them and the trail. */
+    if (out_aux_mults && out_aux_ids && *out_n_aux + 2 <= MAX_PRIMARY_AUX) {
+      out_aux_mults[*out_n_aux] = c1->multiplier;
+      out_aux_ids[*out_n_aux]   = pj->from_id;
+      (*out_n_aux)++;
+      out_aux_mults[*out_n_aux] = c2->multiplier;
+      out_aux_ids[*out_n_aux]   = pj->into_id;
+      (*out_n_aux)++;
+    }
+    ps->aux_ctxs[ps->n_aux_ctxs++] = c1;
+    ps->aux_ctxs[ps->n_aux_ctxs++] = c2;
+    ps->trail = tr;
     return n;
   }
   /* Other primary types not handled in v1; rider degrades to no-op. */
   return 0;
 }  /* compute_post_primary_atoms */
 
-/* Walk t; return TRUE iff every variable encountered has its varnum
-   in the local clause range (< MAX_VARS).  Multiplier-shifted varnums
-   from a primary inference's unifier context fail this check, and we
-   don't want their unrenderable names in the rider. */
+/* Simple one-way structural match: pattern (with variables to bind)
+   against target (treated as ground relative to pattern's vars).
+   Pattern variables are demodulator-local (varnums 0..MAX_VARS-1).
+   Target's variables (typically multiplier-shifted from a primary
+   inference) are kept as-is in the captured bindings -- this is what
+   we want for tagging via aux_mults later.  Returns TRUE on match. */
 static
-BOOL all_vars_local(Term t)
+BOOL match_demod_pattern(Term pattern, Term target,
+                         Term *bindings, int n_bindings)
 {
-  if (t == NULL) return TRUE;
-  if (VARIABLE(t))
-    return (VARNUM(t) >= 0 && VARNUM(t) < MAX_VARS);
+  if (VARIABLE(pattern)) {
+    int v = VARNUM(pattern);
+    if (v < 0 || v >= n_bindings) return FALSE;
+    if (bindings[v] != NULL)
+      return term_ident(bindings[v], target);
+    bindings[v] = target;
+    return TRUE;
+  }
+  if (VARIABLE(target)) return FALSE;
+  if (SYMNUM(pattern) != SYMNUM(target)) return FALSE;
+  if (ARITY(pattern) != ARITY(target)) return FALSE;
   int i;
-  for (i = 0; i < ARITY(t); i++)
-    if (!all_vars_local(ARG(t, i))) return FALSE;
+  for (i = 0; i < ARITY(pattern); i++)
+    if (!match_demod_pattern(ARG(pattern, i), ARG(target, i),
+                             bindings, n_bindings)) return FALSE;
   return TRUE;
-}  /* all_vars_local */
+}  /* match_demod_pattern */
 
 /* Append a substitution rider for one demod step: render
    "{var <- term, ...}" showing the unifier between the demodulator's
    pattern and the matched subterm.  Used inline within rewrite([...])
-   chains, after each entry's "id(pos)" text.  Skips emission if the
-   matched subterm contains foreign variables (from a primary inference's
-   unifier context) -- those would render as multiplier-shifted names
-   like v1000, which are confusing in the rider. */
+   chains, after each entry's "id(pos)" text.  When aux_mults/aux_ids
+   are provided (from the primary inference's unifier contexts), foreign
+   variables in the matched subterm get clause-tagged correctly. */
 static
 void sb_append_demod_step_subst(String_buf sb,
                                 Topform demodulator,
-                                Term matched_subterm)
+                                Term matched_subterm,
+                                int *aux_mults, int *aux_ids, int n_aux)
 {
   if (demodulator == NULL || matched_subterm == NULL)
     return;
   if (demodulator->literals == NULL || demodulator->literals->atom == NULL)
     return;
-  if (!all_vars_local(matched_subterm))
-    return;
-
-  /* Determine which side of the demodulator equation is the pattern
-     by trying both.  In a recorded chain, the direction is k (1 = LHS,
-     2 = RHS), but we already know which subterm matched, so just try
-     LHS first; if it fails, try RHS. */
   Term atom = demodulator->literals->atom;
   if (ARITY(atom) != 2) return;  /* not an equation */
   Term lhs = ARG(atom, 0);
   Term rhs = ARG(atom, 1);
 
-  Context c1 = get_context();
-  Context c2 = get_context();
-  Trail tr = NULL;
-  Term pattern = lhs;
-  if (!unify(pattern, c1, matched_subterm, c2, &tr)) {
-    pattern = rhs;
-    if (!unify(pattern, c1, matched_subterm, c2, &tr)) {
-      free_context(c1);
-      free_context(c2);
+  /* Try matching LHS first, then RHS (chain doesn't tell us direction
+     reliably).  Use simple structural match so the matched subterm's
+     variables (with primary's multiplier shifts) stay intact and can
+     be tagged via aux_mults. */
+  Term bindings[MAX_VARS];
+  int i;
+  for (i = 0; i < MAX_VARS; i++) bindings[i] = NULL;
+
+  if (!match_demod_pattern(lhs, matched_subterm, bindings, MAX_VARS)) {
+    for (i = 0; i < MAX_VARS; i++) bindings[i] = NULL;
+    if (!match_demod_pattern(rhs, matched_subterm, bindings, MAX_VARS))
       return;  /* shouldn't happen for a valid chain entry */
-    }
   }
 
-  /* Render the rider using the shared helper.  Demodulator is the only
-     "input clause" carrying variables; the matched subterm came from
-     the parent clause and its variables print as result-clause vars
-     via the canonical map (which we don't have here, so they fall
-     back to clause-tagged form using parent's id... but we don't have
-     that handy either, so use the demodulator's id as a placeholder
-     for the matched-subterm side and accept that those variables may
-     show as "x[demod_id]" form -- they're typically not present
-     because demodulators are usually ground or simple). */
-  Topform cls[1]  = { demodulator };
-  Context ctxs[1] = { c1 };
-  int     ids[1]  = { demodulator->id };
-  emit_subst_rider(sb, cls, ctxs, ids, 1, NULL);
+  /* Build LHS strings and RHS strings directly here, since we're not
+     using the apply()-based pipeline (which would re-shift variables
+     via context multipliers).  Iterate the demodulator's distinct
+     variables, render each binding via the canonical rendering helper
+     using only aux_mults/aux_ids (no demod context to combine). */
+  int demod_vars[MAX_VARS];
+  int n_demod_vars = collect_clause_vars(demodulator, demod_vars, MAX_VARS);
+  if (n_demod_vars == 0) return;  /* ground demod, empty rider */
 
-  undo_subst(tr);
-  free_context(c1);
-  free_context(c2);
+  /* Compute electron index for aux entries. */
+  int electron_idx[MAX_PRIMARY_AUX];
+  for (i = 0; i < n_aux; i++) {
+    int dupes = 0, idx = 1;
+    int j;
+    for (j = 0; j < n_aux; j++) {
+      if (aux_ids[j] == aux_ids[i]) {
+        dupes++;
+        if (j < i) idx++;
+      }
+    }
+    electron_idx[i] = (dupes > 1 ? idx : 0);
+  }
+
+  BOOL any = FALSE;
+  for (i = 0; i < n_demod_vars; i++) {
+    int local = demod_vars[i];
+    if (local < 0 || local >= MAX_VARS) continue;
+    if (bindings[local] == NULL) continue;  /* not bound */
+
+    /* Render the bound term using aux_mults/aux_ids for tagging. */
+    Term rhs_term = copy_term_with_canonical(bindings[local],
+                                             aux_mults, aux_ids,
+                                             electron_idx, n_aux, NULL);
+    String_buf rhs_sb = get_string_buf();
+    BOOL wrap = (ARITY(rhs_term) >= 2);
+    if (wrap) sb_append(rhs_sb, "(");
+    sb_write_term(rhs_sb, rhs_term);
+    if (wrap) sb_append(rhs_sb, ")");
+    char *rhs_str = sb_to_malloc_string(rhs_sb);
+    zap_string_buf(rhs_sb);
+
+    char lhs_buf[32];
+    clause_var_name(local, demodulator->id, 0, lhs_buf, sizeof(lhs_buf));
+
+    /* Skip identity entries (only happens if ground RHS happens to
+       render to the LHS string -- rare but possible). */
+    if (rhs_str && strcmp(lhs_buf, rhs_str) == 0) {
+      free(rhs_str); zap_term(rhs_term); continue;
+    }
+
+    if (!any) { sb_append(sb, " {"); any = TRUE; }
+    else      { sb_append(sb, ", "); }
+    char *lhs_b = bracketize_clause_tags(lhs_buf);
+    char *rhs_b = bracketize_clause_tags(rhs_str);
+    sb_append(sb, lhs_b);
+    sb_append(sb, " <- ");
+    sb_append(sb, rhs_b);
+    free(lhs_b);
+    free(rhs_b);
+    free(rhs_str);
+    zap_term(rhs_term);
+  }
+  if (any) sb_append(sb, "}");
 }  /* sb_append_demod_step_subst */
 
 /* Replay a demod chain across the given list of starting atoms (one
    per literal of the parent clause), emitting each entry's
    "id(pos[,R])" plus an optional "{...}" rider.  The atoms are
-   modified in-place as the replay applies each rewrite.  If
+   modified in-place as the replay applies each rewrite.  aux_mults/
+   aux_ids carry primary-inference context info so foreign variables
+   in the matched subterm get tagged correctly in riders.  If
    reconstruction fails partway, falls back to no-rider rendering for
    the rest of the chain. */
 static
 void sb_emit_demod_chain(String_buf sb, I3list chain,
                          Term *atoms, int n_atoms,
+                         int *aux_mults, int *aux_ids, int n_aux,
                          I3list map)
 {
   BOOL bailed = FALSE;
@@ -2188,7 +2318,8 @@ void sb_emit_demod_chain(String_buf sb, I3list chain,
         Term matched = find_nth_in_atoms(atoms, n_atoms, p->j, &counter,
                                          &lit_idx);
         if (matched != NULL) {
-          sb_append_demod_step_subst(sb, demod, matched);
+          sb_append_demod_step_subst(sb, demod, matched,
+                                     aux_mults, aux_ids, n_aux);
 
           /* Apply the rewrite so the next step's position is meaningful. */
           if (demod->literals && demod->literals->atom &&
@@ -2262,14 +2393,19 @@ void sb_write_just(String_buf sb, Just just, I3list map)
          For unsupported primary types, compute_post_primary_atoms
          returns 0 and rider emission is skipped. */
       Term atoms[MAX_DEMOD_ATOMS];
+      int  aux_mults[MAX_PRIMARY_AUX];
+      int  aux_ids[MAX_PRIMARY_AUX];
+      int  n_aux = 0;
       int n_atoms = 0;
+      struct primary_state ps = { {0}, 0, NULL };
       if (Para_subst_proof != NULL)
-        n_atoms = compute_post_primary_atoms(just, atoms, MAX_DEMOD_ATOMS);
+        n_atoms = compute_post_primary_atoms(just, atoms, MAX_DEMOD_ATOMS,
+                                             aux_mults, aux_ids, &n_aux,
+                                             &ps);
       sb_emit_demod_chain(sb, g->u.demod,
-                          (n_atoms > 0 ? atoms : NULL), n_atoms, map);
-      int ai;
-      for (ai = 0; ai < n_atoms; ai++)
-        if (atoms[ai] != NULL) zap_term(atoms[ai]);
+                          (n_atoms > 0 ? atoms : NULL), n_atoms,
+                          aux_mults, aux_ids, n_aux, map);
+      cleanup_primary_state(&ps, atoms, n_atoms);
       sb_append(sb, "])");
     }
     else if (rule == UNIT_DEL_JUST) {
