@@ -1193,35 +1193,47 @@ void set_para_subst_clause(Topform c)
 /* Build a name like "x_7", "y_6", "v5_12" combining the standard letter
    for `local_varnum` (Prover9's x,y,z,u,w,v5,...) with the originating
    clause's id, joined by underscore so the name is an ordinary identifier
-   (no quoting needed at print time). */
+   (no quoting needed at print time).  When electron > 0, append "_e<N>"
+   to disambiguate multiple uses of the same clause as electrons in a
+   hyperresolution step (e.g., x_3_e1 vs x_3_e2). */
 static
-void clause_var_name(int local_varnum, int clause_id, char *buf, int bufsize)
+void clause_var_name(int local_varnum, int clause_id, int electron,
+                     char *buf, int bufsize)
 {
   static const char letters[] = "xyzuw";
+  char base[24];
   if (local_varnum >= 0 && local_varnum < 5)
-    snprintf(buf, bufsize, "%c_%d", letters[local_varnum], clause_id);
+    snprintf(base, sizeof(base), "%c_%d", letters[local_varnum], clause_id);
   else
-    snprintf(buf, bufsize, "v%d_%d", local_varnum, clause_id);
+    snprintf(base, sizeof(base), "v%d_%d", local_varnum, clause_id);
+  if (electron > 0)
+    snprintf(buf, bufsize, "%s_e%d", base, electron);
+  else
+    snprintf(buf, bufsize, "%s", base);
 }  /* clause_var_name */
 
 /* Map a possibly-multiplier-shifted varnum back to (local_varnum,
-   source_clause_id) given parallel arrays of context multipliers and
-   their corresponding clause IDs.  Used by both paramod (2 contexts:
-   FROM and INTO) and resolution-family riders (1 nucleus + N satellites).
-   Returns -1 in *id_out if the multiplier doesn't match any provided
-   context. */
+   source_clause_id, position_in_inputs) given parallel arrays of context
+   multipliers and their corresponding clause IDs.  Used by both paramod
+   (2 contexts: FROM and INTO) and resolution-family riders (1 nucleus
+   + N satellites).  Returns -1 in *id_out and *position_out if the
+   multiplier doesn't match any provided context.  Position lets the
+   caller look up an electron-index for hyperres with duplicate input
+   clauses. */
 static
 void resolve_var_source(int rendered_varnum,
                         int *mults, int *ids, int n_ctx,
-                        int *local_out, int *id_out)
+                        int *local_out, int *id_out, int *position_out)
 {
   int multiplier = rendered_varnum / MAX_VARS;
   int i;
   *local_out = rendered_varnum % MAX_VARS;
   *id_out = -1;
+  *position_out = -1;
   for (i = 0; i < n_ctx; i++) {
     if (multiplier == mults[i]) {
       *id_out = ids[i];
+      *position_out = i;
       return;
     }
   }
@@ -1241,31 +1253,37 @@ void resolve_var_source(int rendered_varnum,
    * a clause-tagged constant (e.g. "x_7"), if the variable can be
      resolved to a source clause via the (mults, ids) arrays;
    * a verbatim variable, as a fallback for unresolvable cases.
-   `mults` and `ids` are parallel arrays of length `n_ctx`. */
+   `mults`, `ids`, and `electron_idx` are parallel arrays of length
+   `n_ctx`.  `electron_idx[i]` > 0 indicates the i-th input is one of
+   multiple uses of the same clause (e.g. clause 3 used as two
+   electrons), and the rendering should suffix the constant name
+   with "_eN". */
 static
 Term copy_term_with_canonical(Term t,
-                              int *mults, int *ids, int n_ctx,
+                              int *mults, int *ids, int *electron_idx,
+                              int n_ctx,
                               int *int_to_canon)
 {
   if (VARIABLE(t)) {
     int orig = VARNUM(t);
-    int local, id;
+    int local, id, pos;
     char buf[32];
     if (int_to_canon != NULL &&
         orig >= 0 && orig < INT_VARNUM_MAX && int_to_canon[orig] >= 0)
       return get_variable_term(int_to_canon[orig]);
-    resolve_var_source(orig, mults, ids, n_ctx, &local, &id);
+    resolve_var_source(orig, mults, ids, n_ctx, &local, &id, &pos);
     if (id < 0)
       return get_variable_term(orig);
-    clause_var_name(local, id, buf, sizeof(buf));
+    int electron = (pos >= 0 && electron_idx != NULL ? electron_idx[pos] : 0);
+    clause_var_name(local, id, electron, buf, sizeof(buf));
     return get_rigid_term(buf, 0);
   } else {
     Term out = get_rigid_term_dangerously(SYMNUM(t), ARITY(t));
     int i;
     for (i = 0; i < ARITY(t); i++)
       ARG(out, i) = copy_term_with_canonical(ARG(t, i),
-                                             mults, ids, n_ctx,
-                                             int_to_canon);
+                                             mults, ids, electron_idx,
+                                             n_ctx, int_to_canon);
     return out;
   }
 }  /* copy_term_with_canonical */
@@ -1413,23 +1431,40 @@ char *bracketize_clause_tags(const char *s)
   while (i < len) {
     BOOL at_boundary = (i == 0 || !is_id_char(s[i-1]));
     if (at_boundary) {
-      /* Try [xyzuw]_<digits> */
+      /* Try [xyzuw]_<digits>(_e<digits>)? */
       char c = s[i];
       if ((c == 'x' || c == 'y' || c == 'z' || c == 'u' || c == 'w') &&
           i + 2 < len && s[i+1] == '_' && s[i+2] >= '0' && s[i+2] <= '9') {
         size_t end = i + 2;
         while (end < len && s[end] >= '0' && s[end] <= '9') end++;
-        if (end == len || !is_id_char(s[end])) {
+        /* Optional electron suffix "_e<digits>" */
+        size_t e_start = 0, e_end = 0;
+        if (end + 2 < len && s[end] == '_' && s[end+1] == 'e' &&
+            s[end+2] >= '0' && s[end+2] <= '9') {
+          e_start = end + 2;
+          e_end = e_start;
+          while (e_end < len && s[e_end] >= '0' && s[e_end] <= '9') e_end++;
+          if (e_end < len && is_id_char(s[e_end])) {
+            /* electron suffix is followed by more identifier chars; bail */
+            e_start = e_end = 0;
+          }
+        }
+        size_t total_end = (e_end > 0 ? e_end : end);
+        if (total_end == len || !is_id_char(s[total_end])) {
           out[oi++] = c;
           out[oi++] = '[';
           size_t k;
           for (k = i + 2; k < end; k++) out[oi++] = s[k];
           out[oi++] = ']';
-          i = end;
+          if (e_start > 0) {
+            out[oi++] = '#';
+            for (k = e_start; k < e_end; k++) out[oi++] = s[k];
+          }
+          i = total_end;
           continue;
         }
       }
-      /* Try v<digits>_<digits> */
+      /* Try v<digits>_<digits>(_e<digits>)? */
       if (c == 'v' && i + 1 < len && s[i+1] >= '0' && s[i+1] <= '9') {
         size_t k = i + 1;
         while (k < len && s[k] >= '0' && s[k] <= '9') k++;
@@ -1437,13 +1472,28 @@ char *bracketize_clause_tags(const char *s)
             s[k+1] >= '0' && s[k+1] <= '9') {
           size_t end = k + 1;
           while (end < len && s[end] >= '0' && s[end] <= '9') end++;
-          if (end == len || !is_id_char(s[end])) {
+          size_t e_start = 0, e_end = 0;
+          if (end + 2 < len && s[end] == '_' && s[end+1] == 'e' &&
+              s[end+2] >= '0' && s[end+2] <= '9') {
+            e_start = end + 2;
+            e_end = e_start;
+            while (e_end < len && s[e_end] >= '0' && s[e_end] <= '9') e_end++;
+            if (e_end < len && is_id_char(s[e_end])) {
+              e_start = e_end = 0;
+            }
+          }
+          size_t total_end = (e_end > 0 ? e_end : end);
+          if (total_end == len || !is_id_char(s[total_end])) {
             size_t m;
             for (m = i; m < k; m++) out[oi++] = s[m];
             out[oi++] = '[';
             for (m = k + 1; m < end; m++) out[oi++] = s[m];
             out[oi++] = ']';
-            i = end;
+            if (e_start > 0) {
+              out[oi++] = '#';
+              for (m = e_start; m < e_end; m++) out[oi++] = s[m];
+            }
+            i = total_end;
             continue;
           }
         }
@@ -1484,9 +1534,28 @@ void emit_subst_rider(String_buf sb,
     return;
 
   int mults[MAX_RIDER_INPUTS];
+  int electron_idx[MAX_RIDER_INPUTS];
   int i;
   for (i = 0; i < n_ctx; i++)
     mults[i] = ctxs[i]->multiplier;
+
+  /* Compute electron index per input position.  When a clause id appears
+     more than once in the inputs (e.g., hyperres reusing the same clause
+     as multiple electrons), each occurrence gets a 1-based index for
+     disambiguation in the rider.  Inputs with unique clause ids get 0
+     (no suffix added). */
+  for (i = 0; i < n_ctx; i++) {
+    int dupes = 0;
+    int idx = 1;
+    int j;
+    for (j = 0; j < n_ctx; j++) {
+      if (ids[j] == ids[i]) {
+        dupes++;
+        if (j < i) idx++;
+      }
+    }
+    electron_idx[i] = (dupes > 1 ? idx : 0);
+  }
 
   struct subst_entry entries[MAX_RIDER_ENTRIES];
   int n_entries = 0;
@@ -1511,8 +1580,8 @@ void emit_subst_rider(String_buf sb,
       zap_term(as_var);
 
       Term rhs_term = copy_term_with_canonical(resolved,
-                                               mults, ids, n_ctx,
-                                               int_to_canon);
+                                               mults, ids, electron_idx,
+                                               n_ctx, int_to_canon);
 
       String_buf rhs_sb = get_string_buf();
       BOOL wrap = (ARITY(rhs_term) >= 2);
@@ -1523,7 +1592,7 @@ void emit_subst_rider(String_buf sb,
       zap_string_buf(rhs_sb);
 
       char lhs_buf[32];
-      clause_var_name(local, src_id, lhs_buf, sizeof(lhs_buf));
+      clause_var_name(local, src_id, electron_idx[i], lhs_buf, sizeof(lhs_buf));
 
       /* Identity-string suppression: when LHS and RHS render identically,
          the entry conveys nothing (typically the rename-map walker
