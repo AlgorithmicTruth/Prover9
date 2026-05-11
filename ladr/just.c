@@ -2536,10 +2536,18 @@ No whitespace is printed before or after.
 */
 
 /* PUBLIC */
-void sb_write_just(String_buf sb, Just just, I3list map)
+void sb_write_just(String_buf sb_out, Just just, I3list map)
 {
+  /* Build the bracketed-rule content in `sb` (renamed locally so the
+     existing per-rule rendering code below is unchanged), and collect
+     the substitution rider and "[N] into [M]" direction text in
+     `prefix_sb`.  At the end we emit the prefix first, then the
+     bracketed block: {rider} : [direction] [rule1,rule2,...].  Per
+     Larry's pedagogical request, human-readable info comes first;
+     the bracketed `[...]` is the Prover9 trace and lands last. */
+  String_buf sb        = get_string_buf();
+  String_buf prefix_sb = get_string_buf();
   Just g = just;
-  sb_append(sb, "[");
   while (g != NULL) {
     Just_type rule = g->type;
     if (rule == INPUT_JUST || rule == GOAL_JUST)
@@ -2548,7 +2556,7 @@ void sb_write_just(String_buf sb, Just just, I3list map)
 	     rule==HYPER_RES_JUST ||
 	     rule==UR_RES_JUST) {
       sb_write_res_just(sb, g, map);
-      sb_append_res_subst(sb, g);
+      sb_append_res_subst(prefix_sb, g);
     }
     else if (rule == DEMOD_JUST) {
       sb_append(sb, jstring(g));
@@ -2603,7 +2611,7 @@ void sb_write_just(String_buf sb, Just just, I3list map)
       sb_append(sb, ",");
       sb_append_char(sb, itoc(p->next->next->i));
       sb_append(sb, ")");
-      sb_append_factor_subst(sb, g);
+      sb_append_factor_subst(prefix_sb, g);
     }
     else if (rule == XXRES_JUST) {
       Ilist p = g->u.lst;
@@ -2645,10 +2653,10 @@ void sb_write_just(String_buf sb, Just just, I3list map)
       sb_append_char(sb, itoc(id));
       sb_append(sb, ")");
       /* When the chain is [copy(N), flip(a)], Prover9 renumbers
-         the result's variables canonically; Larry asked for a
-         {x[N] <- y, ...} rider showing the rename. */
+         the result's variables canonically; emit a {x[N] <- y, ...}
+         rider showing the rename. */
       if (rule == FLIP_JUST && just != NULL && just->type == COPY_JUST)
-        sb_append_copy_flip_subst(sb, just->u.id, id);
+        sb_append_copy_flip_subst(prefix_sb, just->u.id, id);
     }
     else if (rule == EVAL_JUST) {
       int id = g->u.id;
@@ -2672,18 +2680,25 @@ void sb_write_just(String_buf sb, Just just, I3list map)
 
       sb_append(sb, ")");
 
-      /* When print_substitutions is on, append the unifier so newcomers
-         can see which variables got substituted across the clause. */
-      sb_append_para_subst(sb, p);
-      /* And append "[from] into [into]" direction so the reader can
-         tell which clause provided the rewrite source vs which clause
-         got rewritten.  Same gating as the rider. */
+      /* Unifier and direction text emitted into prefix_sb so they
+         appear before the bracketed Prover9 trace.  When from_id ==
+         into_id (a clause paramodulating into itself), the rider
+         already disambiguates via x[N]#2 notation; reflect that in
+         the direction by writing "[N] into [N]#2". */
+      int rider_size_before = sb_size(prefix_sb);
+      sb_append_para_subst(prefix_sb, p);
+      BOOL had_rider = (sb_size(prefix_sb) > rider_size_before);
       if (Para_subst_proof != NULL) {
-        sb_append(sb, " : [");
-        sb_append_id(sb, p->from_id, map);
-        sb_append(sb, "] into [");
-        sb_append_id(sb, p->into_id, map);
-        sb_append(sb, "]");
+        /* Separator: " : " only if a rider was emitted; else leading
+           space alone so the direction reads cleanly. */
+        sb_append(prefix_sb, had_rider ? " : [" : " [");
+        sb_append_id(prefix_sb, p->from_id, map);
+        sb_append(prefix_sb, "] into [");
+        sb_append_id(prefix_sb, p->into_id, map);
+        if (p->from_id == p->into_id)
+          sb_append(prefix_sb, "]#2");
+        else
+          sb_append(prefix_sb, "]");
       }
     }
     else if (rule == INSTANCE_JUST) {
@@ -2712,7 +2727,25 @@ void sb_write_just(String_buf sb, Just just, I3list map)
     if (g)
       sb_append(sb, ",");
   }
-  sb_append(sb, "].");
+
+  /* Assemble: prefix (rider + direction) precedes the bracketed
+     rule chain.  prefix_sb begins with a leading " " when non-empty;
+     we strip that to keep clause-body-to-prefix spacing consistent
+     with clause-body-to-bracket spacing in plain (no-prefix) lines. */
+  if (sb_size(prefix_sb) > 0) {
+    char *pre = sb_to_malloc_string(prefix_sb);
+    char *pre_trimmed = (pre && pre[0] == ' ') ? pre + 1 : pre;
+    if (pre_trimmed != NULL)
+      sb_append(sb_out, pre_trimmed);
+    if (pre != NULL) free(pre);
+    zap_string_buf(prefix_sb);
+    sb_append(sb_out, " ");
+  } else {
+    zap_string_buf(prefix_sb);
+  }
+  sb_append(sb_out, "[");
+  sb_cat(sb_out, sb);
+  sb_append(sb_out, "].");
 }  /* sb_write_just */
 
 /*************
