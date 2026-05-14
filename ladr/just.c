@@ -2075,6 +2075,100 @@ void sb_append_res_subst(String_buf sb, Just g)
   for (i = 0; i < n_sats; i++) free_context(sat_ctxs[i]);
 }  /* sb_append_res_subst */
 
+/* Walk t and return TRUE iff any variable node has VARNUM >=
+   CONTEXT_VARNUM_MAX.  Such varnums would index Context.terms[] out
+   of bounds in unify's DEREFERENCE macro.  Caller uses this to bail
+   the demod rider before crashing on chains where compounding
+   multiplier shifts have pushed varnums past the context-array
+   limit.  Pre-order walk; returns early on first hit. */
+/* Walk t and return TRUE iff any variable node has VARNUM >= MAX_VARS.
+   Such varnums would index Context.terms[] (sized MAX_VARS) out of
+   bounds in unify's DEREFERENCE macro.  Safety net for chain replay
+   even though renumber_atoms_canonical should normally prevent it. */
+static
+BOOL term_has_oob_var(Term t)
+{
+  if (t == NULL) return FALSE;
+  if (VARIABLE(t)) return VARNUM(t) >= MAX_VARS;
+  int i;
+  for (i = 0; i < ARITY(t); i++) {
+    if (term_has_oob_var(ARG(t, i))) return TRUE;
+  }
+  return FALSE;
+}
+
+/* Renumber atoms variables to canonical 0..N-1 in first-seen order.
+   Used between demod-chain rewrites to keep VARNUMs within unify's
+   context-array range (apply with non-zero multipliers can produce
+   varnums >= MAX_VARS, which would crash unify on the next step).
+   Variable terms are interned via Shared_variables when VARNUM <
+   MAX_VNUM, so replacing a parent's ARG with get_variable_term(new)
+   is safe and does NOT zap the old (shared) variable.  Returns
+   TRUE on success, FALSE if any VARNUM >= MAX_REMAP or distinct
+   var count >= MAX_VARS (caller should bail in that case). */
+#define MAX_REMAP MAX_VNUM   /* indexed by original VARNUM */
+
+/* Returns FALSE if a varnum >= MAX_REMAP is encountered (can't fit in
+   the map), or if more than MAX_VARS distinct vars appear (no
+   canonical slot to assign).  Either case forces the caller to bail
+   the rider rather than leave un-renumbered out-of-range varnums in
+   the atoms (which would crash unify on the next step). */
+static
+BOOL collect_vars_assign(Term t, int *map, int *next_slot)
+{
+  if (t == NULL) return TRUE;
+  if (VARIABLE(t)) {
+    int vn = VARNUM(t);
+    if (vn < 0 || vn >= MAX_REMAP) return FALSE;
+    if (map[vn] == -1) {
+      if (*next_slot >= MAX_VARS) return FALSE;
+      map[vn] = (*next_slot)++;
+    }
+    return TRUE;
+  }
+  int i;
+  for (i = 0; i < ARITY(t); i++) {
+    if (!collect_vars_assign(ARG(t, i), map, next_slot)) return FALSE;
+  }
+  return TRUE;
+}
+
+static
+void rewrite_vars_in_term(Term t, const int *map)
+{
+  if (t == NULL || VARIABLE(t)) return;
+  int i;
+  for (i = 0; i < ARITY(t); i++) {
+    Term child = ARG(t, i);
+    if (child == NULL) continue;
+    if (VARIABLE(child)) {
+      int vn = VARNUM(child);
+      if (vn >= 0 && vn < MAX_REMAP && map[vn] >= 0 && map[vn] != vn) {
+        /* Shared variable terms: don't zap, just retarget the slot. */
+        ARG(t, i) = get_variable_term(map[vn]);
+      }
+    } else {
+      rewrite_vars_in_term(child, map);
+    }
+  }
+}
+
+static
+BOOL renumber_atoms_canonical(Term *atoms, int n_atoms)
+{
+  int map[MAX_REMAP];
+  int i;
+  for (i = 0; i < MAX_REMAP; i++) map[i] = -1;
+  int next_slot = 0;
+  for (i = 0; i < n_atoms; i++) {
+    if (!collect_vars_assign(atoms[i], map, &next_slot))
+      return FALSE;  /* var out of map range or too many distinct vars */
+  }
+  for (i = 0; i < n_atoms; i++)
+    rewrite_vars_in_term(atoms[i], map);
+  return TRUE;
+}
+
 /* Find the N-th nonvariable subterm in t, in bottom-up left-to-right
    order (post-order, skipping variables).  Mirrors flatdemod.c's
    counting convention.  Counter starts at 0 and is incremented for
@@ -2465,6 +2559,14 @@ void sb_emit_demod_chain(String_buf sb, I3list chain,
                          I3list map)
 {
   BOOL bailed = FALSE;
+  /* After the first rewrite is applied, the atoms are renumbered to
+     canonical 0..N-1 vars (to keep VARNUM under MAX_VARS).  Once that
+     happens, the original aux_mults/aux_ids tagging no longer applies
+     to variables in the atoms -- they have lost their primary-context
+     identity.  Render subsequent steps' bindings with no aux tagging
+     so variables show as bare letters (x, y, z, ...) without
+     misleading [clause_id] suffixes. */
+  BOOL renumbered_yet = FALSE;
   I3list p;
   for (p = chain; p; p = p->next) {
     /* Emit the "id(pos[,R])" text first (existing format). */
@@ -2485,9 +2587,23 @@ void sb_emit_demod_chain(String_buf sb, I3list chain,
         int lit_idx = -1;
         Term matched = find_nth_in_atoms(atoms, n_atoms, p->j, &counter,
                                          &lit_idx);
+        if (matched != NULL && term_has_oob_var(matched)) {
+          /* Earlier rewrites in this chain pushed variables out of
+             unify's context-array range (VARNUM >= MAX_VARS).  The
+             upcoming unify call would do an out-of-bounds array read
+             on Context.terms[] (only sized MAX_VARS).  Bail the rider
+             for this and remaining steps; raw step text still
+             emits. */
+          bailed = TRUE;
+          goto next_step;
+        }
         if (matched != NULL) {
+          int *step_aux_mults = renumbered_yet ? NULL : aux_mults;
+          int *step_aux_ids   = renumbered_yet ? NULL : aux_ids;
+          int  step_n_aux     = renumbered_yet ? 0    : n_aux;
           sb_append_demod_step_subst(sb, demod, matched,
-                                     aux_mults, aux_ids, n_aux);
+                                     step_aux_mults, step_aux_ids,
+                                     step_n_aux);
 
           /* Apply the rewrite so the next step's position is meaningful. */
           if (demod->literals && demod->literals->atom &&
@@ -2512,6 +2628,16 @@ void sb_emit_demod_chain(String_buf sb, I3list chain,
             Term applied_other = apply(other, c1);
             int ctr2 = 0;
             replace_nth_in_atoms(atoms, n_atoms, p->j, &ctr2, applied_other);
+            /* Renumber atoms back to canonical 0..N-1 vars so the next
+               step's matched subterm stays within MAX_VARS range; apply
+               with non-zero multipliers above introduces shifted vars
+               that would crash unify on the next iteration.  After
+               this, the atoms no longer carry primary-context identity
+               on their variables -- suppress aux tagging downstream. */
+            if (!renumber_atoms_canonical(atoms, n_atoms))
+              bailed = TRUE;
+            else
+              renumbered_yet = TRUE;
             undo_subst(tr);
             free_context(c1);
             free_context(c2);

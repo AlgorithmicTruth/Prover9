@@ -115,7 +115,7 @@ type defined here.)
 
 #define DEREFERENCE(t, c) { int i; \
     while (c!=NULL && VARIABLE(t) && c->terms[i=VARNUM(t)]) \
-    { t = c->terms[i]; c = c->contexts[i]; } } 
+    { t = c->terms[i]; c = c->contexts[i]; } }
 
 /* A Context records a substitution of terms for variables. */
 
