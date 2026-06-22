@@ -250,6 +250,7 @@ int main(int argc, char **argv)
   char *saved_command;
   int prescan_timeout = -1;   /* -t value from pre-scan, for early SIGALRM */
   (void) prescan_timeout;     /* used only in signal setup (non-WASM) */
+  int cores_arg = -1;         /* -cores N (or 8 via -casc); -1 = not set */
 
   /* Save original command line before any argv mutation. */
   saved_command = build_command_string(argc, argv);
@@ -291,12 +292,23 @@ int main(int argc, char **argv)
         argv[i] = "-c";  /* consumed; -c is a harmless no-op in getopt */
       }
       if (strcmp(argv[i], "-casc") == 0) {
-        /* CASC competition mode: -tptp -quiet -t T */
+        /* CASC competition mode: -tptp -quiet -t T -cores 8 */
         tptp_mode = TRUE;
         Mace4_quiet = TRUE;
+        cores_arg = 8;   /* race domain sizes across the 8 CASC cores */
         if (i + 1 < argc) {
           prescan_timeout = atoi(argv[i+1]);
           argv[i] = "-t";  /* convert to -t so getopt finds the value */
+        } else {
+          argv[i] = "-c";
+        }
+      }
+      if (strcmp(argv[i], "-cores") == 0) {
+        /* -cores N: race up to N domain sizes in parallel (fork-per-size). */
+        if (i + 1 < argc) {
+          cores_arg = atoi(argv[i+1]);
+          argv[i] = "-c";      /* consume flag (harmless getopt no-op) */
+          argv[i+1] = "-c";    /* consume its value too */
         } else {
           argv[i] = "-c";
         }
@@ -354,6 +366,13 @@ int main(int argc, char **argv)
   init_standard_ladr();
   init_mace_options(&opt);  /* We must do this before calling usage_message. */
   init_attrs();
+
+  /* Apply -cores N / -casc (cores=8) captured in the pre-scan, overriding
+     the default cores=1.  Done here, after init_mace_options registered
+     the parm, so an input-file assign(cores,N) can still take effect via
+     process_command_line_args unless the CLI flag was given. */
+  if (cores_arg >= 1)
+    assign_parm(opt.cores, cores_arg, FALSE);
 
   if (member_args(argc, argv, "help") ||
       member_args(argc, argv, "-help")) {

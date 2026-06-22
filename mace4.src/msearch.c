@@ -189,6 +189,7 @@ void init_mace_options(Mace_options opt)
   opt->max_models        = init_parm("max_models",       1,      -1, INT_MAX);
   opt->max_seconds       = init_parm("max_seconds",     -1,      -1, INT_MAX);
   opt->max_seconds_per   = init_parm("max_seconds_per", -1,      -1, INT_MAX);
+  opt->cores             = init_parm("cores",            1,       1, 64);
   opt->selection_order   = init_parm("selection_order",  2,       0, 2);
   opt->selection_measure = init_parm("selection_measure",4,       0, 4);
   opt->increment         = init_parm("increment",        1,       1, INT_MAX);
@@ -1225,7 +1226,7 @@ int search_iterative_resume(int start_depth)
  *
  *************/
 
-static
+/* Non-static: also called by sizesched.c (parallel -cores scheduler). */
 int mace4n(Plist clauses, int order)
 {
   Plist p, g;
@@ -1327,6 +1328,45 @@ int mace4n(Plist clauses, int order)
 
 /*************
  *
+ *   mace4_one_size_exit_code()
+ *
+ *   Run the single-size search for the given domain size and return a
+ *   MACE exit code (the MAX_MODELS_EXIT family from msearch.h), suitable
+ *   for a forked child of the -cores scheduler to _exit() with.  The
+ *   model itself, if found, is printed by possible_model() to the
+ *   current stdout (the child redirects stdout to a pipe).  This is a
+ *   thin wrapper over mace4n() that translates the internal SEARCH_*
+ *   return code the same way mace4() does for the sequential path.
+ *
+ *   Used only by sizesched.c.  initialize_for_search() must already
+ *   have run in the parent before the fork (the child inherits it).
+ *
+ *************/
+
+int mace4_one_size_exit_code(Plist clauses, int order)
+{
+  int rc = mace4n(clauses, order);
+
+  if (rc == SEARCH_MAX_MODELS)
+    return MAX_MODELS_EXIT;
+  else if (rc == SEARCH_GO_MODELS)
+    return ALL_MODELS_EXIT;     /* model(s) found at this size */
+  else if (rc == SEARCH_GO_NO_MODELS)
+    return EXHAUSTED_EXIT;      /* no model at this size (search finished) */
+  else if (rc == SEARCH_MAX_TOTAL_SECONDS || rc == SEARCH_MAX_DOMAIN_SECONDS)
+    return Total_models == 0 ? MAX_SEC_NO_EXIT : MAX_SEC_YES_EXIT;
+  else if (rc == SEARCH_MAX_MEGS)
+    return Total_models == 0 ? MAX_MEGS_NO_EXIT : MAX_MEGS_YES_EXIT;
+  else if (rc == SEARCH_CELLS_OVERFLOW)
+    return MACE_CELLS_OVERFLOW_EXIT;
+  else if (rc == SEARCH_DOMAIN_OUT_OF_RANGE)
+    return MACE_DOMAIN_OOR_EXIT;
+  else
+    return EXHAUSTED_EXIT;
+}  /* mace4_one_size_exit_code */
+
+/*************
+ *
  *   iterate_ok()
  *
  *************/
@@ -1408,6 +1448,18 @@ Mace_results mace4(Plist clauses, Mace_options opt)
   Opt = opt;  /* put options into a global variable */
   Saved_clauses = clauses;  /* save for checkpoint */
   initialize_for_search(clauses);
+
+  /* Parallel-over-domain-sizes (-cores N).  Opt-in; only when it is safe:
+     not resuming, not arithmetic, not prime/nonprime iteration (all of
+     which assume ordered single-process state).  initialize_for_search()
+     has run above, so forked children inherit the prepared problem. */
+  if (parm(opt->cores) > 1 && !Resuming &&
+      !flag(opt->arithmetic) &&
+      !flag(opt->iterate_primes) && !flag(opt->iterate_nonprimes)) {
+    Mace_results pr = mace4_parallel(clauses, opt, parm(opt->cores));
+    enable_max_megs();
+    return pr;
+  }
 
   if (Resuming) {
     /* Resume path: skip to saved domain size */

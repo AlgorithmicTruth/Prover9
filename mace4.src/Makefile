@@ -93,7 +93,7 @@ FORCE:
 
 OBJECTS = estack.o util.o print.o syms.o ground.o arithmetic.o select.o \
 	propagate.o mstate.o negpropindex.o negprop.o ordercells.o \
-	commandline.o msearch.o
+	commandline.o msearch.o sizesched.o
 
 all: ladr lib mace4 install
 

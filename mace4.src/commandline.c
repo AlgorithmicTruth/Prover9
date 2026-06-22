@@ -131,6 +131,10 @@ void usage_message(FILE *fp, Mace_options opt)
   "  -quiet : Suppress per-domain status line in TPTP mode.\n"
   "         No effect in LADR mode.  Does not suppress the SZS\n"
   "         status line, model output, or banner.\n"
+  "  -cores N : Search up to N domain sizes in parallel (one forked\n"
+  "         process per size), reporting the smallest model.  Default 1\n"
+  "         (sequential).  Ignored for resume/arithmetic/prime iteration.\n"
+  "  -casc T : CASC competition mode (= -tptp -quiet -t T -cores 8).\n"
   "\n"
 
 	  , PROGRAM_NAME, PROGRAM_VERSION, PROGRAM_DATE,

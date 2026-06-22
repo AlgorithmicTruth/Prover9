@@ -82,6 +82,7 @@ struct mace_options {
     max_seconds,
     max_seconds_per,
     max_megs,
+    cores,
     report_stderr;
 
   /* checkpoint */
@@ -153,7 +154,12 @@ enum {
   MACE_SIGINT_EXIT       = 101,
   MACE_SIGSEGV_EXIT      = 102,
   MACE_SIGTERM_EXIT      = 103,
-  MACE_CHECKPOINT_EXIT   = 107
+  MACE_CHECKPOINT_EXIT   = 107,
+
+  /* Per-size child outcomes for the -cores scheduler (sizesched.c).
+     Kept in the 110+ range to avoid colliding with the codes above. */
+  MACE_CELLS_OVERFLOW_EXIT = 110,  /* size too big; larger sizes worse */
+  MACE_DOMAIN_OOR_EXIT     = 111   /* domain element too big for this size */
 };
 
 
@@ -211,6 +217,13 @@ struct cell {
 void init_mace_options(Mace_options opt);
 Mace_results mace4(Plist clauses, Mace_options opt);
 void mace4_exit(int exit_code);
+int mace4n(Plist clauses, int order);   /* single-size search (used by sizesched.c) */
+int mace4_one_size_exit_code(Plist clauses, int order);  /* child entry for sizesched.c */
+
+/* from sizesched.c -- parallel-over-domain-sizes scheduler (-cores N).
+   Forks one child per domain size, races them, keeps the smallest model,
+   and publishes it on deadline or when minimality is proven. */
+Mace_results mace4_parallel(Plist clauses, Mace_options opt, int ncores);
 
 /* Checkpoint/resume support (msearch.c) */
 
