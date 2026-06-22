@@ -463,6 +463,7 @@ int main(int argc, char **argv)
     goals_list = embed_formulas_in_topforms(tptp->goals, FALSE);
     {
       extern Ilist Input_fsyms, Input_rsyms;
+      Ilist q;
       /* Copy both — plist_cat2 destroys p1, but we still need
          assumptions and goals_list for clausification below. */
       Plist all_input = plist_cat(copy_plist(assumptions),
@@ -470,6 +471,25 @@ int main(int argc, char **argv)
       Input_fsyms = fsym_set_in_topforms(all_input);
       Input_rsyms = rsym_set_in_topforms(all_input);
       zap_plist(all_input);
+      /* These sets are gathered from the FOF formulas before
+         clausification, so they include quantified TPTP variables
+         (uppercase-initial names), which appear constant-like in the
+         formula AST.  Variables are not symbols to interpret -- drop
+         them here so they never reach the model emitter.  PROLOG_STYLE
+         is active (set above), so variable_name() correctly recognizes
+         uppercase-initial names. */
+      {
+        Ilist vars = NULL;
+        for (q = Input_fsyms; q; q = q->next)
+          if (variable_name(sn_to_str(q->i))) vars = ilist_prepend(vars, q->i);
+        for (q = vars; q; q = q->next) Input_fsyms = ilist_removeall(Input_fsyms, q->i);
+        zap_ilist(vars);
+        vars = NULL;
+        for (q = Input_rsyms; q; q = q->next)
+          if (variable_name(sn_to_str(q->i))) vars = ilist_prepend(vars, q->i);
+        for (q = vars; q; q = q->next) Input_rsyms = ilist_removeall(Input_rsyms, q->i);
+        zap_ilist(vars);
+      }
     }
 
     /* Clausify */
