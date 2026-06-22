@@ -425,10 +425,22 @@ void print_model_tptp(FILE *fp)
 
   /* Output default interpretations for symbols in the original problem
      that were eliminated during clausification.  Input_fsyms/Input_rsyms
-     are snapshots taken before clausification in mace4.c. */
+     are snapshots taken before clausification in mace4.c.
+
+     These snapshots are taken from the FOF formulas BEFORE clausification,
+     so they can include quantified TPTP variables (uppercase-initial
+     names like E, X, To) that appear constant-like in the formula AST.
+     Those are NOT symbols to interpret -- skip them with variable_name().
+     variable_name() consults the current variable_style(); the model
+     search runs under INTEGER_STYLE, under which uppercase names are NOT
+     recognized as variables, so we force PROLOG_STYLE (TPTP's convention:
+     uppercase-initial = variable) around these checks and restore it
+     afterward. */
   {
     extern Ilist Input_fsyms, Input_rsyms;
     Ilist p;
+    Variable_style extra_save_style = variable_style();
+    set_variable_style(PROLOG_STYLE);
 
     /* Extra functions: symbols in pre-clausification set but not in Mace4's Symbols */
     for (p = Input_fsyms; p; p = p->next) {
@@ -472,6 +484,7 @@ void print_model_tptp(FILE *fp)
       int sn = p->i;
       char *name = sn_to_str(sn);
       int arity = sn_to_arity(sn);
+      if (variable_name(name)) continue;
       if (is_eq_symbol(sn)) continue;
       if (find_symbol_data(sn) != NULL) continue;
       if (name[0] == '$') continue;
@@ -501,6 +514,7 @@ void print_model_tptp(FILE *fp)
       }
       fprintf(fp, " )).\n\n");
     }
+    set_variable_style(extra_save_style);
   }
 
   /* SZS output end */
