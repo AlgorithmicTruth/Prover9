@@ -483,7 +483,7 @@ int main(int argc, char **argv)
     {
       extern Ilist Input_fsyms, Input_rsyms;
       Ilist q;
-      /* Copy both — plist_cat2 destroys p1, but we still need
+      /* Copy both - plist_cat2 destroys p1, but we still need
          assumptions and goals_list for clausification below. */
       Plist all_input = plist_cat(copy_plist(assumptions),
                                   copy_plist(goals_list));

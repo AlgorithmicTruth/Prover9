@@ -1101,7 +1101,7 @@ Term trm_set_vars_recurse(Term t, char **varnames, int max_vars)
 {
   /* Handle root being a constant that becomes a variable.
      Skip symbols marked as quoted (from TPTP quoted atoms or
-     distinct objects — these are constants regardless of case). */
+     distinct objects - these are constants regardless of case). */
   if (CONSTANT(t)) {
     char *name = sn_to_str(SYMNUM(t));
     if (variable_name(name) && !is_quoted(SYMNUM(t))) {

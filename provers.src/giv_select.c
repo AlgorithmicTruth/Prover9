@@ -331,7 +331,7 @@ void remove_from_sos2(Topform c, Clist sos)
  *
  *************/
 
-/* qsort comparator wrapper — uses a static function pointer */
+/* qsort comparator wrapper - uses a static function pointer */
 static Ordertype (*Bulk_compare)(void *, void *);
 
 static int bulk_qsort_compare(const void *a, const void *b)
@@ -737,7 +737,7 @@ void set_low_selector_state(const char *name, int count)
       return;
     }
   }
-  /* Name not found — leave at default (first selector, count=0). */
+  /* Name not found - leave at default (first selector, count=0). */
 }  /* set_low_selector_state */
 
 /*************

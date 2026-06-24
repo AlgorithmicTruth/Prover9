@@ -2099,7 +2099,7 @@ BOOL fpa_restore_index(FILE *fp, Fpa_index idx)
 
   /* Replace root with restored trie */
   if (idx->root != NULL) {
-    /* Leak old root — acceptable during checkpoint restore */
+    /* Leak old root - acceptable during checkpoint restore */
   }
   idx->root = fpa_restore_trie_node(fp, NULL);
   if (idx->root == NULL) {

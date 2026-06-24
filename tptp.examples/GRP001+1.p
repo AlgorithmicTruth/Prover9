@@ -1,4 +1,4 @@
-% Simple group theory — commutativity is NOT a theorem
+% Simple group theory - commutativity is NOT a theorem
 % mace4 should find a countermodel
 
 fof(right_identity, axiom, ![X]: (f(X,e) = X)).

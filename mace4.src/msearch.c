@@ -1248,7 +1248,7 @@ int mace4n(Plist clauses, int order)
   Domain_size = order;
 
   if (!init_for_domain_size())
-    return SEARCH_CELLS_OVERFLOW;  /* cells overflow — stop iterating */
+    return SEARCH_CELLS_OVERFLOW;  /* cells overflow - stop iterating */
 
   built_in_assignments();  /* Fill out equality table (and maybe others). */
 

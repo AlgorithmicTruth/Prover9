@@ -539,7 +539,7 @@ Topform di_tree_forward(int *vec, int len, Di_tree node, Literals dlits,
           kid = stk[lev];  /* resume with next sibling */
       }
       else if (lev == len - 1) {
-        /* kid is at leaf level — check its data */
+        /* kid is at leaf level - check its data */
         Plist p = kid->u.data;
         while (p) {
           Topform c = p->v;
@@ -629,7 +629,7 @@ void di_tree_back(int *vec, int len, Di_tree node, Literals clits,
           kid = stk[lev];  /* resume with next sibling */
       }
       else if (lev == len - 1) {
-        /* kid is at leaf level — check its data */
+        /* kid is at leaf level - check its data */
         Plist p = kid->u.data;
         while (p) {
           Topform d = p->v;

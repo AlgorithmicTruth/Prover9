@@ -277,7 +277,7 @@ void set_clause_id_count(unsigned long long n)
 Clear all entries from the clause ID hash table.  Used before reloading
 clauses from a checkpoint (in-process save+reload test) to prevent stale
 entries from shadowing newly-loaded clauses.
-Clause objects are NOT freed — they are leaked.
+Clause objects are NOT freed - they are leaked.
 */
 
 /* PUBLIC */

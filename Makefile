@@ -54,7 +54,7 @@ test5:
 	@echo ""
 
 test6:
-	@echo "---- mace4 TPTP: PUZ001+1 (should GaveUp — no countermodel) ----"
+	@echo "---- mace4 TPTP: PUZ001+1 (should GaveUp - no countermodel) ----"
 	@bin/mace4 -tptp -t 5 -N 10 -f tptp.examples/PUZ001+1.p < /dev/null 2>&1 | grep "SZS status"
 	@echo "---- mace4 TPTP: GRP001+1 (should CounterSatisfiable) ----"
 	@bin/mace4 -tptp -t 5 -N 10 -f tptp.examples/GRP001+1.p < /dev/null 2>&1 | grep "SZS status"

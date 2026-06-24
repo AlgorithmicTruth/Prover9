@@ -20,7 +20,7 @@
 #include "memory.h"
 #include <stdarg.h>  /* for variable argument lists */
 
-/* Preprocessing progress report — defined in top_input.c */
+/* Preprocessing progress report - defined in top_input.c */
 extern void set_preprocessing_report_interval(int seconds);
 
 /* Private definitions and types */
@@ -440,7 +440,7 @@ void fwrite_options_input(FILE *fp)
   int i;
 
   for (i = 0; i < Next_flag; i++) {
-    /* Skip ignore_option_dependencies — the caller handles this
+    /* Skip ignore_option_dependencies - the caller handles this
        explicitly (set at top of saved_input.txt to prevent cascading
        dependency effects when reading back post-resolution values). */
     if (str_ident(Flags[i].name, "ignore_option_dependencies"))

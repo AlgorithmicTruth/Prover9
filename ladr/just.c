@@ -3187,7 +3187,7 @@ Plist get_clanc(int id, Plist anc)
     c = find_clause_by_id(cur_id);
     if (c == NULL) {
       /* Parent clause was deleted (back-subsumed, weight-limited, etc.).
-         Skip this branch — ancestor set is incomplete but safe.
+         Skip this branch - ancestor set is incomplete but safe.
          ancestor_subsume will be conservative (fewer ancestors means
          fewer subsumption opportunities, never unsound). */
       continue;

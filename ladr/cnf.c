@@ -632,7 +632,7 @@ Formula distribute_top(Formula h)
   arity = f->arity * g->arity;
 
   if (Cnf_clause_limit > 0 && arity > Cnf_clause_limit) {
-    /* Product exceeds clause limit — bail out via longjmp.
+    /* Product exceeds clause limit - bail out via longjmp.
        Partially-transformed formula memory is abandoned (palloc). */
     fprintf(stderr, "\n%% CNF clause limit exceeded: %d x %d = %d > %d\n",
 	    f->arity, g->arity, arity, Cnf_clause_limit);

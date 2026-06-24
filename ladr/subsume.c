@@ -164,7 +164,7 @@ BOOL subsume_bt_literals(Literals clit, Context subst,
   *gp = plist_prepend(*gp, NULL);
   cstack[0] = clit;
   dstack[0] = d->literals;
-  bstack[0] = NULL;  /* no bt state yet — need to find first match */
+  bstack[0] = NULL;  /* no bt state yet - need to find first match */
 
   while (depth >= 0) {
     Literals cl = cstack[depth];

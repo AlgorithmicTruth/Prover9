@@ -1956,7 +1956,7 @@ I2list multiset_add_n(I2list a, int i, int n)
     }
     p = &(*p)->next;
   }
-  /* Not found — append new node at the end. */
+  /* Not found - append new node at the end. */
   *p = get_i2list();
   (*p)->i = i;
   (*p)->j = n;

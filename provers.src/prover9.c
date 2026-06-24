@@ -50,7 +50,7 @@
 #ifndef NO_OPEN_MEMSTREAM
 /* Signal-safe child PID tracking for cleanup on parent death.
    Tombstone array: slots are 0 (empty) or a live child PID.
-   Signal handler scans the full array — no counter needed.
+   Signal handler scans the full array - no counter needed.
    Only used by the -cores N sliding-window scheduler (requires
    open_memstream), so guarded by NO_OPEN_MEMSTREAM. */
 #define MAX_CHILD_PIDS 128
@@ -1728,7 +1728,7 @@ int main(int argc, char **argv)
     /* Post-clausification simplification: apply the same three
        transforms that search()/cl_process_simplify() applies to
        initial clauses before proof search.  Without these, the
-       raw CNF output differs from what appears as proof leaves —
+       raw CNF output differs from what appears as proof leaves -
        equalities may be unoriented, duplicate literals unsimplified,
        and trivial literals (x=x) unremoved.  These are standalone
        LADR library functions with no Glob/Opt dependencies. */

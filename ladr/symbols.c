@@ -37,7 +37,7 @@ struct symbol {
   Lrpo_status lrpo_status;      /* for LRPO, LPO, RPO */
   BOOL        skolem;
   BOOL        distinct_object;  /* TPTP distinct object ("foo" -> do_foo) */
-  BOOL        quoted;           /* from quoted/distinct token — never a variable */
+  BOOL        quoted;           /* from quoted/distinct token - never a variable */
   BOOL        unfold;
   BOOL        auxiliary;        /* not part of theory, e.g., in hints only */
 

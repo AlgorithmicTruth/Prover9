@@ -217,7 +217,7 @@ void restore_demod_index(const char *dir, Clock clock)
   snprintf(path, sizeof(path), "%s/demod_index.txt", dir);
   fp = fopen(path, "r");
   if (!fp)
-    return;  /* no saved index — fall back to default insertion order */
+    return;  /* no saved index - fall back to default insertion order */
 
   {
     int count = 0;

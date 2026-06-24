@@ -1216,7 +1216,7 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
       if (ch == EOF)
         use_saved = TRUE;
       else
-        ungetc(ch, stdin);  /* push back — stdin has real input */
+        ungetc(ch, stdin);  /* push back - stdin has real input */
     }
     if (use_saved) {
       char saved_path[1024];

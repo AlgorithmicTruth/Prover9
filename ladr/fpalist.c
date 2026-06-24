@@ -573,7 +573,7 @@ void p_fpa_list(Fpa_chunk c)
  *   fpalist_build()
  *
  *   Build an Fpa_list from an array of Term pointers already sorted
- *   in decreasing FPA_ID order.  This is O(n) — no per-element
+ *   in decreasing FPA_ID order.  This is O(n) - no per-element
  *   insertion, no sorting, no chunk splitting.  Used for fast
  *   checkpoint restore of serialized FPA indexes.
  *
@@ -608,7 +608,7 @@ Fpa_list fpalist_build(Term *terms, int n)
       c->d[chunksize - fill + i] = terms[pos + i];
     c->n = fill;
     c->head = p;
-    /* Prepend — we'll reverse after the loop so chunks are in order */
+    /* Prepend - we'll reverse after the loop so chunks are in order */
     c->next = p->chunks;
     p->chunks = c;
     p->num_chunks++;

@@ -665,7 +665,7 @@ void p_avl(Avl_node p, int level)
  *   avl_build_sorted()
  *
  *   Build a balanced AVL tree from a pre-sorted array of items.
- *   O(n) — no rotations, no comparisons.  The array must be sorted
+ *   O(n) - no rotations, no comparisons.  The array must be sorted
  *   in the same order as the compare function would produce.
  *
  *************/

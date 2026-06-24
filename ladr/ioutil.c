@@ -18,7 +18,7 @@
 
 #include "ioutil.h"
 
-/* Preprocessing progress report — defined in top_input.c */
+/* Preprocessing progress report - defined in top_input.c */
 extern void preprocessing_report_check(const char *phase, int count,
 				       int total, int kept,
 				       double *next_report_time);

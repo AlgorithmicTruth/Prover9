@@ -563,7 +563,7 @@ Prover_options init_prover_options(void)
   flag_flag_dep_default(p->auto2, FALSE, p->print_initial_clauses);
   flag_flag_dep_default(p->auto2, FALSE, p->print_given);
 
-  // tptp_output — suppress native output, TSTP proof is printed separately.
+  // tptp_output - suppress native output, TSTP proof is printed separately.
 
   flag_flag_dependency(p->tptp_output, TRUE, p->default_output,        FALSE);
   flag_flag_dependency(p->tptp_output, TRUE, p->quiet,                  TRUE);
@@ -1129,7 +1129,7 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL flatten_fof)
 
   if (flatten_fof && is_fof &&
       (primary_type == INPUT_JUST || primary_type == GOAL_JUST))
-    return;  /* skip FOF entries — their CNF children become leaves */
+    return;  /* skip FOF entries - their CNF children become leaves */
 
   /* If this clause was clausified from a skipped FOF axiom, emit it
      as an axiom leaf instead of an inference step. */
@@ -1245,7 +1245,7 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL flatten_fof)
     fprintf(fp, ",\n    inference(%s, [status(thm)], [", rule);
 
     /* Collect ALL parent IDs (primary + secondary justification nodes).
-       Filter out the clause's own ID — some justification types
+       Filter out the clause's own ID - some justification types
        (e.g., xx/back_rewrite) reference the clause itself. */
     {
       Ilist parents = get_parents(just, TRUE);
@@ -1805,7 +1805,7 @@ void handle_proof_and_maybe_exit(Topform empty_clause)
   set_no_kill();
   fflush(stderr);
   if (flag(Opt->tptp_output)) {
-    /* TSTP format proof output — always printed in TPTP mode */
+    /* TSTP format proof output - always printed in TPTP mode */
     printf("\n%% Proof %s at %.2f (+ %.2f) seconds.\n",
 	   comma_num(Stats.proofs), user_seconds(), system_seconds());
     printf("%% Length of proof is %d.\n", proof_length(proof));
@@ -1883,7 +1883,7 @@ void handle_proof_and_maybe_exit(Topform empty_clause)
       I3list jmap = NULL;
       if (flag(Opt->print_expanded_proof)) {
         proof_to_print = expand_proof(proof, &jmap);
-        /* Restore original goal/input bodies — expand_proof may rewrite
+        /* Restore original goal/input bodies - expand_proof may rewrite
            a goal body as a side effect of CNF processing.  Deep-copy
            literals/formula so renumber_proof's uplink check stays
            consistent. */
@@ -4100,7 +4100,7 @@ int write_clist_bare(FILE *clause_fp, FILE *data_fp,
       if (strcmp(list_name, "hints") == 0 && hint_is_redundant(c))
         fprintf(data_fp, " redundant_hint");
       /* Save atom private_flags for each literal (carries oriented_eq,
-         renamable_flip, maximal, selected marks — lost in text round-trip) */
+         renamable_flip, maximal, selected marks - lost in text round-trip) */
       {
         Literals lit;
         for (lit = c->literals; lit != NULL; lit = lit->next)
@@ -4681,7 +4681,7 @@ void restore_checkpoint_formulas(const char *dir)
   snprintf(path, sizeof(path), "%s/formulas.txt", dir);
   fp = fopen(path, "r");
   if (!fp) {
-    /* Old checkpoint without formulas.txt — justification restore will
+    /* Old checkpoint without formulas.txt - justification restore will
        still work but proofs may show [assumption] for goal-derived clauses. */
     return;
   }
@@ -4859,7 +4859,7 @@ void write_checkpoint_input(const char *dir)
      (e.g. assign(max_minutes, -1) -> max_seconds = -60, fatal). */
   fprintf(fp, "set(ignore_option_dependencies).\n\n");
 
-  /* Options — current runtime state (includes auto-mode changes).
+  /* Options - current runtime state (includes auto-mode changes).
      fwrite_options_input writes parseable set()/clear()/assign() commands
      without the banner line (which would confuse the LADR parser). */
   fwrite_options_input(fp);
@@ -4870,7 +4870,7 @@ void write_checkpoint_input(const char *dir)
   fprintf(fp, "clear(auto_process).\n");
   fprintf(fp, "\n");
 
-  /* Configuration lists — only write non-empty ones.
+  /* Configuration lists - only write non-empty ones.
      fwrite_term_list writes list(name). term. ... end_of_list. format. */
   if (Glob.weights)
     fwrite_term_list(fp, Glob.weights, "weights");
@@ -5053,7 +5053,7 @@ void write_checkpoint(void)
       fclose(fp);
     }
 
-    /* Demodulators — uses seen_tab to detect shared clauses */
+    /* Demodulators - uses seen_tab to detect shared clauses */
     snprintf(cpath, sizeof(cpath), "%s/demods.clauses", tmpdir);
     fp = fopen(cpath, "w");
     if (fp) {
@@ -5063,7 +5063,7 @@ void write_checkpoint(void)
       fclose(fp);
     }
 
-    /* Hints — no dedup needed (separate ID namespace) */
+    /* Hints - no dedup needed (separate ID namespace) */
     if (Glob.hints->length > 0) {
       snprintf(cpath, sizeof(cpath), "%s/hints.clauses", tmpdir);
       fp = fopen(cpath, "w");
@@ -5096,7 +5096,7 @@ void write_checkpoint(void)
       }
     }
 
-    /* Empties (proof clauses) — Plist, not Clist.  Build temporary Clist. */
+    /* Empties (proof clauses) - Plist, not Clist.  Build temporary Clist. */
     if (Glob.empties != NULL) {
       Plist ep;
       Clist tmp_empties = clist_init("empties");
@@ -5127,7 +5127,7 @@ void write_checkpoint(void)
       fclose(fp);
     }
 
-    /* 3b. Write precedence.txt — symbol ordering for deterministic resume.
+    /* 3b. Write precedence.txt - symbol ordering for deterministic resume.
        Format: "F name arity [S]" for function, "R name arity" for predicate.
        S flag indicates Skolem constant. */
     snprintf(cpath, sizeof(cpath), "%s/precedence.txt", tmpdir);
@@ -5297,7 +5297,7 @@ double read_metadata_double(FILE *fp, const char *key)
         return val;
     }
   }
-  return 0.0;  /* not found — no warning, old checkpoints may lack this */
+  return 0.0;  /* not found - no warning, old checkpoints may lack this */
 }  /* read_metadata_double */
 
 /*************
@@ -5500,7 +5500,7 @@ void resume_load_precedence(const char *dir)
   snprintf(path, sizeof(path), "%s/precedence.txt", dir);
   fp = fopen(path, "r");
   if (!fp)
-    return;  /* old checkpoint without precedence — fall through to default */
+    return;  /* old checkpoint without precedence - fall through to default */
 
   {
     char line[1024];
@@ -5549,7 +5549,7 @@ void resume_load_precedence(const char *dir)
  *
  *   Phase 1 of resume: load clauses from checkpoint directory into
  *   Glob lists.  No orient_equalities, mark_maximal_literals, or
- *   indexing — those require init_search() to have set up the term
+ *   indexing - those require init_search() to have set up the term
  *   ordering and inference rules first.
  *
  *************/
@@ -5621,7 +5621,7 @@ void resume_load_clauses(const char *dir)
     rewind(fp);
     saved_seconds = read_metadata_double(fp, "user_seconds");
     if (saved_seconds > 0.0) {
-      /* Don't restore wall clock offset — it causes checkpoint_minutes
+      /* Don't restore wall clock offset - it causes checkpoint_minutes
          to trigger immediately on resume if the saved time exceeds the
          interval.  CPU time is tracked separately in statistics. */
       /* set_user_seconds_offset(saved_seconds); */
@@ -5813,7 +5813,7 @@ void resume_load_clauses(const char *dir)
     }
     clist_zap(loaded_disabled);
   }
-  /* Empties (proof clauses) — load into Glob.empties Plist */
+  /* Empties (proof clauses) - load into Glob.empties Plist */
   if (loaded_empties) {
     int n = 0;
     while (loaded_empties->first) {
@@ -5931,7 +5931,7 @@ void load_checkpoint_into_loop(void)
   if (Resume_meta != NULL) {
     int i, restored = 0, not_found = 0;
     for (i = 0; i < Resume_meta_count; i++) {
-      /* Skip hint entries — hints use a separate ID namespace (1..N)
+      /* Skip hint entries - hints use a separate ID namespace (1..N)
          that collides with regular clause IDs.  Hint aflags would
          corrupt regular clauses found by find_clause_by_id. */
       if (strcmp(Resume_meta[i].list_name, "hints") == 0)
@@ -5956,7 +5956,7 @@ void load_checkpoint_into_loop(void)
   }
 
   /* Clear and restore Glob.cac_clauses from saved IDs.
-     Must clear first — in-process reload leaves stale entries. */
+     Must clear first - in-process reload leaves stale entries. */
   if (Glob.cac_clauses != NULL) {
     zap_plist(Glob.cac_clauses);
     Glob.cac_clauses = NULL;
@@ -6032,7 +6032,7 @@ void load_checkpoint_into_loop(void)
   symbol_order(Glob.usable, Glob.sos, Glob.demods, !flag(Opt->quiet));
 
 
-  /* 3. Re-initialize indexes (old indexes are leaked — acceptable for
+  /* 3. Re-initialize indexes (old indexes are leaked - acceptable for
      in-process save+reload testing and cross-process resume alike) */
 
   /* Initialize indexes */
@@ -6256,8 +6256,8 @@ void load_checkpoint_into_loop(void)
     safe_free(all_clauses);
 
     /* Set up container links for demodulators (needed for demod index
-       serialization which navigates term→clause).  Skip orient_equalities
-       — atom flags restored from aflags in checkpoint metadata. */
+       serialization which navigates term->clause).  Skip orient_equalities
+       - atom flags restored from aflags in checkpoint metadata. */
     for (p = Glob.demods->first; p != NULL; p = p->next)
       upward_clause_links(p->c);
 
@@ -6522,7 +6522,7 @@ Prover_results search(Prover_input p)
     Glob.empties  = NULL;
 
     if (p->resume_dir) {
-      // Resume from checkpoint.  Minimal setup here — the actual checkpoint
+      // Resume from checkpoint.  Minimal setup here - the actual checkpoint
       // data is loaded inside the main loop's first iteration, at the same
       // program point as the checkpoint save (before make_inferences).
       // saved_input.txt has clear(auto_inference)/clear(auto_process) so
@@ -6681,7 +6681,7 @@ Prover_results search(Prover_input p)
 #endif /* !__EMSCRIPTEN__ */
 
 
-      // Checkpoint load (resume — first iteration only).
+      // Checkpoint load (resume - first iteration only).
       if (Load_checkpoint) {
         load_checkpoint_into_loop();
         Load_checkpoint = FALSE;

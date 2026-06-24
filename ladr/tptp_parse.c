@@ -296,7 +296,7 @@ static void skip_whitespace_and_comments(Lexer *lex)
         (void) start_line;
       }
       else {
-        /* Ordinary comment — skip to end of line */
+        /* Ordinary comment - skip to end of line */
         while (lex->ch != -1 && lex->ch != '\n')
           lexer_advance(lex);
       }
@@ -1133,7 +1133,7 @@ static char *resolve_include_path(const char *include_name,
     }
   }
 
-  /* No directory component — use include_name as-is */
+  /* No directory component - use include_name as-is */
   return strdup(include_name);
 }
 

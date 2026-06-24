@@ -7,7 +7,7 @@
 % and propositional variables.
 %
 % The resonators below are the "shapes" (functional skeletons) of
-% several Łukasiewicz theses.  Named variables x, y, z inside the
+% several Lukasiewicz theses.  Named variables x, y, z inside the
 % resonator patterns behave as Wos wildcards -- any variable
 % occurrence matches anything, with no binding consistency.
 %
@@ -20,7 +20,7 @@ assign(max_weight, 20).
 set(hyper_resolution).
 
 formulas(sos).
-  % Axioms of the Łukasiewicz system.
+  % Axioms of the Lukasiewicz system.
   P(i(x, i(y, x))).
   P(i(i(x, i(y, z)), i(i(x, y), i(x, z)))).
   P(i(i(n(x), n(y)), i(y, x))).
