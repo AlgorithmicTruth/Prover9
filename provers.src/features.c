@@ -183,7 +183,7 @@ void extract_features(Scan_result sd, int *fv)
   fv[F_AVG_SYMS_PER_FORM] = (sum_syms * 100) / n;
   fv[F_MAX_BODY_LEN]      = max_body;
   fv[F_AVG_BODY_LEN]      = (int)(sum_body * 100 / n);
-  fv[F_DOMAIN_HASH]       = 0;  /* set by caller if filename known */
+  fv[F_DOMAIN_HASH]       = 0;  /* always 0: removed for CASC compliance */
   fv[F_HAS_EQUALITY]      = has_eq;
   fv[F_MAX_DEPTH_EST]     = max_depth;
   fv[F_AVG_DEPTH_EST]     = (int)(sum_depth * 100 / n);
@@ -205,13 +205,4 @@ void extract_features(Scan_result sd, int *fv)
   fv[F_LOG2_N_AXIOMS]     = ilog2x100(sd->n_axioms);
   fv[F_LOG2_N_SYMBOLS]    = ilog2x100(sd->n_symbols);
   fv[F_LOG2_MAX_BODY]     = ilog2x100(max_body);
-}
-
-void set_domain_hash(int *fv, const char *filename)
-{
-  /* DEPRECATED: no-op. Domain hash removed for CASC compliance.
-     At competition, filenames are temp files — hash is meaningless.
-     Feature index 13 stays 0; decision tree falls through safely. */
-  (void)fv;
-  (void)filename;
 }

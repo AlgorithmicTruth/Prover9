@@ -67,8 +67,4 @@ extern const char *feature_names[NUM_FEATURES];
 /* Extract features from LADR scan result into fv[NUM_FEATURES] */
 void extract_features(Scan_result sd, int *fv);
 
-/* DEPRECATED: domain_hash removed for CASC compliance.
-   set_domain_hash is now a no-op — fv[13] stays 0. */
-void set_domain_hash(int *fv, const char *filename);
-
 #endif /* LADR_FEATURES_H */

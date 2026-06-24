@@ -487,12 +487,11 @@ void apply_strategy(Prover_options opt, int idx)
  *************/
 
 static
-int ml_classify(Scan_result scan, const char *filename)
+int ml_classify(Scan_result scan)
 {
   int fv[NUM_FEATURES];
   int pick;
   extract_features(scan, fv);
-  set_domain_hash(fv, filename);
   pick = dtree_classify(fv);
   if (pick < 0 || pick >= NUM_PORTFOLIO_STRATS) pick = 0;
   return pick;
@@ -509,11 +508,10 @@ int ml_classify(Scan_result scan, const char *filename)
  *************/
 
 static
-const short *ml_rank(Scan_result scan, const char *filename, int *out_len)
+const short *ml_rank(Scan_result scan, int *out_len)
 {
   int fv[NUM_FEATURES];
   extract_features(scan, fv);
-  set_domain_hash(fv, filename);
   *out_len = dtree_num_strats();
   return dtree_rank(fv);
 }  /* ml_rank */
@@ -1590,11 +1588,11 @@ int main(int argc, char **argv)
       ml_pick = force_strategy;
     }
     else if (psr->scan != NULL) {
-      ml_ranking = ml_rank(psr->scan, psr->tptp_file, &ml_ranking_len);
+      ml_ranking = ml_rank(psr->scan, &ml_ranking_len);
       if (ml_ranking != NULL && ml_ranking_len > 0)
         ml_pick = (int) ml_ranking[0];
       else
-        ml_pick = ml_classify(psr->scan, psr->tptp_file);
+        ml_pick = ml_classify(psr->scan);
     }
 #ifdef DEBUG
     if (force_strategy >= 0)
