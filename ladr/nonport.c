@@ -18,14 +18,17 @@
 
 #include "nonport.h"
 #include <string.h>
+#include <stdlib.h>   /* getenv */
 
 /* Private definitions and types */
 
 #ifdef PRIMITIVE_ENVIRONMENT
 /* This means that we don't have some UNIXy things */
 #else
-#  include <pwd.h>
 #  include <unistd.h>
+#  if !defined(LADR_STATIC)
+#    include <pwd.h>   /* getpwuid (dynamic builds only; see username()) */
+#  endif
 #endif
 
 /*************
@@ -43,6 +46,16 @@ char *username(void)
 {
 #ifdef PRIMITIVE_ENVIRONMENT
   return("an unknown user");
+#elif defined(LADR_STATIC)
+  /* Static builds only: avoid getpwuid(getuid()).  getpwuid pulls in glibc
+     NSS (a runtime dlopen of libnss_*), which segfaults in a fully static
+     binary when the target's glibc differs from the build host's.  The
+     username is only used in the banner, so read it from the environment,
+     which is static-safe.  Dynamic builds keep the original getpwuid path. */
+  char *u = getenv("USER");
+  if (u == NULL || u[0] == '\0')
+    u = getenv("LOGNAME");
+  return(u != NULL && u[0] != '\0' ? u : "an unknown user");
 #else
   struct passwd *p;
   p = getpwuid(getuid());
