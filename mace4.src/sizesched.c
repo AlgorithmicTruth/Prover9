@@ -314,9 +314,13 @@ Mace_results mace4_parallel(Plist clauses, Mace_options opt, int ncores)
     fflush(stdout);
     zap_string_buf(best_text);
     results->success = TRUE;
-    /* ALL_MODELS_EXIT maps to Satisfiable/CounterSatisfiable in
-       mace4_exit via mace4_szs_status (it checks Mace4_has_goals). */
-    results->return_code = ALL_MODELS_EXIT;
+    /* MAX_MODELS_EXIT (the default max_models=1 "found a model" code) to match
+       the sequential path's exit code (msearch.c uses MAX_MODELS_EXIT here, =0;
+       ALL_MODELS_EXIT is 3 and would make -cores report a different exit code
+       than sequential for the same result -- which can make StarExec/CASC
+       tooling misread a valid Satisfiable/CounterSatisfiable as an error).
+       Both codes map to the same model-found SZS status via mace4_szs_status. */
+    results->return_code = MAX_MODELS_EXIT;
   }
   else if (Deadline_hit && !decided_to_stop) {
     results->success = FALSE;
