@@ -1276,6 +1276,196 @@ void fprint_clausify_status(FILE *fp, Topform c, const char *st)
   fprintf(fp, "]");
 }
 
+static void make_neg_name(char *buf, size_t bufsz, const char *tptp_name);
+
+/*************
+ *
+ *   Skolemization grouping.
+ *
+ *   Prover9 collapses NNF + skolemize + CNF, so a single existential parent
+ *   yields several clauses, each emitted as its own esa clausify step.  No
+ *   single such clause is equisatisfiable with the parent, so a derivation
+ *   checker cannot verify it.  Instead, for a parent that Skolemizes, we emit
+ *   ONE skolemize step whose body is the conjunction of that parent's
+ *   (universally closed) clauses -- which IS equisatisfiable with the parent
+ *   (GDV verifies it by the backward direction) -- followed by split_conjunct
+ *   (thm) steps for the individual clauses.
+ *
+ *************/
+
+struct sk_group {
+  char parent[520];   /* citation the skolemize node uses (leaf or _neg node) */
+  char skname[540];   /* name of the skolemize node */
+  Plist clauses;      /* Topforms sharing this parent, in proof order */
+  BOOL skolemizing;   /* TRUE if some clause introduces a Skolem function */
+  BOOL emitted;       /* skolemize node already printed */
+};
+
+static Plist Sk_groups = NULL;
+
+static
+BOOL term_has_skolem_function(Term t)
+{
+  int i;
+  if (VARIABLE(t))
+    return FALSE;
+  if (is_skolem(SYMNUM(t)))
+    return TRUE;
+  for (i = 0; i < ARITY(t); i++)
+    if (term_has_skolem_function(ARG(t,i)))
+      return TRUE;
+  return FALSE;
+}
+
+static
+BOOL clause_has_skolem_function(Topform c)
+{
+  Term t = topform_to_term_without_attributes(c);
+  BOOL sk = (t != NULL) ? term_has_skolem_function(t) : FALSE;
+  if (t)
+    zap_term(t);
+  return sk;
+}
+
+static
+void quote_tptp_name(char *buf, size_t sz, const char *nm)
+{
+  BOOL q = FALSE;
+  const char *p;
+  for (p = nm; *p; p++)
+    if (*p=='(' || *p==')' || *p==',' || *p==' ') { q = TRUE; break; }
+  if (q) snprintf(buf, sz, "'%s'", nm);
+  else   snprintf(buf, sz, "%s", nm);
+}
+
+static
+void make_sk_name(char *buf, size_t sz, const char *nm, BOOL deny)
+{
+  BOOL q = FALSE;
+  const char *p;
+  for (p = nm; *p; p++)
+    if (*p=='(' || *p==')' || *p==',' || *p==' ') { q = TRUE; break; }
+  if (q) snprintf(buf, sz, "'sk_%s%s'", nm, deny ? "_neg" : "");
+  else   snprintf(buf, sz, "sk_%s%s", nm, deny ? "_neg" : "");
+}
+
+static
+struct sk_group *find_sk_group(const char *parent)
+{
+  Plist p;
+  for (p = Sk_groups; p; p = p->next) {
+    struct sk_group *g = (struct sk_group *) p->v;
+    if (strcmp(g->parent, parent) == 0)
+      return g;
+  }
+  return NULL;
+}
+
+/* The Skolemizing group c belongs to, or NULL. */
+static
+struct sk_group *skolem_group_of(Topform c)
+{
+  Just_type jt = c->justification ? c->justification->type : UNKNOWN_JUST;
+  char *tn;
+  char parent[520];
+  struct sk_group *g;
+  if (jt != CLAUSIFY_JUST && jt != DENY_JUST)
+    return NULL;
+  tn = get_string_attribute(c->attributes, get_tptp_name_attr(), 1);
+  if (!tn)
+    return NULL;
+  if (jt == DENY_JUST) make_neg_name(parent, sizeof(parent), tn);
+  else                 quote_tptp_name(parent, sizeof(parent), tn);
+  g = find_sk_group(parent);
+  return (g && g->skolemizing) ? g : NULL;
+}
+
+static
+void reset_sk_groups(void)
+{
+  Plist p;
+  for (p = Sk_groups; p; p = p->next) {
+    struct sk_group *g = (struct sk_group *) p->v;
+    zap_plist(g->clauses);
+    free(g);
+  }
+  zap_plist(Sk_groups);
+  Sk_groups = NULL;
+}
+
+/* Group clausify/deny clauses by their (Skolemizing) parent. */
+static
+void build_sk_groups(Plist proof)
+{
+  Plist p;
+  for (p = proof; p; p = p->next) {
+    Topform c = (Topform) p->v;
+    Just_type jt = c->justification ? c->justification->type : UNKNOWN_JUST;
+    char *tn;
+    char parent[520];
+    struct sk_group *g;
+    if (jt != CLAUSIFY_JUST && jt != DENY_JUST)
+      continue;
+    tn = get_string_attribute(c->attributes, get_tptp_name_attr(), 1);
+    if (!tn)
+      continue;
+    if (jt == DENY_JUST) make_neg_name(parent, sizeof(parent), tn);
+    else                 quote_tptp_name(parent, sizeof(parent), tn);
+    g = find_sk_group(parent);
+    if (g == NULL) {
+      g = (struct sk_group *) safe_malloc(sizeof(struct sk_group));
+      strncpy(g->parent, parent, sizeof(g->parent)-1);
+      g->parent[sizeof(g->parent)-1] = '\0';
+      make_sk_name(g->skname, sizeof(g->skname), tn, jt == DENY_JUST);
+      g->clauses = NULL;
+      g->skolemizing = FALSE;
+      g->emitted = FALSE;
+      Sk_groups = plist_append(Sk_groups, g);
+    }
+    g->clauses = plist_append(g->clauses, c);
+    if (clause_has_skolem_function(c))
+      g->skolemizing = TRUE;
+  }
+}
+
+/* Emit the skolemize node for group g (the conjunction of its universally
+   closed clauses), once. */
+static
+void emit_skolemize_node(FILE *fp, struct sk_group *g)
+{
+  Plist p;
+  BOOL first = TRUE;
+  Ilist skolems = NULL, defs = NULL;
+  if (g->emitted)
+    return;
+  fprintf(fp, "fof(%s, plain, ", g->skname);
+  for (p = g->clauses; p; p = p->next) {
+    Topform c = (Topform) p->v;
+    Formula f = universal_closure(clause_to_formula(c));
+    Term ct;
+    if (!first) fprintf(fp, " & ");
+    fprintf(fp, "(");
+    fwrite_formula_tptp(fp, f);
+    fprintf(fp, ")");
+    zap_formula(f);
+    first = FALSE;
+    ct = topform_to_term_without_attributes(c);
+    if (ct) { collect_fresh_symbols(ct, &skolems, &defs); zap_term(ct); }
+  }
+  /* Rule name "clausify" (not "skolemize"): this one step collapses NNF +
+     Skolemization + CNF, so it is a clausification, and "skolemize" would
+     trigger a strict structural skolemize check that the CNF-conjunction
+     body does not match.  As an esa clausify it is verified by the backward
+     direction (conjunction entails the existential parent). */
+  fprintf(fp, ", inference(clausify, [status(esa)");
+  fprint_new_symbols(fp, "skolem", skolems);
+  fprint_new_symbols(fp, "definition", defs);
+  fprintf(fp, "], [%s])).\n", g->parent);
+  zap_ilist(skolems);
+  zap_ilist(defs);
+  g->emitted = TRUE;
+}
+
 /*************
  *
  *   tptp_problem_file()
@@ -1478,6 +1668,14 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
       fprintf(fp, ", introduced(assumption,[])).\n");
   }
   else if (primary_type == CLAUSIFY_JUST) {
+    /* If this clause is part of a Skolemizing group, its skolemize node was
+       already emitted; print it as a split_conjunct (thm) of that node. */
+    struct sk_group *skg = skolem_group_of(c);
+    if (skg != NULL) {
+      fprintf(fp, ", inference(split_conjunct, [status(thm)], [%s])).\n",
+              skg->skname);
+      return;
+    }
     /* FOF-to-CNF: status(thm) when the clause is a logical consequence of
        its parent formula, status(esa) when it carries a Skolem witness. */
     const char *st = clause_has_skolem(c) ? "esa" : "thm";
@@ -1501,6 +1699,12 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
        conjecture-as-parent / body-mismatch guards; citing the negation
        node keeps this a normal clausify step.  status(thm) unless it
        introduces a Skolem witness. */
+    struct sk_group *skg = skolem_group_of(c);
+    if (skg != NULL) {
+      fprintf(fp, ", inference(split_conjunct, [status(thm)], [%s])).\n",
+              skg->skname);
+      return;
+    }
     const char *st = clause_has_skolem(c) ? "esa" : "thm";
     if (tptp_name) {
       char nqname[520];
@@ -1544,6 +1748,7 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
      symbols, so new_symbols() declarations are emitted exactly once. */
   zap_ilist(Declared_fresh_syms);
   Declared_fresh_syms = NULL;
+  reset_sk_groups();
 
   if (Glob.problem_name)
     fprintf(fp, "%% SZS output start CNFRefutation for %s\n", Glob.problem_name);
@@ -1557,6 +1762,10 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
      make compound steps un-verifiable. */
   I3list jmap = NULL;
   Plist expanded = expand_proof(proof, &jmap);
+
+  /* Group clausify/deny clauses by their Skolemizing parent, so each such
+     group is emitted as one skolemize step + split_conjunct steps. */
+  build_sk_groups(expanded);
 
   /* Detect whether the proof contains FOF entries (axioms or conjectures).
      When it does, fprint_clause_tptp emits the full FOF-to-CNF derivation:
@@ -1575,6 +1784,14 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
 
   for (p = expanded; p; p = p->next) {
     Topform c = (Topform) p->v;
+    /* If c belongs to a Skolemizing group, emit that group's skolemize node
+       (once, in FOF variable style) before the clause; the clause then prints
+       as a split_conjunct of it. */
+    struct sk_group *skg = skolem_group_of(c);
+    if (skg != NULL && !skg->emitted) {
+      set_variable_style(orig_style);
+      emit_skolemize_node(fp, skg);
+    }
     /* An input/goal placeholder whose original formula is still in the ID
        table is printed as an FOF leaf, so it needs FOF (named) variable
        style; genuine CNF clauses use PROLOG_STYLE for uppercase variables. */
@@ -1590,6 +1807,7 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
     fprint_clause_tptp(fp, c, has_fof);
   }
 
+  reset_sk_groups();
   delete_clauses(expanded);
   zap_i3list(jmap);
   set_variable_style(orig_style);
