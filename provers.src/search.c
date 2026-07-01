@@ -1433,25 +1433,21 @@ void build_sk_groups(Plist proof)
 static
 void emit_skolemize_node(FILE *fp, struct sk_group *g)
 {
-  Plist p;
-  BOOL first = TRUE;
+  Plist p, fs = NULL;
+  Formula conj;
   Ilist skolems = NULL, defs = NULL;
   if (g->emitted)
     return;
-  fprintf(fp, "fof(%s, plain, ", g->skname);
   for (p = g->clauses; p; p = p->next) {
     Topform c = (Topform) p->v;
-    Formula f = universal_closure(clause_to_formula(c));
     Term ct;
-    if (!first) fprintf(fp, " & ");
-    fprintf(fp, "(");
-    fwrite_formula_tptp(fp, f);
-    fprintf(fp, ")");
-    zap_formula(f);
-    first = FALSE;
+    fs = plist_append(fs, universal_closure(clause_to_formula(c)));
     ct = topform_to_term_without_attributes(c);
     if (ct) { collect_fresh_symbols(ct, &skolems, &defs); zap_term(ct); }
   }
+  conj = formulas_to_conjunction(fs);
+  fprintf(fp, "fof(%s, plain, ", g->skname);
+  fwrite_formula_tptp(fp, conj);
   /* Rule name "clausify" (not "skolemize"): this one step collapses NNF +
      Skolemization + CNF, so it is a clausification, and "skolemize" would
      trigger a strict structural skolemize check that the CNF-conjunction
@@ -1461,6 +1457,8 @@ void emit_skolemize_node(FILE *fp, struct sk_group *g)
   fprint_new_symbols(fp, "skolem", skolems);
   fprint_new_symbols(fp, "definition", defs);
   fprintf(fp, "], [%s])).\n", g->parent);
+  zap_formula(conj);
+  zap_plist(fs);
   zap_ilist(skolems);
   zap_ilist(defs);
   g->emitted = TRUE;
