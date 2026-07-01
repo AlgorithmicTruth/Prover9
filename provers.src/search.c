@@ -1027,6 +1027,42 @@ void fwrite_term_tptp(FILE *fp, Term t)
  *************/
 
 static
+void fwrite_formula_tptp(FILE *fp, Formula f);   /* forward decl */
+
+/* Flatten a nested same-type disjunction/conjunction while printing, so a
+   left-nested OR/AND tree prints as the canonical flat (a | b | c) rather
+   than ((a | b) | c).  Operands of a different type print via
+   fwrite_formula_tptp, which parenthesizes binary connectives as needed. */
+static
+void fwrite_disj_operands(FILE *fp, Formula f, BOOL *first)
+{
+  if (f->type == OR_FORM) {
+    int i;
+    for (i = 0; i < f->arity; i++)
+      fwrite_disj_operands(fp, f->kids[i], first);
+  }
+  else {
+    if (!*first) fprintf(fp, " | ");
+    *first = FALSE;
+    fwrite_formula_tptp(fp, f);
+  }
+}
+
+static
+void fwrite_conj_operands(FILE *fp, Formula f, BOOL *first)
+{
+  if (f->type == AND_FORM) {
+    int i;
+    for (i = 0; i < f->arity; i++)
+      fwrite_conj_operands(fp, f->kids[i], first);
+  }
+  else {
+    if (!*first) fprintf(fp, " & ");
+    *first = FALSE;
+    fwrite_formula_tptp(fp, f);
+  }
+}
+
 void fwrite_formula_tptp(FILE *fp, Formula f)
 {
   if (f->type == ATOM_FORM) {
@@ -1041,12 +1077,9 @@ void fwrite_formula_tptp(FILE *fp, Formula f)
     if (f->arity == 0)
       fprintf(fp, "$true");
     else {
-      int i;
+      BOOL first = TRUE;
       fprintf(fp, "(");
-      for (i = 0; i < f->arity; i++) {
-        if (i > 0) fprintf(fp, " & ");
-        fwrite_formula_tptp(fp, f->kids[i]);
-      }
+      fwrite_conj_operands(fp, f, &first);
       fprintf(fp, ")");
     }
   }
@@ -1054,12 +1087,9 @@ void fwrite_formula_tptp(FILE *fp, Formula f)
     if (f->arity == 0)
       fprintf(fp, "$false");
     else {
-      int i;
+      BOOL first = TRUE;
       fprintf(fp, "(");
-      for (i = 0; i < f->arity; i++) {
-        if (i > 0) fprintf(fp, " | ");
-        fwrite_formula_tptp(fp, f->kids[i]);
-      }
+      fwrite_disj_operands(fp, f, &first);
       fprintf(fp, ")");
     }
   }
@@ -1085,7 +1115,9 @@ void fwrite_formula_tptp(FILE *fp, Formula f)
     fprintf(fp, ")");
   }
   else if (f->type == ALL_FORM) {
-    /* Collect consecutive universal quantifiers */
+    /* Collect consecutive universal quantifiers.  No parens around the
+       body: a binary connective self-parenthesizes, and an atom or nested
+       quantifier is already a TPTP unitary formula. */
     Formula body = f;
     BOOL first = TRUE;
     fprintf(fp, "! [");
@@ -1095,12 +1127,11 @@ void fwrite_formula_tptp(FILE *fp, Formula f)
       first = FALSE;
       body = body->kids[0];
     }
-    fprintf(fp, "] : (");
+    fprintf(fp, "] : ");
     fwrite_formula_tptp(fp, body);
-    fprintf(fp, ")");
   }
   else if (f->type == EXISTS_FORM) {
-    /* Collect consecutive existential quantifiers */
+    /* Collect consecutive existential quantifiers (see ALL_FORM). */
     Formula body = f;
     BOOL first = TRUE;
     fprintf(fp, "? [");
@@ -1110,9 +1141,8 @@ void fwrite_formula_tptp(FILE *fp, Formula f)
       first = FALSE;
       body = body->kids[0];
     }
-    fprintf(fp, "] : (");
+    fprintf(fp, "] : ");
     fwrite_formula_tptp(fp, body);
-    fprintf(fp, ")");
   }
 }
 
