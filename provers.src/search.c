@@ -1120,11 +1120,14 @@ void fwrite_formula_tptp(FILE *fp, Formula f)
  *
  *   term_has_skolem() / clause_has_skolem()
  *
- *   Whether a term (or clause) contains a Skolem function/constant.
+ *   Whether a term (or clause) contains a symbol introduced by
+ *   clausification: a Skolem function/constant, or a Tseitin-style
+ *   definition predicate (defn_N, from cnf.c introduce_definition).
  *   Used to choose the SZS status of a clausify step: a CNF clause that
- *   is entailed by its FOF parent (no Skolemization) is status(thm); a
- *   clause that carries a Skolem witness is only equisatisfiable with the
- *   parent, so it is status(esa).
+ *   is a logical consequence of its FOF parent (no such fresh symbol) is
+ *   status(thm); a clause that carries a Skolem witness or a definition
+ *   predicate is only equisatisfiable with the parent, so it is
+ *   status(esa).
  *
  *************/
 
@@ -1136,6 +1139,14 @@ BOOL term_has_skolem(Term t)
     return FALSE;
   if (is_skolem(SYMNUM(t)))
     return TRUE;
+  /* Definition predicates introduced by Tseitin clausification (defn_N)
+     are fresh symbols too, so their clauses are equisatisfiable (esa),
+     not entailed (thm). */
+  {
+    char *nm = sn_to_str(SYMNUM(t));
+    if (nm != NULL && strncmp(nm, "defn_", 5) == 0)
+      return TRUE;
+  }
   for (i = 0; i < ARITY(t); i++)
     if (term_has_skolem(ARG(t,i)))
       return TRUE;
@@ -1173,6 +1184,31 @@ const char *tptp_problem_file(void)
 
 /*************
  *
+ *   make_neg_name()
+ *
+ *   Build the assume_negation node name "<tptp_name>_neg" (quoted if the
+ *   name contains TPTP-special characters), into buf.
+ *
+ *************/
+
+static
+void make_neg_name(char *buf, size_t bufsz, const char *tptp_name)
+{
+  BOOL needs_quote = FALSE;
+  const char *p;
+  for (p = tptp_name; *p; p++)
+    if (*p == '(' || *p == ')' || *p == ',' || *p == ' ') {
+      needs_quote = TRUE;
+      break;
+    }
+  if (needs_quote)
+    snprintf(buf, bufsz, "'%s_neg'", tptp_name);
+  else
+    snprintf(buf, bufsz, "%s_neg", tptp_name);
+}
+
+/*************
+ *
  *   fprint_tptp_parents()
  *
  *   Print the comma-separated c_<id> parent list of a justification.
@@ -1200,7 +1236,7 @@ void fprint_tptp_parents(FILE *fp, Just just)
  *
  *   Print one derivation node in TSTP format.  FOF input formulas (axioms
  *   and the conjecture) are emitted as named leaf nodes citing the problem
- *   file, so the clausify / assume_negation children have real parents and
+ *   file, so the clausify children have real parents and
  *   GDV can verify the full FOF-to-CNF derivation.  Clausify steps carry
  *   status(thm) when the clause is entailed by its parent formula, and
  *   status(esa) only when the clause introduces a Skolem symbol.
@@ -1238,16 +1274,33 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
   /* Input FOF formula leaf.  Prover9 clausifies the input and clears the
      formula on the proof's placeholder node, but the original formula is
      still reachable from the ID table.  Emit it as a named FOF leaf citing
-     the problem file, so that its clausify / assume_negation children have
+     the problem file, so that its clausify children have
      a real parent and GDV can verify the whole FOF-to-CNF derivation. */
   if (tptp_name &&
       (primary_type == INPUT_JUST || primary_type == GOAL_JUST)) {
     Topform orig = find_clause_by_id((int) c->id);
     if (orig && orig->formula) {
-      const char *role = (primary_type == GOAL_JUST) ? "conjecture" : "axiom";
-      fprintf(fp, "fof(%s, %s, ", qname, role);
-      fwrite_formula_tptp(fp, orig->formula);
-      fprintf(fp, ", file('%s',%s)).\n", tptp_problem_file(), qname);
+      if (primary_type == GOAL_JUST) {
+        /* Conjecture leaf, followed by its assume_negation node.  The
+           negated-conjecture clauses cite <name>_neg (see DENY_JUST below),
+           not the conjecture, so the conjecture is consumed only through
+           assume_negation and the negation node carries the literal
+           ~(conjecture) -- what GDV and proofcheck require. */
+        char nqname[520];
+        make_neg_name(nqname, sizeof(nqname), tptp_name);
+        fprintf(fp, "fof(%s, conjecture, ", qname);
+        fwrite_formula_tptp(fp, orig->formula);
+        fprintf(fp, ", file('%s',%s)).\n", tptp_problem_file(), qname);
+        fprintf(fp, "fof(%s, negated_conjecture, ~(", nqname);
+        fwrite_formula_tptp(fp, orig->formula);
+        fprintf(fp, "), inference(assume_negation, [status(cth)], [%s])).\n",
+                qname);
+      }
+      else {
+        fprintf(fp, "fof(%s, axiom, ", qname);
+        fwrite_formula_tptp(fp, orig->formula);
+        fprintf(fp, ", file('%s',%s)).\n", tptp_problem_file(), qname);
+      }
       return;
     }
   }
@@ -1324,12 +1377,20 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
     }
   }
   else if (primary_type == DENY_JUST) {
-    /* Negated conjecture: assume the negation of the conjecture. */
-    if (tptp_name)
-      fprintf(fp, ", inference(assume_negation, [status(cth)], [%s])).\n",
-              qname);
+    /* Negated conjecture clause: the clausification (possibly Skolemized)
+       of the assume_negation node <conjecture>_neg, NOT of the conjecture
+       itself.  Citing the conjecture directly would trip a checker's
+       conjecture-as-parent / body-mismatch guards; citing the negation
+       node keeps this a normal clausify step.  status(thm) unless it
+       introduces a Skolem witness. */
+    const char *st = clause_has_skolem(c) ? "esa" : "thm";
+    if (tptp_name) {
+      char nqname[520];
+      make_neg_name(nqname, sizeof(nqname), tptp_name);
+      fprintf(fp, ", inference(clausify, [status(%s)], [%s])).\n", st, nqname);
+    }
     else {
-      fprintf(fp, ", inference(assume_negation, [status(cth)], [");
+      fprintf(fp, ", inference(clausify, [status(%s)], [", st);
       fprint_tptp_parents(fp, just);
       fprintf(fp, "])).\n");
     }
@@ -1373,7 +1434,7 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
   /* Detect whether the proof contains FOF entries (axioms or conjectures).
      When it does, fprint_clause_tptp emits the full FOF-to-CNF derivation:
      the FOF input formulas appear as named leaf nodes citing the problem
-     file, and their clausify / assume_negation children cite them with the
+     file, and their clausify children cite them with the
      correct SZS status (thm, or esa for Skolemization).  This gives GDV a
      complete, verifiable derivation rather than dangling parent names. */
   BOOL has_fof = FALSE;
