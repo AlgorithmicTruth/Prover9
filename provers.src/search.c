@@ -892,8 +892,9 @@ char *szs_status_string(int code)
  *
  *   fprint_clause_tptp()
  *
- *   Print one clause in TSTP annotated formula format.
- *   Format:  cnf(c_ID, role, (literals), source).
+ *   Print one derivation node in TSTP annotated-formula format: an FOF
+ *   input formula as an fof(name, role, formula, file(...)) leaf, or a
+ *   clause as cnf(c_ID, role, literals, source/inference).
  *
  *************/
 
@@ -1115,47 +1116,139 @@ void fwrite_formula_tptp(FILE *fp, Formula f)
   }
 }
 
+/*************
+ *
+ *   term_has_skolem() / clause_has_skolem()
+ *
+ *   Whether a term (or clause) contains a Skolem function/constant.
+ *   Used to choose the SZS status of a clausify step: a CNF clause that
+ *   is entailed by its FOF parent (no Skolemization) is status(thm); a
+ *   clause that carries a Skolem witness is only equisatisfiable with the
+ *   parent, so it is status(esa).
+ *
+ *************/
+
 static
-void fprint_clause_tptp(FILE *fp, Topform c, BOOL flatten_fof)
+BOOL term_has_skolem(Term t)
+{
+  int i;
+  if (VARIABLE(t))
+    return FALSE;
+  if (is_skolem(SYMNUM(t)))
+    return TRUE;
+  for (i = 0; i < ARITY(t); i++)
+    if (term_has_skolem(ARG(t,i)))
+      return TRUE;
+  return FALSE;
+}
+
+static
+BOOL clause_has_skolem(Topform c)
+{
+  Term t = topform_to_term_without_attributes(c);
+  BOOL sk = (t != NULL) ? term_has_skolem(t) : FALSE;
+  if (t)
+    zap_term(t);
+  return sk;
+}
+
+/*************
+ *
+ *   tptp_problem_file()
+ *
+ *   Problem file name for file() source annotations, e.g. "PUZ001+1.p".
+ *
+ *************/
+
+static
+const char *tptp_problem_file(void)
+{
+  static char buf[512];
+  if (Glob.problem_name) {
+    snprintf(buf, sizeof(buf), "%s.p", Glob.problem_name);
+    return buf;
+  }
+  return "unknown.p";
+}
+
+/*************
+ *
+ *   fprint_tptp_parents()
+ *
+ *   Print the comma-separated c_<id> parent list of a justification.
+ *
+ *************/
+
+static
+void fprint_tptp_parents(FILE *fp, Just just)
+{
+  Ilist parents = get_parents(just, TRUE);
+  Ilist p;
+  BOOL first = TRUE;
+  for (p = parents; p; p = p->next) {
+    if (!first)
+      fprintf(fp, ", ");
+    fprintf(fp, "c_%d", p->i);
+    first = FALSE;
+  }
+  zap_ilist(parents);
+}
+
+/*************
+ *
+ *   fprint_clause_tptp()
+ *
+ *   Print one derivation node in TSTP format.  FOF input formulas (axioms
+ *   and the conjecture) are emitted as named leaf nodes citing the problem
+ *   file, so the clausify / assume_negation children have real parents and
+ *   GDV can verify the full FOF-to-CNF derivation.  Clausify steps carry
+ *   status(thm) when the clause is entailed by its parent formula, and
+ *   status(esa) only when the clause introduces a Skolem symbol.
+ *
+ *************/
+
+static
+void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
 {
   Just just = c->justification;
   Just_type primary_type = just ? just->type : UNKNOWN_JUST;
   BOOL is_fof = c->is_formula;
+  int tna = get_tptp_name_attr();
+  char *tptp_name = get_string_attribute(c->attributes, tna, 1);
+  char qname[512];
 
-  /* When flatten_fof is set, FOF axioms and conjectures are omitted
-     from the proof and their CNF children become leaf nodes.  This
-     avoids GDV equisatisfiability failures from Skolemization +
-     multi-clause clausification / assume_negation steps. */
+  (void) full_fof;   /* the full FOF derivation is always emitted now */
 
-  if (flatten_fof && is_fof &&
-      (primary_type == INPUT_JUST || primary_type == GOAL_JUST))
-    return;  /* skip FOF entries - their CNF children become leaves */
+  qname[0] = '\0';
 
-  /* If this clause was clausified from a skipped FOF axiom, emit it
-     as an axiom leaf instead of an inference step. */
-  BOOL promote_to_axiom = FALSE;
-  if (flatten_fof && primary_type == CLAUSIFY_JUST) {
-    Ilist parents = get_parents(just, FALSE);  /* primary parent only */
-    if (parents) {
-      Topform parent = find_clause_by_id(parents->i);
-      if (parent && parent->is_formula &&
-	  parent->justification && parent->justification->type == INPUT_JUST)
-	promote_to_axiom = TRUE;
-      zap_ilist(parents);
+  /* TPTP names containing parens, commas, or spaces must be quoted. */
+  if (tptp_name) {
+    BOOL needs_quote = FALSE;
+    char *p;
+    for (p = tptp_name; *p && !needs_quote; p++) {
+      if (*p == '(' || *p == ')' || *p == ',' || *p == ' ')
+        needs_quote = TRUE;
     }
+    if (needs_quote)
+      snprintf(qname, sizeof(qname), "'%s'", tptp_name);
+    else
+      snprintf(qname, sizeof(qname), "%s", tptp_name);
   }
 
-  /* If this clause is a denial of a skipped FOF conjecture, emit it
-     as a negated_conjecture leaf instead of an inference step. */
-  BOOL promote_to_neg_conj = FALSE;
-  if (flatten_fof && primary_type == DENY_JUST) {
-    Ilist parents = get_parents(just, FALSE);
-    if (parents) {
-      Topform parent = find_clause_by_id(parents->i);
-      if (parent && parent->is_formula &&
-	  parent->justification && parent->justification->type == GOAL_JUST)
-	promote_to_neg_conj = TRUE;
-      zap_ilist(parents);
+  /* Input FOF formula leaf.  Prover9 clausifies the input and clears the
+     formula on the proof's placeholder node, but the original formula is
+     still reachable from the ID table.  Emit it as a named FOF leaf citing
+     the problem file, so that its clausify / assume_negation children have
+     a real parent and GDV can verify the whole FOF-to-CNF derivation. */
+  if (tptp_name &&
+      (primary_type == INPUT_JUST || primary_type == GOAL_JUST)) {
+    Topform orig = find_clause_by_id((int) c->id);
+    if (orig && orig->formula) {
+      const char *role = (primary_type == GOAL_JUST) ? "conjecture" : "axiom";
+      fprintf(fp, "fof(%s, %s, ", qname, role);
+      fwrite_formula_tptp(fp, orig->formula);
+      fprintf(fp, ", file('%s',%s)).\n", tptp_problem_file(), qname);
+      return;
     }
   }
 
@@ -1166,23 +1259,30 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL flatten_fof)
       (primary_type == INPUT_JUST || primary_type == GOAL_JUST))
     return;
 
-  /* Print: fof/cnf(c_ID, role, */
-  fprintf(fp, "%s(c_%llu, ", is_fof ? "fof" : "cnf", c->id);
+  /* A residual FOF formula node still carrying its formula is emitted as a
+     named leaf too (the placeholder path above normally handles inputs). */
+  BOOL fof_leaf = is_fof && tptp_name != NULL &&
+                  (primary_type == INPUT_JUST || primary_type == GOAL_JUST);
 
-  /* Determine role.  Check negated_conjecture FIRST so that goal-derived
-     clauses (including those whose justification was changed by predicate
-     elimination) get the correct role. */
-  if (primary_type == GOAL_JUST || primary_type == DENY_JUST ||
-      promote_to_neg_conj || c->goal_derived)
+  /* Print: fof(<name>| c_ID, role, */
+  if (fof_leaf)
+    fprintf(fp, "fof(%s, ", qname);
+  else
+    fprintf(fp, "%s(c_%llu, ", is_fof ? "fof" : "cnf", c->id);
+
+  /* Determine role.  An FOF conjecture keeps role conjecture; its negated
+     CNF form and any goal-derived clause is negated_conjecture. */
+  if (is_fof && primary_type == GOAL_JUST)
+    fprintf(fp, "conjecture, ");
+  else if (primary_type == DENY_JUST || c->goal_derived)
     fprintf(fp, "negated_conjecture, ");
-  else if (primary_type == INPUT_JUST || promote_to_axiom)
+  else if (primary_type == INPUT_JUST)
     fprintf(fp, "axiom, ");
   else
     fprintf(fp, "plain, ");
 
-  /* Print the formula/clause body */
+  /* Print the formula/clause body. */
   if (is_fof && c->formula != NULL) {
-    /* FOF: use the recursive TPTP formula printer for proper syntax */
     fwrite_formula_tptp(fp, c->formula);
   }
   else {
@@ -1197,71 +1297,49 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL flatten_fof)
       zap_term(t);
   }
 
-  /* Print the source/inference annotation.
-     If the clause carries a tptp_name attribute (from TPTP input parsing),
-     emit file() or inference(clausify) to preserve provenance. */
-  {
-    int tna = get_tptp_name_attr();
-    char *tptp_name = get_string_attribute(c->attributes, tna, 1);
-
-    /* TPTP names containing parens, commas, or spaces must be quoted.
-       E.g., 'ass(cond(61, 0), 0)' stays quoted. */
-    char qname[512];
-    BOOL needs_quote = FALSE;
-    if (tptp_name) {
-      char *p;
-      for (p = tptp_name; *p && !needs_quote; p++) {
-        if (*p == '(' || *p == ')' || *p == ',' || *p == ' ')
-          needs_quote = TRUE;
-      }
-      if (needs_quote)
-        snprintf(qname, sizeof(qname), "'%s'", tptp_name);
-      else
-        snprintf(qname, sizeof(qname), "%s", tptp_name);
-    }
-
-    if (tptp_name && (primary_type == INPUT_JUST ||
-                       primary_type == GOAL_JUST)) {
-      fprintf(fp, ", file('%s',%s)).\n", "tptp_input", qname);
-    }
-    else if (tptp_name && (promote_to_axiom || promote_to_neg_conj)) {
-      fprintf(fp, ", file('%s',%s)).\n", "tptp_input", qname);
-    }
-    else if (tptp_name && (primary_type == CLAUSIFY_JUST ||
-                           primary_type == DENY_JUST)) {
-      fprintf(fp, ", inference(clausify, [status(esa)], [%s])).\n", qname);
-    }
-    else if (primary_type == INPUT_JUST || promote_to_axiom ||
-             promote_to_neg_conj) {
-      fprintf(fp, ", introduced(assumption,[])).\n");
-    }
-    else if (primary_type == GOAL_JUST) {
+  /* Print the source / inference annotation. */
+  if (fof_leaf) {
+    /* Input formula leaf: cite the problem file. */
+    fprintf(fp, ", file('%s',%s)).\n", tptp_problem_file(), qname);
+  }
+  else if (primary_type == INPUT_JUST || primary_type == GOAL_JUST) {
+    /* CNF input clause (no clausification): a leaf citing the problem. */
+    if (tptp_name)
+      fprintf(fp, ", file('%s',%s)).\n", tptp_problem_file(), qname);
+    else if (primary_type == GOAL_JUST)
       fprintf(fp, ", introduced(conjecture,[])).\n");
-    }
+    else
+      fprintf(fp, ", introduced(assumption,[])).\n");
+  }
+  else if (primary_type == CLAUSIFY_JUST) {
+    /* FOF-to-CNF: status(thm) when the clause is a logical consequence of
+       its parent formula, status(esa) when it carries a Skolem witness. */
+    const char *st = clause_has_skolem(c) ? "esa" : "thm";
+    if (tptp_name)
+      fprintf(fp, ", inference(clausify, [status(%s)], [%s])).\n", st, qname);
     else {
-    /* Inference step: inference(rule, [status(thm)], [parents]) */
+      fprintf(fp, ", inference(clausify, [status(%s)], [", st);
+      fprint_tptp_parents(fp, just);
+      fprintf(fp, "])).\n");
+    }
+  }
+  else if (primary_type == DENY_JUST) {
+    /* Negated conjecture: assume the negation of the conjecture. */
+    if (tptp_name)
+      fprintf(fp, ", inference(assume_negation, [status(cth)], [%s])).\n",
+              qname);
+    else {
+      fprintf(fp, ", inference(assume_negation, [status(cth)], [");
+      fprint_tptp_parents(fp, just);
+      fprintf(fp, "])).\n");
+    }
+  }
+  else {
+    /* Ordinary inference: inference(rule, [status(thm)], [parents]) */
     const char *rule = tptp_rule_name(primary_type);
-
     fprintf(fp, ",\n    inference(%s, [status(thm)], [", rule);
-
-    /* Collect ALL parent IDs (primary + secondary justification nodes).
-       Filter out the clause's own ID - some justification types
-       (e.g., xx/back_rewrite) reference the clause itself. */
-    {
-      Ilist parents = get_parents(just, TRUE);
-      Ilist p;
-      BOOL first = TRUE;
-      for (p = parents; p; p = p->next) {
-        if (!first)
-          fprintf(fp, ", ");
-        fprintf(fp, "c_%d", p->i);
-        first = FALSE;
-      }
-      zap_ilist(parents);
-    }
-
+    fprint_tptp_parents(fp, just);
     fprintf(fp, "])).\n");
-    }
   }
 }  /* fprint_clause_tptp */
 
@@ -1292,11 +1370,12 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
   I3list jmap = NULL;
   Plist expanded = expand_proof(proof, &jmap);
 
-  /* Check if proof contains FOF entries (axioms or conjectures).
-     If so, flatten the FOF layer: skip FOF entries and promote their
-     CNF children (clausify, deny) to leaf nodes.  This avoids GDV
-     verification failures from Skolemization + multi-clause
-     clausification / assume_negation steps. */
+  /* Detect whether the proof contains FOF entries (axioms or conjectures).
+     When it does, fprint_clause_tptp emits the full FOF-to-CNF derivation:
+     the FOF input formulas appear as named leaf nodes citing the problem
+     file, and their clausify / assume_negation children cite them with the
+     correct SZS status (thm, or esa for Skolemization).  This gives GDV a
+     complete, verifiable derivation rather than dangling parent names. */
   BOOL has_fof = FALSE;
   for (p = expanded; p && !has_fof; p = p->next) {
     Topform c = (Topform) p->v;
@@ -1308,13 +1387,18 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
 
   for (p = expanded; p; p = p->next) {
     Topform c = (Topform) p->v;
-    if (c->is_formula) {
+    /* An input/goal placeholder whose original formula is still in the ID
+       table is printed as an FOF leaf, so it needs FOF (named) variable
+       style; genuine CNF clauses use PROLOG_STYLE for uppercase variables. */
+    Topform orig = find_clause_by_id((int) c->id);
+    BOOL fof_out = c->is_formula ||
+                   (orig != NULL && orig->formula != NULL && c->justification &&
+                    (c->justification->type == INPUT_JUST ||
+                     c->justification->type == GOAL_JUST));
+    if (fof_out)
       set_variable_style(orig_style);
-    }
-    else {
-      /* CNF: use PROLOG_STYLE for uppercase TPTP variables. */
+    else
       set_variable_style(PROLOG_STYLE);
-    }
     fprint_clause_tptp(fp, c, has_fof);
   }
 
