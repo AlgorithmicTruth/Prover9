@@ -1165,6 +1165,89 @@ BOOL clause_has_skolem(Topform c)
 
 /*************
  *
+ *   collect_fresh_symbols() / fprint_new_symbols() / fprint_clausify_status()
+ *
+ *   Support for TSTP new_symbols() annotations on esa clausify steps, so a
+ *   derivation checker (e.g. GDV) can identify the freshly-introduced
+ *   Skolem functions and Tseitin definition predicates.  Each fresh symbol
+ *   is declared exactly once, at its first appearance in the proof, so it
+ *   is not mistaken for a Skolem/definition reuse.
+ *
+ *************/
+
+/* Symbols already declared via new_symbols earlier in this proof. */
+static Ilist Declared_fresh_syms = NULL;
+
+static
+void collect_fresh_symbols(Term t, Ilist *skolems, Ilist *defs)
+{
+  int i, sn;
+  if (VARIABLE(t))
+    return;
+  sn = SYMNUM(t);
+  if (is_skolem(sn)) {
+    if (!ilist_member(*skolems, sn))
+      *skolems = ilist_append(*skolems, sn);
+  }
+  else {
+    char *nm = sn_to_str(sn);
+    if (nm != NULL && strncmp(nm, "defn_", 5) == 0 && !ilist_member(*defs, sn))
+      *defs = ilist_append(*defs, sn);
+  }
+  for (i = 0; i < ARITY(t); i++)
+    collect_fresh_symbols(ARG(t,i), skolems, defs);
+}
+
+/* Print new_symbols(kind, [syms not yet declared]) if any, and record them
+   as declared.  Nothing is printed if every symbol was already declared. */
+static
+void fprint_new_symbols(FILE *fp, const char *kind, Ilist syms)
+{
+  Ilist p;
+  BOOL any = FALSE;
+  for (p = syms; p; p = p->next)
+    if (!ilist_member(Declared_fresh_syms, p->i)) { any = TRUE; break; }
+  if (!any)
+    return;
+  fprintf(fp, ", new_symbols(%s, [", kind);
+  {
+    BOOL first = TRUE;
+    for (p = syms; p; p = p->next) {
+      if (ilist_member(Declared_fresh_syms, p->i))
+        continue;
+      if (!first)
+        fprintf(fp, ",");
+      fprintf(fp, "%s", sn_to_str(p->i));
+      Declared_fresh_syms = ilist_append(Declared_fresh_syms, p->i);
+      first = FALSE;
+    }
+  }
+  fprintf(fp, "])");
+}
+
+/* Print "[status(st)" plus, for esa steps, new_symbols() records for the
+   clause's not-yet-declared fresh symbols, then "]". */
+static
+void fprint_clausify_status(FILE *fp, Topform c, const char *st)
+{
+  fprintf(fp, "[status(%s)", st);
+  if (strcmp(st, "esa") == 0) {
+    Term t = topform_to_term_without_attributes(c);
+    Ilist skolems = NULL, defs = NULL;
+    if (t != NULL) {
+      collect_fresh_symbols(t, &skolems, &defs);
+      zap_term(t);
+    }
+    fprint_new_symbols(fp, "skolem", skolems);
+    fprint_new_symbols(fp, "definition", defs);
+    zap_ilist(skolems);
+    zap_ilist(defs);
+  }
+  fprintf(fp, "]");
+}
+
+/*************
+ *
  *   tptp_problem_file()
  *
  *   Problem file name for file() source annotations, e.g. "PUZ001+1.p".
@@ -1368,10 +1451,15 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
     /* FOF-to-CNF: status(thm) when the clause is a logical consequence of
        its parent formula, status(esa) when it carries a Skolem witness. */
     const char *st = clause_has_skolem(c) ? "esa" : "thm";
-    if (tptp_name)
-      fprintf(fp, ", inference(clausify, [status(%s)], [%s])).\n", st, qname);
+    if (tptp_name) {
+      fprintf(fp, ", inference(clausify, ");
+      fprint_clausify_status(fp, c, st);
+      fprintf(fp, ", [%s])).\n", qname);
+    }
     else {
-      fprintf(fp, ", inference(clausify, [status(%s)], [", st);
+      fprintf(fp, ", inference(clausify, ");
+      fprint_clausify_status(fp, c, st);
+      fprintf(fp, ", [");
       fprint_tptp_parents(fp, just);
       fprintf(fp, "])).\n");
     }
@@ -1387,10 +1475,14 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
     if (tptp_name) {
       char nqname[520];
       make_neg_name(nqname, sizeof(nqname), tptp_name);
-      fprintf(fp, ", inference(clausify, [status(%s)], [%s])).\n", st, nqname);
+      fprintf(fp, ", inference(clausify, ");
+      fprint_clausify_status(fp, c, st);
+      fprintf(fp, ", [%s])).\n", nqname);
     }
     else {
-      fprintf(fp, ", inference(clausify, [status(%s)], [", st);
+      fprintf(fp, ", inference(clausify, ");
+      fprint_clausify_status(fp, c, st);
+      fprintf(fp, ", [");
       fprint_tptp_parents(fp, just);
       fprintf(fp, "])).\n");
     }
@@ -1417,6 +1509,11 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
 {
   Plist p;
   Variable_style orig_style = variable_style();
+
+  /* Reset the per-proof set of already-declared fresh (Skolem/definition)
+     symbols, so new_symbols() declarations are emitted exactly once. */
+  zap_ilist(Declared_fresh_syms);
+  Declared_fresh_syms = NULL;
 
   if (Glob.problem_name)
     fprintf(fp, "%% SZS output start CNFRefutation for %s\n", Glob.problem_name);
