@@ -998,6 +998,74 @@ void check_formula_attributes(Formula f)
 
 /*************
  *
+ *   Full clausification registry.
+ *
+ *   A proof contains only the clauses it uses, which may be a proper
+ *   subset of an input formula's clausification.  TSTP proof output
+ *   regroups a Skolemizing formula's clauses under one esa node whose
+ *   body must be equisatisfiable with the formula, and a proper subset
+ *   need not entail the formula.  So record the complete clausification
+ *   of each input formula here, at clausify time, keyed by the formula's
+ *   clause ID.  Recording is disabled around auxiliary input (hints),
+ *   which never appears as a clausify parent in a proof.
+ *
+ *************/
+
+struct full_cnf {
+  int parent_id;
+  Formula conj;   /* conjunction of the universally closed clauses */
+};
+
+static Plist Full_cnf_records = NULL;
+static BOOL Record_full_cnf = TRUE;
+
+/* DOCUMENTATION
+Enable or disable recording of full clausifications (default enabled).
+*/
+
+/* PUBLIC */
+void set_record_full_clausifications(BOOL flag)
+{
+  Record_full_cnf = flag;
+}  /* set_record_full_clausifications */
+
+/* DOCUMENTATION
+Return the recorded full clausification (a conjunction of universally
+closed clauses) of the input formula with the given clause ID, or NULL.
+The returned formula is owned by the registry and must not be zapped.
+*/
+
+/* PUBLIC */
+Formula find_full_clausification(int parent_id)
+{
+  Plist p;
+  for (p = Full_cnf_records; p; p = p->next) {
+    struct full_cnf *r = (struct full_cnf *) p->v;
+    if (r->parent_id == parent_id)
+      return r->conj;
+  }
+  return NULL;
+}  /* find_full_clausification */
+
+static
+void record_full_clausification(Topform tf, Plist clauses)
+{
+  Plist fs = NULL;
+  Plist p;
+  struct full_cnf *r;
+  if (!Record_full_cnf || clauses == NULL)
+    return;
+  for (p = clauses; p; p = p->next)
+    fs = plist_append(fs, universal_closure(clause_to_formula(p->v)));
+  r = (struct full_cnf *) safe_malloc(sizeof(struct full_cnf));
+  r->parent_id = tf->id;
+  r->conj = formulas_to_conjunction(fs);
+  zap_plist(fs);
+  Full_cnf_records = plist_append(Full_cnf_records, r);
+}  /* record_full_clausification */
+
+/*************
+ *
  *   process_input_formulas()
  *
  *************/
@@ -1046,6 +1114,7 @@ Plist process_input_formulas(Plist formulas, BOOL echo)
 		      " (exponential CNF blowup)");
 	/* Otherwise the formula simplified to TRUE (0 clauses) -- skip it. */
       }
+      record_full_clausification(tf, clauses);
       for (p = clauses; p; p = p->next) {
 	Topform c = p->v;
 	c->attributes = copy_attributes(tf->attributes);
@@ -1149,6 +1218,7 @@ Plist process_goal_formulas(Plist formulas, BOOL echo)
       /* Otherwise the formula simplified to TRUE (0 clauses) -- skip it. */
     }
     assign_clause_id(tf);
+    record_full_clausification(tf, clauses);
     for (q = clauses; q; q = q->next) {
       Topform c = q->v;
       c->attributes = copy_attributes(tf->attributes);

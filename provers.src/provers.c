@@ -1499,10 +1499,14 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
       {
         /* Hints are auxiliary data, not the logical theory.  Temporarily
            disable the CNF clause limit so complex hint formulas don't
-           trigger the blowup guard meant for the main input. */
+           trigger the blowup guard meant for the main input, and skip
+           full-clausification recording (hints never appear as clausify
+           parents in a proof). */
         int saved_limit = cnf_clause_limit();
         set_cnf_clause_limit(0);
+        set_record_full_clausifications(FALSE);
         pi->hints  = process_input_formulas(pi->hints, echo_clausify);
+        set_record_full_clausifications(TRUE);
         set_cnf_clause_limit(saved_limit);
       }
 #ifdef DEBUG

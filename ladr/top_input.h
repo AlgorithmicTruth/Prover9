@@ -74,6 +74,10 @@ Plist process_demod_formulas(Plist formulas, BOOL echo);
 
 Plist process_goal_formulas(Plist formulas, BOOL echo);
 
+void set_record_full_clausifications(BOOL flag);
+
+Formula find_full_clausification(int parent_id);
+
 Term read_commands(FILE *fin, FILE *fout, BOOL echo, int unknown_action);
 
 Plist embed_formulas_in_topforms(Plist formulas, BOOL assumption);

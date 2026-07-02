@@ -1296,6 +1296,7 @@ static void make_neg_name(char *buf, size_t bufsz, const char *tptp_name);
 struct sk_group {
   char parent[520];   /* citation the skolemize node uses (leaf or _neg node) */
   char skname[540];   /* name of the skolemize node */
+  int parent_id;      /* clause ID of the input formula (justification u.id) */
   Plist clauses;      /* Topforms sharing this parent, in proof order */
   BOOL skolemizing;   /* TRUE if some clause introduces a Skolem function */
   BOOL emitted;       /* skolemize node already printed */
@@ -1417,6 +1418,7 @@ void build_sk_groups(Plist proof)
       strncpy(g->parent, parent, sizeof(g->parent)-1);
       g->parent[sizeof(g->parent)-1] = '\0';
       make_sk_name(g->skname, sizeof(g->skname), tn, jt == DENY_JUST);
+      g->parent_id = c->justification->u.id;
       g->clauses = NULL;
       g->skolemizing = FALSE;
       g->emitted = FALSE;
@@ -1428,26 +1430,46 @@ void build_sk_groups(Plist proof)
   }
 }
 
-/* Emit the skolemize node for group g (the conjunction of its universally
-   closed clauses), once. */
+/* Collect fresh (Skolem/definition) symbols from a formula tree. */
+static
+void collect_fresh_symbols_formula(Formula f, Ilist *skolems, Ilist *defs)
+{
+  if (f == NULL)
+    return;
+  if (f->type == ATOM_FORM)
+    collect_fresh_symbols(f->atom, skolems, defs);
+  else {
+    int i;
+    for (i = 0; i < f->arity; i++)
+      collect_fresh_symbols_formula(f->kids[i], skolems, defs);
+  }
+}
+
+/* Emit the skolemize node for group g, once.  The body is the input
+   formula's COMPLETE clausification (recorded at clausify time), so that
+   the conjunction entails the parent even when the proof uses only some
+   of the clauses; the used-clause conjunction is a fallback. */
 static
 void emit_skolemize_node(FILE *fp, struct sk_group *g)
 {
   Plist p, fs = NULL;
-  Formula conj;
+  Formula conj = NULL;   /* built (owned) fallback conjunction */
+  Formula body;
   Ilist skolems = NULL, defs = NULL;
   if (g->emitted)
     return;
-  for (p = g->clauses; p; p = p->next) {
-    Topform c = (Topform) p->v;
-    Term ct;
-    fs = plist_append(fs, universal_closure(clause_to_formula(c)));
-    ct = topform_to_term_without_attributes(c);
-    if (ct) { collect_fresh_symbols(ct, &skolems, &defs); zap_term(ct); }
+  body = find_full_clausification(g->parent_id);
+  if (body == NULL) {
+    for (p = g->clauses; p; p = p->next) {
+      Topform c = (Topform) p->v;
+      fs = plist_append(fs, universal_closure(clause_to_formula(c)));
+    }
+    conj = formulas_to_conjunction(fs);
+    body = conj;
   }
-  conj = formulas_to_conjunction(fs);
+  collect_fresh_symbols_formula(body, &skolems, &defs);
   fprintf(fp, "fof(%s, plain, ", g->skname);
-  fwrite_formula_tptp(fp, conj);
+  fwrite_formula_tptp(fp, body);
   /* Rule name "clausify" (not "skolemize"): this one step collapses NNF +
      Skolemization + CNF, so it is a clausification, and "skolemize" would
      trigger a strict structural skolemize check that the CNF-conjunction
@@ -1457,11 +1479,76 @@ void emit_skolemize_node(FILE *fp, struct sk_group *g)
   fprint_new_symbols(fp, "skolem", skolems);
   fprint_new_symbols(fp, "definition", defs);
   fprintf(fp, "], [%s])).\n", g->parent);
-  zap_formula(conj);
-  zap_plist(fs);
+  if (conj != NULL) {
+    zap_formula(conj);
+    zap_plist(fs);
+  }
   zap_ilist(skolems);
   zap_ilist(defs);
   g->emitted = TRUE;
+}
+
+/*************
+ *
+ *   Introduced-definition citations.
+ *
+ *   Definitional CNF introduces fresh predicates defn_N naming
+ *   subformulas.  A definitional clause is not a consequence of its
+ *   parent formula alone (and neither esa direction holds without the
+ *   definition present), so emit each definition as an
+ *   introduced(definition) leaf, in the derivations-guide form a checker
+ *   verifies structurally, and cite it as a co-parent; the clausify step
+ *   is then a plain thm step.
+ *
+ *************/
+
+static Ilist Emitted_defn_syms = NULL;   /* reset per proof */
+
+static
+void collect_defn_syms(Term t, Ilist *syms)
+{
+  int i;
+  if (VARIABLE(t))
+    return;
+  if (find_introduced_definition(SYMNUM(t)) != NULL &&
+      !ilist_member(*syms, SYMNUM(t)))
+    *syms = ilist_append(*syms, SYMNUM(t));
+  for (i = 0; i < ARITY(t); i++)
+    collect_defn_syms(ARG(t,i), syms);
+}
+
+/* Definition predicates occurring in c that have recorded definitions. */
+static
+Ilist clause_defn_syms(Topform c)
+{
+  Ilist syms = NULL;
+  Term t = topform_to_term_without_attributes(c);
+  if (t) {
+    collect_defn_syms(t, &syms);
+    zap_term(t);
+  }
+  return syms;
+}
+
+/* Emit introduced(definition) leaves for the given definition symbols
+   (once per proof each), registering them as declared fresh symbols. */
+static
+void emit_definition_leaves(FILE *fp, Ilist syms)
+{
+  Ilist q;
+  for (q = syms; q; q = q->next) {
+    char *nm;
+    if (ilist_member(Emitted_defn_syms, q->i))
+      continue;
+    nm = sn_to_str(q->i);
+    fprintf(fp, "fof(def_%s, definition, ", nm);
+    fwrite_formula_tptp(fp, find_introduced_definition(q->i));
+    fprintf(fp, ", introduced(definition, [new_symbols(definition, [%s])])).\n",
+            nm);
+    Emitted_defn_syms = ilist_append(Emitted_defn_syms, q->i);
+    if (!ilist_member(Declared_fresh_syms, q->i))
+      Declared_fresh_syms = ilist_append(Declared_fresh_syms, q->i);
+  }
 }
 
 /*************
@@ -1674,6 +1761,20 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
               skg->skname);
       return;
     }
+    /* A definitional clause cites its introduced(definition) leaves as
+       co-parents and is then a plain thm step. */
+    if (tptp_name) {
+      Ilist ds = clause_defn_syms(c);
+      if (ds != NULL) {
+        Ilist q;
+        fprintf(fp, ", inference(clausify, [status(thm)], [%s", qname);
+        for (q = ds; q; q = q->next)
+          fprintf(fp, ", def_%s", sn_to_str(q->i));
+        fprintf(fp, "])).\n");
+        zap_ilist(ds);
+        return;
+      }
+    }
     /* FOF-to-CNF: status(thm) when the clause is a logical consequence of
        its parent formula, status(esa) when it carries a Skolem witness. */
     const char *st = clause_has_skolem(c) ? "esa" : "thm";
@@ -1702,6 +1803,20 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
       fprintf(fp, ", inference(split_conjunct, [status(thm)], [%s])).\n",
               skg->skname);
       return;
+    }
+    if (tptp_name) {
+      Ilist ds = clause_defn_syms(c);
+      if (ds != NULL) {
+        char nqname[520];
+        Ilist q;
+        make_neg_name(nqname, sizeof(nqname), tptp_name);
+        fprintf(fp, ", inference(clausify, [status(thm)], [%s", nqname);
+        for (q = ds; q; q = q->next)
+          fprintf(fp, ", def_%s", sn_to_str(q->i));
+        fprintf(fp, "])).\n");
+        zap_ilist(ds);
+        return;
+      }
     }
     const char *st = clause_has_skolem(c) ? "esa" : "thm";
     if (tptp_name) {
@@ -1746,6 +1861,8 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
      symbols, so new_symbols() declarations are emitted exactly once. */
   zap_ilist(Declared_fresh_syms);
   Declared_fresh_syms = NULL;
+  zap_ilist(Emitted_defn_syms);
+  Emitted_defn_syms = NULL;
   reset_sk_groups();
 
   if (Glob.problem_name)
@@ -1784,11 +1901,22 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
     Topform c = (Topform) p->v;
     /* If c belongs to a Skolemizing group, emit that group's skolemize node
        (once, in FOF variable style) before the clause; the clause then prints
-       as a split_conjunct of it. */
+       as a split_conjunct of it.  Otherwise, if c is a definitional clausify
+       step, emit its introduced(definition) leaves (once each) first. */
     struct sk_group *skg = skolem_group_of(c);
     if (skg != NULL && !skg->emitted) {
       set_variable_style(orig_style);
       emit_skolemize_node(fp, skg);
+    }
+    else if (skg == NULL && c->justification &&
+             (c->justification->type == CLAUSIFY_JUST ||
+              c->justification->type == DENY_JUST)) {
+      Ilist ds = clause_defn_syms(c);
+      if (ds != NULL) {
+        set_variable_style(orig_style);
+        emit_definition_leaves(fp, ds);
+        zap_ilist(ds);
+      }
     }
     /* An input/goal placeholder whose original formula is still in the ID
        table is printed as an FOF leaf, so it needs FOF (named) variable

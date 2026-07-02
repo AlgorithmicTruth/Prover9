@@ -65,4 +65,6 @@ BOOL cnf_timeout_was_hit(void);
 
 void set_cnf_def_threshold(int n);
 
+Formula find_introduced_definition(int symnum);
+
 #endif  /* conditional compilation of whole file */

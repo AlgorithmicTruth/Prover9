@@ -53,6 +53,17 @@ static int    Cnf_timeout_interval = 1000;
 static int Cnf_def_threshold = 0;  /* definitional CNF threshold; 0 = disabled */
 static int Cnf_def_count = 0;      /* counter for fresh definition predicates */
 
+/* Introduced definitions (defn_N(vars) <=> subformula), recorded so TSTP
+   proof output can emit each as an introduced(definition) leaf and cite it
+   as a co-parent of the definitional clauses (which are then thm steps). */
+
+struct defn_record {
+  int symnum;
+  Formula defn;   /* universally closed: defn_N(vars) <=> subformula */
+};
+
+static Plist Defn_records = NULL;
+
 static void cnf_check_timeout(void);  /* forward declaration */
 
 /*************
@@ -1320,6 +1331,26 @@ Formula introduce_definition(Formula sub, Plist *defs)
       ARG(def_atom, j++) = get_variable_term(v);
   }
 
+  /* Record the full definition (defn(vars) <=> sub) for TSTP proof
+     output, before sub is zapped below.  The generated clauses are the
+     Plaisted-Greenbaum (one-directional) subset, but declaring the
+     equivalence is sound (the fresh predicate can be interpreted as the
+     subformula's value) and makes every generated clause a logical
+     consequence of the parent formula plus the definition. */
+  {
+    struct defn_record *r;
+    Formula pos, iff;
+    pos = formula_get(0, ATOM_FORM);
+    pos->atom = copy_term(def_atom);
+    iff = formula_get(2, IFF_FORM);
+    iff->kids[0] = pos;
+    iff->kids[1] = formula_copy(sub);
+    r = (struct defn_record *) safe_malloc(sizeof(struct defn_record));
+    r->symnum = sn;
+    r->defn = universal_closure(iff);
+    Defn_records = plist_append(Defn_records, r);
+  }
+
   /* Generate definition clauses: ~defn(vars) | c_i for each clause c_i.
      Each definition clause is a Formula disjunction. */
   if (sub->type == AND_FORM) {
@@ -1882,6 +1913,31 @@ void set_cnf_def_threshold(int n)
   Cnf_def_threshold = (n > 0 ? n : 0);
   Cnf_def_count = 0;
 }
+
+/*************
+ *
+ *   find_introduced_definition()
+ *
+ *************/
+
+/* DOCUMENTATION
+Return the recorded definition (a universally closed equivalence
+defn_N(vars) <=> subformula) for the definition predicate with the given
+symbol number, or NULL if the symbol is not an introduced definition.
+The returned formula is owned by the registry and must not be zapped.
+*/
+
+/* PUBLIC */
+Formula find_introduced_definition(int symnum)
+{
+  Plist p;
+  for (p = Defn_records; p; p = p->next) {
+    struct defn_record *r = (struct defn_record *) p->v;
+    if (r->symnum == symnum)
+      return r->defn;
+  }
+  return NULL;
+}  /* find_introduced_definition */
 
 /*************
  *
