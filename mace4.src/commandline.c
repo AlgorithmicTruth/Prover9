@@ -66,7 +66,26 @@ void command_line_flag(int id, char *optarg)
 static
 void command_line_parm(int id, char *optarg)
 {
-  int n = atoi(optarg);
+  int n;
+  const char *p = optarg;
+  if (*p == '-' || *p == '+') p++;
+  /* atoi() silently returns 0 for non-numeric input (e.g. a bundled
+     getopt short option that swallowed an unrelated argument, such as
+     the nonexistent flag "-tptp_out" being parsed as "-t" with value
+     "ptp_out") -- a parm of 0 for max_seconds/max_seconds_per then
+     causes an immediate, silent "time's up" on the very first domain
+     size, which looks exactly like mace4 giving up/hanging rather than
+     a bad command line.  Reject non-numeric input outright instead of
+     mangling it into a confusing 0, matching command_line_flag's
+     existing "0 or 1" validation just above. */
+  if (*p == '\0' || strspn(p, "0123456789") != strlen(p)) {
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "Command-line parm %s requires a numeric value, got '%s'",
+             parm_id_to_str(id), optarg);
+    fatal_error(msg);
+  }
+  n = atoi(optarg);
   assign_parm(id, n, !Mace4_tptp_mode);
   if (!Mace4_tptp_mode)
     printf("\n%% From the command line: assign(%s, %d).\n",

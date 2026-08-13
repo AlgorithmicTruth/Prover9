@@ -269,7 +269,14 @@ void gather_symbols_in_term(Term t, int *rcounts, int *fcounts)
     }
     else {
       int i;
-      fcounts[SYMNUM(cur)]++;
+      /* Distinct objects/numerals carry a negative SYMNUM by design (see
+         is_distinct_object/set_numeral in symbols.c) -- they're not part
+         of the normal symbol table these counts index into, so they must
+         be skipped rather than counted (found live, 2026-08-07: an
+         unguarded fcounts[SYMNUM(cur)] here read/wrote out of bounds
+         whenever a formula contained one, corrupting the heap). */
+      if (SYMNUM(cur) >= 0)
+        fcounts[SYMNUM(cur)]++;
       for (i = ARITY(cur) - 1; i >= 0; i--) {
         top++;
         if (top >= stack_cap) { stack_cap *= 2; stack = safe_realloc(stack, stack_cap * sizeof(*stack)); }
@@ -314,9 +321,25 @@ void gather_symbols_in_formula_term(Term t, int *rcounts, int *fcounts)
         }
       }
     }
+    else if (VARIABLE(cur)) {
+      /* A bare (propositional) variable used as a formula-level atom,
+         e.g. quantifying over a 0-ary relation: ![P]: (P | -P). Not a
+         real symbol -- SYMNUM is meaningless here (0, since private_symbol
+         is never set for a variable), so it must be skipped exactly like
+         gather_symbols_in_term already does, not indexed into rcounts[].
+         Found live, 2026-08-07: the missing check here let this fall
+         through to rcounts[0]++ instead, corrupting whatever symbol
+         legitimately owns slot 0 -- manifested as a glibc munmap_chunk/
+         malloc_printerr abort under predicate elimination. */
+    }
     else {
       int i;
-      rcounts[SYMNUM(cur)]++;
+      /* Distinct objects/numerals have a negative SYMNUM (see
+         is_distinct_object/set_numeral in symbols.c) and must be skipped
+         too, not counted -- they aren't part of the normal symbol table
+         these counts index into. */
+      if (SYMNUM(cur) >= 0)
+        rcounts[SYMNUM(cur)]++;
       for (i = 0; i < ARITY(cur); i++)
         gather_symbols_in_term(ARG(cur, i), rcounts, fcounts);
     }
@@ -583,8 +606,9 @@ Formula term_to_formula(Term t)
       }
       else {
 	Attribute saved_attr = cur->attributes;
+	Formula flat;
 	cur->attributes = NULL;  /* prevent flatten_top from freeing attributes */
-	Formula flat = flatten_top(cur);
+	flat = flatten_top(cur);
 	flat->attributes = saved_attr;
 	if (ptop > 0) {
 	  int pc = pstack[ptop-1].child - 1;
@@ -722,10 +746,11 @@ Term formula_to_term(Formula f)
       break;
     }
 
-    if (cur->attributes && t != NULL)
-      t = build_binary_term(str_to_sn(attrib_sym(), 2),
-                            t,
-                            attributes_to_term(cur->attributes, attrib_sym()));
+    if (cur->attributes && t != NULL) {
+      Term atts = attributes_to_term(cur->attributes, attrib_sym());
+      if (atts != NULL)
+        t = build_binary_term(str_to_sn(attrib_sym(), 2), t, atts);
+    }
     result = t;
   }
 
@@ -734,9 +759,8 @@ Term formula_to_term(Formula f)
     Formula cur = stack[top].src;
     Term parent = stack[top].dst;
     int ci = stack[top].child;
-    top--;
-
     Term t = NULL;
+    top--;
 
     switch (cur->type) {
     case ATOM_FORM:
@@ -821,10 +845,11 @@ Term formula_to_term(Formula f)
       break;
     }
 
-    if (cur->attributes && t != NULL)
-      t = build_binary_term(str_to_sn(attrib_sym(), 2),
-                            t,
-                            attributes_to_term(cur->attributes, attrib_sym()));
+    if (cur->attributes && t != NULL) {
+      Term atts = attributes_to_term(cur->attributes, attrib_sym());
+      if (atts != NULL)
+        t = build_binary_term(str_to_sn(attrib_sym(), 2), t, atts);
+    }
     ARG(parent, ci) = t;
   }
   safe_free(stack);

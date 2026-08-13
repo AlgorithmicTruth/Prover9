@@ -79,7 +79,11 @@ void fsym_collect(Ilist *table, Term t, int depth)
     return;
   else {
     int i;
-    table[SYMNUM(t)] = ilist_prepend(table[SYMNUM(t)], depth);
+    /* Distinct objects/numerals carry a negative SYMNUM by design (see
+       is_distinct_object/set_numeral in symbols.c) -- skip them rather
+       than indexing table[] out of bounds. */
+    if (SYMNUM(t) >= 0)
+      table[SYMNUM(t)] = ilist_prepend(table[SYMNUM(t)], depth);
     for (i = 0; i < ARITY(t); i++)
       fsym_collect(table, ARG(t,i), depth+1);
   }

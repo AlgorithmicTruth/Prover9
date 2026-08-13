@@ -726,9 +726,23 @@ Term attributes_to_term(Attribute a, char *operator)
   if (a == NULL)
     return NULL;  /* should happen only on top call */
 
-  for (cur = a; cur != NULL; cur = cur->next)
+  for (cur = a; cur != NULL; cur = cur->next) {
+    /* tptp_name is internal bookkeeping for TSTP-output proof printing
+       (build_sk_groups()/skolem_group_of() in provers.src/search.c),
+       read directly via get_string_attribute()/get_tptp_name_attr() --
+       never meant to round-trip as a visible clause attribute in
+       native or XML output. Excluding it here (not at each call site)
+       keeps every generic attribute-serialization path consistent by
+       construction. All callers must already tolerate a NULL return
+       (the a==NULL case above), so returning NULL here when this was
+       the only attribute present is not a new contract. */
+    if (str_ident(Attribute_names[cur->id].name, "tptp_name"))
+      continue;
     nodes[count++] = cur;
+  }
 
+  if (count == 0)
+    return NULL;
   if (count == 1)
     return build_attr_term(nodes[0]);
 

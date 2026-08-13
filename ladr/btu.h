@@ -41,6 +41,10 @@ typedef struct btu_state * Btu_state;
 
 /* Public function prototypes from btu.c */
 
+void set_ac_superset_limit(int n);
+
+int get_ac_superset_limit(void);
+
 void fprint_btu_mem(FILE *fp, BOOL heading);
 
 void p_btu_mem();

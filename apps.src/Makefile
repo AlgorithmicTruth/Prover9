@@ -93,7 +93,7 @@ FORCE:
 
 PROGRAMS = latfilter olfilter clausefilter idfilter renamer unfast clausetester rewriter isofilter0 isofilter isofilter2 dprofiles interpfilter upper-covers miniscope interpformat prooftrans mirror-flip perm3 sigtest directproof test_clause_eval test_complex complex gen_trc_defs
 
-all: ladr apps install
+all: apps install
 
 ladr:
 	cd ../ladr && $(MAKE) libladr.a
@@ -104,7 +104,7 @@ clean:
 realclean:
 	/bin/rm -f *.o *.d $(PROGRAMS) .build_mode
 
-install:
+install: apps
 	@for f in $(PROGRAMS); do \
 	  codesign -s - -f "$$f" 2>/dev/null || true; \
 	  /bin/cp -p "$$f" ../bin; \
@@ -114,6 +114,12 @@ tags:
 	etags *.c ../ladr/*.c
 
 LADR_LIB = ../ladr/libladr.a
+
+# Any program below listing $(LADR_LIB) as a prerequisite correctly
+# triggers ladr's recipe first via this rule -- without it, -j could run
+# ladr's recursive submake and a program's own link step as unrelated
+# siblings, letting the link start before libladr.a is ready.
+$(LADR_LIB): ladr
 
 apps: $(PROGRAMS)
 

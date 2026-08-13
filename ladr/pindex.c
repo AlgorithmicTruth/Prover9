@@ -310,7 +310,11 @@ void delete_pair_index(Topform c, int wt, Pair_index p)
 
   j = IN_RANGE(wt, 0, n-1);
 
-  for (lp = p->lists[j]->first; lp && lp->c != c; lp = lp->next);
+  /* pos_in_clist walks c->containers (O(#lists c is currently in), a
+     small bounded count) instead of scanning the whole weight-bucket
+     list (which can be thousands of clauses long). Same Clist_pos
+     result either way; the cursor-repair logic below is unchanged. */
+  lp = pos_in_clist(p->lists[j], c);
   if (!lp) {
     fatal_error("delete_pair_index, clause not found.");
   }

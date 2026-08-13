@@ -167,7 +167,16 @@ we rename all variables to x, are t1 and t2 identical?
 /* PUBLIC */
 BOOL same_term_structure(Term t1, Term t2)
 {
-  struct { Term a; Term b; int child; } stack[1000];
+  /* Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume. */
+  typedef struct { Term a; Term b; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
 
   stack[0].a = t1;
@@ -181,18 +190,33 @@ BOOL same_term_structure(Term t1, Term t2)
     if (stack[top].child == 0) {
       /* First visit: check structure match at this node. */
       if (VARIABLE(a) || VARIABLE(b)) {
-        if (!(VARIABLE(a) && VARIABLE(b)))
+        if (!(VARIABLE(a) && VARIABLE(b))) {
+          if (stack != sbo_buf)
+            safe_free(stack);
           return FALSE;
+        }
         top--;
         continue;
       }
-      if (SYMNUM(a) != SYMNUM(b))
+      if (SYMNUM(a) != SYMNUM(b)) {
+        if (stack != sbo_buf)
+          safe_free(stack);
         return FALSE;
+      }
     }
 
     if (stack[top].child < ARITY(a)) {
       int c = stack[top].child;
       stack[top].child++;
+      if (top + 1 >= cap) {
+        int new_cap = cap * 2;
+        Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+        memcpy(new_stack, stack, cap * sizeof(Sframe));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       top++;
       stack[top].a = ARG(a, c);
       stack[top].b = ARG(b, c);
@@ -202,6 +226,8 @@ BOOL same_term_structure(Term t1, Term t2)
       top--;
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return TRUE;
 }  /* same_term_structure */
 
@@ -251,12 +277,24 @@ void orient_equalities(Topform c, BOOL allow_flips)
       Term beta  = ARG(atom,1);
       if (!term_ident(alpha, beta)) {
 	Ordertype ord = NOT_COMPARABLE;
-	/* Check if it is a pos_eq_unit that should be unfolded. */
-	if (i == 1 && lit->next == NULL && lit->sign)
+	/* Check if it is a pos_eq_unit that should be unfolded.
+	   Not in AC mode: unfold orients definitional equations in the
+	   weight-INCREASING direction (2 -> 1+1), which ping-pongs
+	   against the AC-weight-oriented rule (1+1) -> 2 under AC
+	   matching.  In AC mode every orientation must come from the
+	   one AC-compatible ordering. */
+	if (i == 1 && lit->next == NULL && lit->sign &&
+	    !assoc_comm_symbols())
 	  ord = unfold_order(alpha, beta);
-	/* If not oriented, check the primary ordering (LPO, RPO, KBO). */
+	/* If not oriented, check the primary ordering (LPO, RPO, KBO).
+	   In AC mode the primary is the AC-compatible weight ordering
+	   for ALL equations: mixing LPO (which can orient weight-
+	   increasing rules) with AC-weight-oriented rules could rewrite
+	   in circles. */
 	if (ord == NOT_COMPARABLE)
-	  ord = term_order(alpha, beta);
+	  ord = (assoc_comm_symbols())
+	    ? ac_term_order(alpha, beta)
+	    : term_order(alpha, beta);
 
 	if (ord == GREATER_THAN)
 	  mark_oriented_eq(atom);

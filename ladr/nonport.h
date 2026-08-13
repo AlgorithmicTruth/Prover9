@@ -45,4 +45,6 @@ int my_process_id(void);
 
 int get_bits(void);
 
+void raise_stack_limit(void);
+
 #endif  /* conditional compilation of whole file */

@@ -181,6 +181,7 @@ Just_type tptp_rule_name_to_just(const char *name)
   if (str_ident((char *) name, "clausify"))       return CLAUSIFY_JUST;
   if (str_ident((char *) name, "copy"))           return COPY_JUST;
   if (str_ident((char *) name, "back_demod"))     return BACK_DEMOD_JUST;
+  if (str_ident((char *) name, "ac_extension"))   return AC_EXT_JUST;
   if (str_ident((char *) name, "back_unit_del"))  return BACK_UNIT_DEL_JUST;
   if (str_ident((char *) name, "new_symbol"))     return NEW_SYMBOL_JUST;
   if (str_ident((char *) name, "expand_def"))     return EXPAND_DEF_JUST;
@@ -279,6 +280,7 @@ Just build_just_from_source(Term source, char *role_str)
     case CLAUSIFY_JUST:
     case COPY_JUST:
     case BACK_DEMOD_JUST:
+    case AC_EXT_JUST:
     case BACK_UNIT_DEL_JUST:
     case NEW_SYMBOL_JUST:
     case PROPOSITIONAL_JUST:

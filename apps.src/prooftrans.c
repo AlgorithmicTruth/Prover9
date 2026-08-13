@@ -114,6 +114,36 @@ void read_program_input(FILE *fp, int output_format)
 	printf("\nset(prolog_style_variables).");
       set_variable_style(PROLOG_STYLE);
     }
+    else if (initial_substring("assoc_comm(", line) ||
+	     initial_substring("commutative(", line)) {
+      /* Honor AC/comm declarations from the original run so expand_proof
+	 can rediscover AC rewrites offline.  Without this, prooftrans
+	 never sees assoc_comm and expand treats every rewrite as plain
+	 (see tests.ac/poc-2plus2-tstp.in comment).  Parse the symbol
+	 name between the parentheses; arity-2 is set_assoc_comm's own
+	 convention. */
+      char *lp = strchr(line, '(');
+      char *rp = lp ? strchr(lp, ')') : NULL;
+      if (lp && rp && rp > lp + 1) {
+	char name[64];
+	int len = (int) (rp - lp - 1);
+	if (len > 0 && len < (int) sizeof(name)) {
+	  int i, j = 0;
+	  for (i = 1; i <= len; i++) {
+	    char ch = lp[i];
+	    if (ch != ' ' && ch != '\t')
+	      name[j++] = ch;
+	  }
+	  name[j] = '\0';
+	  if (j > 0) {
+	    if (initial_substring("assoc_comm(", line))
+	      set_assoc_comm(name, TRUE);
+	    else
+	      set_commutative(name, TRUE);
+	  }
+	}
+      }
+    }
     
     s = fgets(line, BUF_MAX, fp);
   }
@@ -317,7 +347,11 @@ int main(int argc, char **argv)
 
   if (string_member("tstp", argv, argc) ||
       string_member("TSTP", argv, argc)) {
-    transformation = NO_TRANS;
+    /* Keep an already-selected EXPAND transformation (e.g.
+       "prooftrans expand tstp"); only default to NO_TRANS when the
+       user did not ask for expand. */
+    if (transformation != EXPAND && transformation != EXPAND_EQ)
+      transformation = NO_TRANS;
     output_format = TSTP;
   }
 
@@ -365,6 +399,8 @@ int main(int argc, char **argv)
   (void) register_attribute("props", TERM_ATTRIBUTE);
   (void) register_attribute("bsub_hint_wt", INT_ATTRIBUTE);
   (void) register_attribute("clausal_fof",  INT_ATTRIBUTE);
+  (void) register_attribute("tptp_cnf",     INT_ATTRIBUTE);
+  (void) register_attribute("tptp_neg_conj", INT_ATTRIBUTE);
   (void) register_attribute("action",       TERM_ATTRIBUTE);
   (void) register_attribute("action2",      TERM_ATTRIBUTE);
   (void) register_attribute("sine_depth",   INT_ATTRIBUTE);

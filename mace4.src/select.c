@@ -64,7 +64,7 @@ int num_contradictions(int id, int max_so_far)
   int ds = id_to_domain_size(id);
   int i, to_try;
   for (i = 0; i < ds; i++) {
-    Estack stk = assign_and_propagate(id, Domain[i]);
+    Estack stk = assign_and_propagate(id, domain_value(id, i));
     if (stk == NULL)
       n++;
     else
@@ -98,7 +98,7 @@ int num_propagations(int id)
   int ds = id_to_domain_size(id);
   Mstats.propagations = 0;
   for (i = 0; i < ds; i++) {
-    Estack stk = assign_and_propagate(id, Domain[i]);
+    Estack stk = assign_and_propagate(id, domain_value(id, i));
     restore_from_stack(stk);
     n += Mstats.propagations;
     Mstats.propagations = 0;

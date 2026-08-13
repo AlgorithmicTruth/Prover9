@@ -168,8 +168,15 @@ void zap_flatterm(Flatterm f)
 /* PUBLIC */
 Flatterm term_to_flatterm(Term t)
 {
-  /* Iterative conversion from Term tree to Flatterm. */
-  struct { Term src; Flatterm ft; int child; } stack[1000];
+  /* Iterative conversion from Term tree to Flatterm.  Small-buffer
+     optimization: a small on-stack buffer handles the common shallow
+     case at zero allocation cost; only pathologically deep terms spill
+     to a growable heap array (safe_malloc/free doubling), matching
+     flatterm_to_term()'s convention in this file. */
+  typedef struct { Term src; Flatterm ft; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   Flatterm root, end_ptr;
 
@@ -225,12 +232,23 @@ Flatterm term_to_flatterm(Term t)
       else {
         /* Push this child for further processing. */
         top++;
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top].src = ch;
         stack[top].ft = ft_ch;
         stack[top].child = 0;
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return root;
 }  /* term_to_flatterm */
 
@@ -246,8 +264,19 @@ Flatterm term_to_flatterm(Term t)
 /* PUBLIC */
 Term flatterm_to_term(Flatterm f)
 {
-  /* Iterative conversion from Flatterm to Term tree. */
-  struct { Term t; Flatterm ft; int child; Flatterm g; } stack[1000];
+  /* Iterative conversion from Flatterm to Term tree.  Small-buffer
+     optimization: a small on-stack buffer handles the common shallow
+     case at zero allocation cost; only pathologically deep terms spill
+     to a growable heap array (safe_malloc/free doubling). A fixed array
+     here silently corrupts memory on very deep terms (confirmed: stack
+     smashing on NUM925+3, TPTP v9.2.0); an unconditional heap
+     allocation on every call is measurably slower at this function's
+     call volume (confirmed ~40% wall-clock regression on
+     Scharle24_2D3_D3_to_Nicod_16h, 136M+ clause generations). */
+  typedef struct { Term t; Flatterm ft; int child; Flatterm g; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = -1;
   Term result;
 
@@ -288,13 +317,22 @@ Term flatterm_to_term(Flatterm f)
           stack[top].child++;
         }
         else {
-          stack[top].child++;
           /* Save position for parent's next child. */
           Flatterm next_g_for_parent = g->end->next;
+          stack[top].child++;
           /* We'll update parent's g when we pop back. But we need to
              set it now since this child will consume the flatterm range. */
           stack[top].g = next_g_for_parent;
           top++;
+          if (top >= cap) {
+            int new_cap = cap * 2;
+            Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+            memcpy(new_stack, stack, cap * sizeof(Sframe));
+            if (stack != sbo_buf)
+              safe_free(stack);
+            stack = new_stack;
+            cap = new_cap;
+          }
           stack[top].t = ch;
           stack[top].ft = g;
           stack[top].child = 0;
@@ -303,6 +341,8 @@ Term flatterm_to_term(Flatterm f)
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return result;
 }  /* flatterm_to_term */
 
@@ -318,8 +358,15 @@ Term flatterm_to_term(Flatterm f)
 /* PUBLIC */
 Flatterm copy_flatterm(Flatterm f)
 {
-  /* Iterative flatterm copy. */
-  struct { Flatterm src; Flatterm dst; Flatterm src_arg; int child; } stack[1000];
+  /* Iterative flatterm copy.  Small-buffer optimization: a small
+     on-stack buffer handles the common shallow case at zero
+     allocation cost; only pathologically deep terms spill to a
+     growable heap array (safe_malloc/free doubling), matching
+     flatterm_to_term()'s convention in this file. */
+  typedef struct { Flatterm src; Flatterm dst; Flatterm src_arg; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top;
   Flatterm root, end_ptr;
 
@@ -374,6 +421,15 @@ Flatterm copy_flatterm(Flatterm f)
       }
       else {
         top++;
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top].src = src_arg;
         stack[top].dst = cp;
         stack[top].src_arg = src_arg->next;
@@ -381,6 +437,8 @@ Flatterm copy_flatterm(Flatterm f)
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return root;
 }  /* copy_flatterm */
 
@@ -396,8 +454,15 @@ Flatterm copy_flatterm(Flatterm f)
 /* PUBLIC */
 void print_flatterm(Flatterm f)
 {
-  /* Iterative flatterm printing using explicit stack. */
-  struct { Flatterm ft; Flatterm g; int child; } stack[1000];
+  /* Iterative flatterm printing using explicit stack.  Small-buffer
+     optimization: a small on-stack buffer handles the common shallow
+     case at zero allocation cost; only pathologically deep terms spill
+     to a growable heap array (safe_malloc/free doubling), matching
+     flatterm_to_term()'s convention in this file. */
+  typedef struct { Flatterm ft; Flatterm g; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = -1;
 
   if (VARIABLE(f)) {
@@ -441,12 +506,23 @@ void print_flatterm(Flatterm f)
       else {
         printf("%s(", sn_to_str(SYMNUM(g)));
         top++;
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top].ft = g;
         stack[top].g = g->next;
         stack[top].child = 0;
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
 }  /* print_flatterm */
 
 /*************

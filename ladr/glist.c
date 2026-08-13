@@ -621,13 +621,13 @@ Plist sort_plist(Plist objects,	Ordertype (*comp_proc) (void *, void *))
 /* PUBLIC */
 Plist plist_remove_last(Plist p)
 {
+  Plist q = p;
   if (p == NULL)
     return NULL;
   if (p->next == NULL) {
     free_plist(p);
     return NULL;
   }
-  Plist q = p;
   while (q->next->next != NULL)
     q = q->next;
   free_plist(q->next);
@@ -1138,10 +1138,10 @@ Ilist ilist_set(Ilist m)
   /* Build deduplicated copy. Walk in reverse to preserve original order. */
   Ilist rev = NULL;
   Ilist p;
+  Ilist result = NULL;
   for (p = m; p != NULL; p = p->next)
     rev = ilist_prepend(rev, p->i);
   /* rev is m reversed. Now build result from rev, skipping dups. */
-  Ilist result = NULL;
   while (rev != NULL) {
     Ilist tmp = rev->next;
     if (!ilist_member(result, rev->i)) {
@@ -1172,6 +1172,7 @@ Ilist ilist_rem_dups(Ilist m)
 {
   /* Reverse first so we keep earliest occurrence when scanning from tail. */
   Ilist rev = NULL;
+  Ilist result = NULL;
   while (m != NULL) {
     Ilist tmp = m->next;
     m->next = rev;
@@ -1179,7 +1180,6 @@ Ilist ilist_rem_dups(Ilist m)
     m = tmp;
   }
   /* Build result from rev, skipping dups. */
-  Ilist result = NULL;
   while (rev != NULL) {
     Ilist tmp = rev->next;
     if (!ilist_member(result, rev->i)) {
@@ -1314,13 +1314,13 @@ Ilist ilist_copy(Ilist p)
 /* PUBLIC */
 Ilist ilist_remove_last(Ilist p)
 {
+  Ilist q = p;
   if (p == NULL)
     return NULL;
   if (p->next == NULL) {
     free_ilist(p);
     return NULL;
   }
-  Ilist q = p;
   while (q->next->next != NULL)
     q = q->next;
   free_ilist(q->next);
@@ -1363,9 +1363,10 @@ int ilist_occurrences(Ilist p, int i)
 Ilist ilist_insert_up(Ilist p, int i)
 {
   Ilist *pp = &p;
+  Ilist g;
   while (*pp != NULL && (*pp)->i < i)
     pp = &(*pp)->next;
-  Ilist g = get_ilist();
+  g = get_ilist();
   g->i = i;
   g->next = *pp;
   *pp = g;

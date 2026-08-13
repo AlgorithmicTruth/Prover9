@@ -17,6 +17,23 @@
 */
 
 #include "search.h"
+#include "../ladr/pindex.h"
+
+/* para_pairs state (EQP-style pair-selection mode; see pair_inferences).
+   NULL/unused unless set(para_pairs). */
+static Pair_index Pair_idx = NULL;
+static int Pair_n = 0;
+static unsigned long long Pair_watermark = 0;   /* max clause id seeded */
+
+static
+int pair_wt(Topform c)
+{
+  int w = (int) c->weight;
+  if (w < 0) w = 0;
+  if (w > Pair_n - 1) w = Pair_n - 1;
+  return w;
+}  /* pair_wt */
+
 #include "provers.h"
 #include "../ladr/ac_redun.h"
 #include "../ladr/std_options.h"
@@ -26,6 +43,8 @@
 #include "../ladr/clash.h"
 #include "../ladr/tptp_parse.h"
 #include "../ladr/xproofs.h"
+#include "../ladr/ac_expand.h"
+#include "../ladr/tptp_trans.h"
 #include "../VERSION_DATE.h"
 
 // system includes
@@ -144,6 +163,7 @@ static struct {
   Plist given_selection;
   Plist keep_rules;
   Plist delete_rules;
+  Plist discard;   // list(discard): canonical pattern clauses (ablation)
 
   // auxiliary clause lists
 
@@ -219,6 +239,9 @@ Prover_options init_prover_options(void)
   p->para_into_vars         = init_flag("para_into_vars",         FALSE);
   p->para_from_small        = init_flag("para_from_small",        FALSE);
   p->basic_paramodulation   = init_flag("basic_paramodulation",   FALSE);
+  p->para_pairs             = init_flag("para_pairs",              FALSE);
+  p->ac_back_demod        = init_flag("ac_back_demod",           FALSE);
+  p->ac_bd_index          = init_flag("ac_bd_index",              TRUE);
   p->initial_nuclei         = init_flag("initial_nuclei",         FALSE);
 
   p->process_initial_sos    = init_flag("process_initial_sos",     TRUE);
@@ -295,6 +318,7 @@ Prover_options init_prover_options(void)
   p->tptp_output            = init_flag("tptp_output",            FALSE);
   p->multi_order_trial      = init_flag("multi_order_trial",      FALSE);
   p->fast_pred_elim         = init_flag("fast_pred_elim",         FALSE);
+  p->single_proof_race      = init_flag("single_proof_race",     FALSE);
 
   // PARMS:
   //  internal name               external name      default    min      max
@@ -336,6 +360,10 @@ Prover_options init_prover_options(void)
   p->max_literals =     init_parm("max_literals",         -1,     -1,INT_MAX);
   p->max_vars =         init_parm("max_vars",             -1,     -1,INT_MAX);
   p->demod_step_limit = init_parm("demod_step_limit",   1000,     -1,INT_MAX);
+  p->ac_superset_limit = init_parm("ac_superset_limit",   -1,     -1,INT_MAX);
+  p->ac_max_weight    = init_parm("ac_max_weight",        -1,     -1,INT_MAX);
+  p->ac_combo_budget  = init_parm("ac_combo_budget", 1000000,     -1,INT_MAX);
+  p->ac_unify_seconds = init_parm("ac_unify_seconds",      5,     -1,INT_MAX);
   p->demod_increase_limit = init_parm("demod_increase_limit",1000,-1,INT_MAX);
   p->max_nohints  = init_parm("max_nohints",   -1, -1, INT_MAX);
   p->degrade_limit = init_parm("degrade_limit",  0, -1, INT_MAX);
@@ -741,6 +769,9 @@ void fprint_prover_stats(FILE *fp, struct prover_stats s, char *stats_level)
               comma_num(mindex_queries_warned()),
               comma_num(mindex_queries_skipped()));
     }
+    if (ac_walk_abandonments() > 0)
+      fprintf(fp,"AC_walk_abandonments=%s.\n",
+	      comma_num(ac_walk_abandonments()));
   }
 
   fprintf(fp,"Max_Clause_ID=%s.\n", comma_num(clause_ids_assigned()));
@@ -809,7 +840,14 @@ void fprint_all_stats(FILE *fp, char *stats_level)
 
   fprint_prover_clocks(fp, Clocks);
 
-  if (!clist_empty(Glob.hints))
+  /* Glob.hints is not yet initialized if the memory limit is hit very
+     early (e.g. during clausification, before the main search setup) --
+     clist_empty() dereferences unconditionally, so an uninitialized
+     (NULL) Glob.hints here is a guaranteed crash right when prover9 is
+     trying to exit gracefully and report final stats. Found live,
+     2026-08-09, on a problem whose goal clausification alone exceeded
+     the memory budget before hints were ever set up. */
+  if (Glob.hints && !clist_empty(Glob.hints))
     print_hint_match_stats(fp, Glob.hints);
 
   if (str_ident(stats_level, "all")) {
@@ -918,16 +956,55 @@ static
 void tptp_quote_bad_sym_node(Term t)
 {
   char *s = sn_to_str(SYMNUM(t));
+  BOOL bad;
+  /* Restore single-quoted numeral lookalikes: sq_0 -> '0'.  tptp_parse.c's
+     parse_term() gives a quoted token whose content looks like a bare
+     TPTP integer (e.g. '0') a "sq_" prefix before interning, so it
+     doesn't silently collide with the bare numeral 0 (get_rigid_term()
+     interns purely by name text; see the parse-side comment for the
+     full soundness reasoning). That prefixed name is a perfectly
+     ordinary-looking TPTP lower_word ("sq_0" needs no quoting under the
+     bad-shape check below), so without this, the printed TSTP leaf
+     citing this symbol says the bare identifier sq_0 where the actual
+     problem file has the quoted atom '0' -- a real, if narrow, mismatch
+     a strict verifier correctly rejects as the leaf's body not matching
+     its cited source (found 2026-08-04, real CASC-era SYO629-1/
+     SWX035+1/LCL901+1 during the StarExec release-gate sweep). Gated on
+     is_quoted() (set by that same parse-side code) so an ordinary
+     symbol that happens to be spelled "sq_0" by coincidence, never
+     having gone through that path, is left alone. */
+  if (is_quoted(SYMNUM(t)) && s[0] == 's' && s[1] == 'q' && s[2] == '_' &&
+      s[3] != '\0') {
+    BOOL all_digits = TRUE;
+    int k;
+    for (k = 3; s[k]; k++)
+      if (!(s[k] >= '0' && s[k] <= '9')) { all_digits = FALSE; break; }
+    if (all_digits) {
+      const char *digits = s + 3;
+      int n = strlen(digits);
+      char *new_str = safe_malloc(n + 3);
+      int new_sn;
+      new_str[0] = '\'';
+      strcpy(new_str + 1, digits);
+      new_str[n + 1] = '\'';
+      new_str[n + 2] = '\0';
+      new_sn = str_to_sn(new_str, sn_to_arity(SYMNUM(t)));
+      safe_free(new_str);
+      t->private_symbol = -(new_sn);
+      return;
+    }
+  }
   /* Restore distinct objects: do_foo -> "foo" */
   if (is_distinct_object(SYMNUM(t))) {
     const char *base = s + 3;  /* skip "do_" prefix */
     int n = strlen(base);
     char *new_str = safe_malloc(n + 3);
+    int new_sn;
     new_str[0] = '"';
     strcpy(new_str + 1, base);
     new_str[n + 1] = '"';
     new_str[n + 2] = '\0';
-    int new_sn = str_to_sn(new_str, sn_to_arity(SYMNUM(t)));
+    new_sn = str_to_sn(new_str, sn_to_arity(SYMNUM(t)));
     safe_free(new_str);
     t->private_symbol = -(new_sn);
     return;
@@ -935,7 +1012,7 @@ void tptp_quote_bad_sym_node(Term t)
   /* Check if symbol needs quoting: not already quoted, not a $keyword,
      not a LADR built-in connective (=, |, -, #), and not matching
      [a-z][a-zA-Z0-9_]* (valid TPTP lower_word). */
-  BOOL bad = FALSE;
+  bad = FALSE;
   if (s[0] != '\'' && s[0] != '$' &&
       strcmp(s, "=") != 0 && strcmp(s, "!=") != 0 &&
       strcmp(s, "|") != 0 && strcmp(s, "-") != 0 &&
@@ -951,17 +1028,30 @@ void tptp_quote_bad_sym_node(Term t)
           { bad = TRUE; break; }
       }
     }
+    /* Character shape alone isn't enough: a plain lowercase identifier
+       (e.g. "v", or "mod" under set(arithmetic)) can ALSO be registered
+       as a legacy native-syntax infix/prefix operator (declare_standard_
+       parse_types(), ladr/parse.c) -- arrange_term() prints those in
+       operator form regardless of TPTP-validity, corrupting the output
+       when a TPTP problem happens to use that exact name at that exact
+       arity for an ordinary function/predicate (CASC-J13 ALG246-1,
+       reported by G. Sutcliffe: axiom v(A,B) printed as "A v B"). Force
+       quoting whenever this symbol's registered operator arity matches
+       how it's actually being used here, regardless of shape. */
+    if (!bad && special_parse_type(s) == ARITY(t))
+      bad = TRUE;
   }
   if (bad) {
     /* Build quoted version: '+' etc. */
     char *escaped = escape_char(s, '\'');
     int n = strlen(escaped);
     char *new_str = safe_malloc(n + 3);
+    int new_sn;
     new_str[0] = '\'';
     strcpy(new_str + 1, escaped);
     new_str[n + 1] = '\'';
     new_str[n + 2] = '\0';
-    int new_sn = str_to_sn(new_str, sn_to_arity(SYMNUM(t)));
+    new_sn = str_to_sn(new_str, sn_to_arity(SYMNUM(t)));
     safe_free(new_str);
     safe_free(escaped);
     t->private_symbol = -(new_sn);
@@ -1023,6 +1113,57 @@ void fwrite_term_tptp(FILE *fp, Term t)
      We detect it by position context: beginning or after a disjunction
      separator, followed by a letter (predicate) or "(". */
   for (i = 0; s[i] != '\0'; i++) {
+    if (s[i] == '\'') {
+      /* Single-quoted symbol, from tptp_quote_bad_sym_node.  The quoting
+         defeats the native writer's operator-form printing (arrange_term)
+         -- it is NOT always needed for TPTP validity: a quoted token that
+         is a syntactically valid lower_word denotes the same symbol
+         unquoted ('v' == v), and the bare word matches the problem file's
+         own text.  Strip the quotes in that case; emit any other quoted
+         segment verbatim ('+', '>=', escaped content need their quotes). */
+      int j = i + 1;
+      int k;
+      BOOL word;
+      while (s[j] != '\0' && s[j] != '\'') {
+        if (s[j] == '\\' && s[j+1] != '\0')
+          j++;                       /* skip the escaped character */
+        j++;
+      }
+      word = (s[j] == '\'' && j > i + 1 &&
+              s[i+1] >= 'a' && s[i+1] <= 'z');
+      for (k = i + 2; word && k < j; k++) {
+        char c = s[k];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_'))
+          word = FALSE;
+      }
+      if (word) {
+        for (k = i + 1; k < j; k++)
+          fputc(s[k], fp);
+      }
+      else {
+        if (s[j] == '\0')
+          j--;                       /* unterminated: emit the rest as is */
+        for (k = i; k <= j; k++)
+          fputc(s[k], fp);
+      }
+      i = j;
+      continue;
+    }
+    if (s[i] == '"') {
+      /* Distinct object: emit the whole segment verbatim so neither the
+         negation pass below nor quote stripping can alter its content. */
+      int j = i + 1;
+      int k;
+      while (s[j] != '\0' && !(s[j] == '"' && s[j-1] != '\\'))
+        j++;
+      if (s[j] == '\0')
+        j--;
+      for (k = i; k <= j; k++)
+        fputc(s[k], fp);
+      i = j;
+      continue;
+    }
     if (s[i] == '-') {
       /* Is this at a negation position? */
       BOOL at_neg_pos = (i == 0 ||
@@ -1273,6 +1414,31 @@ BOOL clause_has_skolem(Topform c)
 /* Symbols already declared via new_symbols earlier in this proof. */
 static Ilist Declared_fresh_syms = NULL;
 
+/* The actual terminal empty clause of the proof currently being printed
+   in TSTP form, set by handle_proof_and_maybe_exit() before it calls
+   fprint_proof_tptp().  fprint_clause_tptp()'s "skip $false input
+   leaves" check (see its DOCUMENTATION) exists to discard a fastPE
+   preprocessing artifact that happens to carry INPUT_JUST/GOAL_JUST
+   justification -- but that same shape (literals == NULL, INPUT_JUST or
+   GOAL_JUST) is exactly what the real terminal empty clause looks like
+   when fastPE finds the whole refutation during preprocessing itself
+   (Level of proof 0, Given clauses 0, Length of proof 1): the skip then
+   discards the ONLY clause in the proof, leaving a "SZS output start
+   CNFRefutation .. SZS output end" block with nothing in between --
+   found 2026-08-04, real CASC-era HWV-domain problems during the
+   StarExec release-gate sweep. Comparing IDs (not pointers) against
+   this: by print time the clause in the proof list is not always the
+   same Topform object as the empty_clause this was set from (confirmed
+   by debug trace -- same ->id, different address, presumably
+   uncompress_clauses()/expand_proof() rebuilding it along the way), so
+   pointer identity silently never matched and the fix looked like a
+   no-op until this was caught. IDs are stable across that rebuild and
+   are already how the rest of this file cross-references clauses (see
+   find_clause_by_id()). This lets the check keep discarding genuine
+   intermediate fastPE artifacts while never discarding the clause
+   that's actually the proof's conclusion. */
+static Topform Proof_terminal_empty_clause = NULL;
+
 static
 void collect_fresh_symbols(Term t, Ilist *skolems, Ilist *defs)
 {
@@ -1396,26 +1562,75 @@ BOOL clause_has_skolem_function(Topform c)
   return sk;
 }
 
+/* TPTP's unquoted lower_word is exactly [a-z][A-Za-z0-9_]*; anything else
+   (periods, '$', a leading digit/uppercase/underscore, parens, commas,
+   spaces, ...) is not a valid bare name and must be single-quoted.  The
+   four call sites below used to each run their own ad hoc check for just
+   '(', ')', ',', and ' ', which let real-world dotted/CoqHammer-style
+   names like 'Coq.ZArith.BinInt.Z.square_le_simpl_nonneg' or
+   '$_discrim_Redblack.TREES.E$Redblack.TREES.T' through unquoted --
+   syntactically invalid TPTP that a strict reader (tptp4X, GDV, ...)
+   rejects outright, even though the underlying proof is correct. */
+static
+BOOL tptp_name_needs_quote(const char *nm)
+{
+  const char *p;
+  if (nm == NULL || nm[0] == '\0' || nm[0] < 'a' || nm[0] > 'z')
+    return TRUE;
+  for (p = nm + 1; *p; p++)
+    if (!(( *p >= 'a' && *p <= 'z') ||
+          (*p >= 'A' && *p <= 'Z') ||
+          (*p >= '0' && *p <= '9') ||
+          *p == '_'))
+      return TRUE;
+  return FALSE;
+}
+
 static
 void quote_tptp_name(char *buf, size_t sz, const char *nm)
 {
-  BOOL q = FALSE;
-  const char *p;
-  for (p = nm; *p; p++)
-    if (*p=='(' || *p==')' || *p==',' || *p==' ') { q = TRUE; break; }
-  if (q) snprintf(buf, sz, "'%s'", nm);
-  else   snprintf(buf, sz, "%s", nm);
+  if (!tptp_name_needs_quote(nm))
+    snprintf(buf, sz, "%s", nm);
+  else {
+    /* Single-quoted TPTP names escape internal ' and \ as \' and \\. */
+    size_t i = 0;
+    const char *p;
+    if (sz > 0) buf[i++] = '\'';
+    for (p = nm; *p && i + 2 < sz; p++) {
+      if ((*p == '\'' || *p == '\\') && i + 3 < sz)
+        buf[i++] = '\\';
+      buf[i++] = *p;
+    }
+    if (i + 1 < sz) buf[i++] = '\'';
+    buf[i < sz ? i : sz-1] = '\0';
+  }
 }
 
 static
 void make_sk_name(char *buf, size_t sz, const char *nm, BOOL deny)
 {
-  BOOL q = FALSE;
-  const char *p;
-  for (p = nm; *p; p++)
-    if (*p=='(' || *p==')' || *p==',' || *p==' ') { q = TRUE; break; }
-  if (q) snprintf(buf, sz, "'sk_%s%s'", nm, deny ? "_neg" : "");
-  else   snprintf(buf, sz, "sk_%s%s", nm, deny ? "_neg" : "");
+  char tmp[520];
+  snprintf(tmp, sizeof(tmp), "sk_%s%s", nm, deny ? "_neg" : "");
+  quote_tptp_name(buf, sz, tmp);
+}
+
+/* Append a plain lower_word suffix (letters/digits/underscore only, e.g.
+   "_sk") to a name already produced by quote_tptp_name(), which may or
+   may not be quoted.  Appending it after a closing quote would glue an
+   unquoted suffix onto a quoted atom -- two token forms concatenated
+   into one string, which is not a valid single TPTP name (this was the
+   root cause of the "'sk_...'_sk" malformed names seen on real CASC-J13
+   problems, e.g. NUM835+1/NUM840+1).  Since a plain lower_word suffix
+   can't itself introduce a character that would newly require quoting,
+   it's always safe to splice it in just before the closing quote. */
+static
+void tptp_append_suffix(char *buf, size_t sz, const char *existing, const char *suffix)
+{
+  size_t len = strlen(existing);
+  if (len >= 2 && existing[0] == '\'' && existing[len-1] == '\'')
+    snprintf(buf, sz, "%.*s%s'", (int) (len - 1), existing, suffix);
+  else
+    snprintf(buf, sz, "%s%s", existing, suffix);
 }
 
 static
@@ -1456,7 +1671,7 @@ void reset_sk_groups(void)
   for (p = Sk_groups; p; p = p->next) {
     struct sk_group *g = (struct sk_group *) p->v;
     zap_plist(g->clauses);
-    free(g);
+    safe_free(g);
   }
   zap_plist(Sk_groups);
   Sk_groups = NULL;
@@ -1580,7 +1795,7 @@ void emit_skolemize_node(FILE *fp, struct sk_group *g)
 
     collect_fresh_symbols_formula(skolem_form, &sk_skolems, &sk_defs);
     if (need_cnf) {
-      snprintf(skname_sk, sizeof(skname_sk), "%s_sk", g->skname);
+      tptp_append_suffix(skname_sk, sizeof(skname_sk), g->skname, "_sk");
       sk_last = skname_sk;
     } else
       sk_last = g->skname;
@@ -1750,6 +1965,33 @@ const char *tptp_problem_file(void)
 
 /*************
  *
+ *   clause_source_file()
+ *
+ *   file() citation for one leaf clause: its own recorded source file
+ *   (ladr/tptp_parse.c's tptp_source_file attribute, set from the actual
+ *   file the formula was parsed from -- the top-level problem, or
+ *   whichever include()'d axiom file it really came from) if it has one,
+ *   else tptp_problem_file() as before (native-syntax input, or any
+ *   derived clause that never carried this attribute).  Without this, every
+ *   leaf pulled in via include() -- routine for TPTP problems sharing a
+ *   large axiom file, e.g. the CSR domain's SUMO-backed .ax files under
+ *   its Axioms directory -- was mislabeled as coming from the top-level
+ *   problem file, which a strict verifier correctly rejects as citing a
+ *   source the axiom isn't actually in (found 2026-08-04, real CASC-era
+ *   CSR problems during the StarExec release-gate sweep).
+ *
+ *************/
+
+static
+const char *clause_source_file(Topform c)
+{
+  const char *f = get_string_attribute(c->attributes,
+                                       get_tptp_source_file_attr(), 1);
+  return f ? f : tptp_problem_file();
+}
+
+/*************
+ *
  *   make_neg_name()
  *
  *   Build the assume_negation node name "<tptp_name>_neg" (quoted if the
@@ -1760,17 +2002,9 @@ const char *tptp_problem_file(void)
 static
 void make_neg_name(char *buf, size_t bufsz, const char *tptp_name)
 {
-  BOOL needs_quote = FALSE;
-  const char *p;
-  for (p = tptp_name; *p; p++)
-    if (*p == '(' || *p == ')' || *p == ',' || *p == ' ') {
-      needs_quote = TRUE;
-      break;
-    }
-  if (needs_quote)
-    snprintf(buf, bufsz, "'%s_neg'", tptp_name);
-  else
-    snprintf(buf, bufsz, "%s_neg", tptp_name);
+  char tmp[520];
+  snprintf(tmp, sizeof(tmp), "%s_neg", tptp_name);
+  quote_tptp_name(buf, bufsz, tmp);
 }
 
 /*************
@@ -1818,24 +2052,14 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
   int tna = get_tptp_name_attr();
   char *tptp_name = get_string_attribute(c->attributes, tna, 1);
   char qname[512];
+  BOOL fof_leaf;
 
   (void) full_fof;   /* the full FOF derivation is always emitted now */
 
   qname[0] = '\0';
 
-  /* TPTP names containing parens, commas, or spaces must be quoted. */
-  if (tptp_name) {
-    BOOL needs_quote = FALSE;
-    char *p;
-    for (p = tptp_name; *p && !needs_quote; p++) {
-      if (*p == '(' || *p == ')' || *p == ',' || *p == ' ')
-        needs_quote = TRUE;
-    }
-    if (needs_quote)
-      snprintf(qname, sizeof(qname), "'%s'", tptp_name);
-    else
-      snprintf(qname, sizeof(qname), "%s", tptp_name);
-  }
+  if (tptp_name)
+    quote_tptp_name(qname, sizeof(qname), tptp_name);
 
   /* Input FOF formula leaf.  Prover9 clausifies the input and clears the
      formula on the proof's placeholder node, but the original formula is
@@ -1851,21 +2075,57 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
            negated-conjecture clauses cite <name>_neg (see DENY_JUST below),
            not the conjecture, so the conjecture is consumed only through
            assume_negation and the negation node carries the literal
-           ~(conjecture) -- what GDV and proofcheck require. */
+           ~(conjecture) -- what GDV and proofcheck require.
+
+           orig->formula may be an unclosed, free-variable formula for
+           native-syntax goals: process_goal_formulas() (ladr/top_input.c)
+           only closes a *temporary copy* for clausification, leaving
+           tf->formula exactly as parsed.  Printing that raw, then
+           wrapping in ~(...), is genuine TPTP ambiguity -- free
+           variables under negation read as universal by convention,
+           but the intended meaning here is existential (negating a
+           universal conjecture).  Close a copy once and print that
+           same closed copy both times, so the conjecture and
+           negated_conjecture leaves' quantifier variable naming
+           matches exactly.  Safe no-op for genuine TPTP input (or
+           native input already using explicit all/exists): those have
+           no free variables left for universal_closure() to wrap.
+
+           universal_closure() reuses the formula's own (native, lower-
+           case) variable names as the new quantifier's bound names --
+           TPTP requires ALL variables, bound or free, to be upper-case,
+           so those need the same rename_bad_qvars_formula() treatment
+           already used for the recorded NNF/Skolem forms below (fresh
+           "X0"-style names). Local map, not the shared qmap those use:
+           this formula is unrelated to any Sk_group's recorded forms. */
         char nqname[520];
+        I2list qmap = NULL;
+        Formula closed = universal_closure(formula_copy(orig->formula));
+        rename_bad_qvars_formula(closed, &qmap);
         make_neg_name(nqname, sizeof(nqname), tptp_name);
         fprintf(fp, "fof(%s, conjecture, ", qname);
-        fwrite_formula_tptp(fp, orig->formula);
-        fprintf(fp, ", file('%s',%s)).\n", tptp_problem_file(), qname);
+        fwrite_formula_tptp(fp, closed);
+        fprintf(fp, ", file('%s',%s)).\n", clause_source_file(c), qname);
         fprintf(fp, "fof(%s, negated_conjecture, ~(", nqname);
-        fwrite_formula_tptp(fp, orig->formula);
+        fwrite_formula_tptp(fp, closed);
         fprintf(fp, "), inference(assume_negation, [status(cth)], [%s])).\n",
                 qname);
+        zap_formula(closed);
+        if (qmap != NULL)
+          zap_i2list(qmap);
       }
       else {
+        /* Same unclosed-formula gap as above, for axioms with real
+           quantifier/connective structure and no explicit all/exists. */
+        I2list qmap = NULL;
+        Formula closed = universal_closure(formula_copy(orig->formula));
+        rename_bad_qvars_formula(closed, &qmap);
         fprintf(fp, "fof(%s, axiom, ", qname);
-        fwrite_formula_tptp(fp, orig->formula);
-        fprintf(fp, ", file('%s',%s)).\n", tptp_problem_file(), qname);
+        fwrite_formula_tptp(fp, closed);
+        fprintf(fp, ", file('%s',%s)).\n", clause_source_file(c), qname);
+        zap_formula(closed);
+        if (qmap != NULL)
+          zap_i2list(qmap);
       }
       return;
     }
@@ -1873,9 +2133,16 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
 
   /* Skip $false input leaves: the empty clause cannot be a legitimate
      input axiom or goal.  These arise when fastPE resolves clauses
-     during preprocessing before the search starts. */
+     during preprocessing before the search starts.  EXCEPT: don't skip
+     when c IS the proof's actual terminal empty clause (see
+     Proof_terminal_empty_clause's own comment) -- that shape is
+     indistinguishable from the fastPE-artifact shape this check exists
+     for, but skipping the real conclusion leaves the whole printed
+     proof empty instead of just omitting one irrelevant leftover. */
   if (c->literals == NULL &&
-      (primary_type == INPUT_JUST || primary_type == GOAL_JUST))
+      (primary_type == INPUT_JUST || primary_type == GOAL_JUST) &&
+      !(Proof_terminal_empty_clause != NULL &&
+        c->id == Proof_terminal_empty_clause->id))
     return;
 
   /* Clausal fof axiom (marked at input time): clausify() was a no-op, so the
@@ -1888,24 +2155,72 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
       get_int_attribute(c->attributes, get_clausal_fof_attr(), 1) == 1) {
     Formula ff = universal_closure(clause_to_formula(c));
     Term t = topform_to_term_without_attributes(c);
-    fprintf(fp, "fof(%s, axiom, ", qname);
+    /* qname (the ORIGINAL problem's own name for this axiom) is used as
+       this fof leaf's own top-level identifier, and again, verbatim, as
+       the citation the immediately-following clausify(thm) step names
+       as its parent.  If the original problem happens to name its own
+       axioms "c_<N>" (a common convention, especially in older
+       CNF-style TPTP problems -- e.g. genuine cnf() input, already
+       excluded from this branch entirely by the get_tptp_cnf_attr()
+       check above), that string can collide with Prover9's OWN
+       "c_<id>" numbering -- used for EVERY derived clause anywhere in
+       the proof, not just this axiom's own immediate clausify child --
+       producing two DIFFERENT statements sharing one name: invalid
+       TPTP a strict reader (tptp4X: "Duplicate annotated formula
+       name") rejects.  That's exactly the class of bug fixed for real
+       cnf()-role axioms by bec8972/0e6d55c; a still-fof()-declared,
+       trivially-clausal axiom whose OWN name happens to look like
+       Prover9's own counter falls through that exclusion (found
+       2026-08-04, synthetic repro).  Checking only against this
+       clause's OWN c->id is not enough -- the collision can be with a
+       DIFFERENT axiom's derived clause anywhere else in the same
+       proof, and at print time there's no cheap way to know every
+       c->id value that will ever appear.  So instead: unconditionally
+       disambiguate qname's LOCAL use here whenever it MATCHES
+       Prover9's own generated-name shape ("c_" + digits, the only
+       shape fprint_clause_tptp ever assigns via c->id) -- guaranteed
+       collision-free regardless of which specific numbers are in play,
+       at the cost of occasionally renaming a case that wouldn't
+       actually have collided.  Safe because nothing outside this
+       branch re-derives or re-cites this fof leaf's name (the branch
+       clausifies straight to a single thm step and returns, never
+       entering the Sk_groups/split_conjunct multi-citation machinery
+       that needs a name stable across separate print calls).  The
+       file() annotation keeps citing the true original qname -- only
+       this leaf's own identity and its clausify child's citation of it
+       change. */
+    char cite_name[560];
+    {
+      const char *p = qname;
+      BOOL looks_ladr_generated = FALSE;
+      if (p[0] == 'c' && p[1] == '_' && p[2] != '\0') {
+        looks_ladr_generated = TRUE;
+        for (p += 2; *p; p++)
+          if (*p < '0' || *p > '9') { looks_ladr_generated = FALSE; break; }
+      }
+      if (looks_ladr_generated)
+        tptp_append_suffix(cite_name, sizeof(cite_name), qname, "_fof");
+      else
+        snprintf(cite_name, sizeof(cite_name), "%s", qname);
+    }
+    fprintf(fp, "fof(%s, axiom, ", cite_name);
     fwrite_formula_tptp(fp, ff);
-    fprintf(fp, ", file('%s',%s)).\n", tptp_problem_file(), qname);
+    fprintf(fp, ", file('%s',%s)).\n", clause_source_file(c), qname);
     fprintf(fp, "cnf(c_%llu, plain, ", (unsigned long long) c->id);
     if (t) {
       tptp_quote_bad_syms(t);
       fwrite_term_tptp(fp, t);
       zap_term(t);
     }
-    fprintf(fp, ", inference(clausify, [status(thm)], [%s])).\n", qname);
+    fprintf(fp, ", inference(clausify, [status(thm)], [%s])).\n", cite_name);
     zap_formula(ff);
     return;
   }
 
   /* A residual FOF formula node still carrying its formula is emitted as a
      named leaf too (the placeholder path above normally handles inputs). */
-  BOOL fof_leaf = is_fof && tptp_name != NULL &&
-                  (primary_type == INPUT_JUST || primary_type == GOAL_JUST);
+  fof_leaf = is_fof && tptp_name != NULL &&
+             (primary_type == INPUT_JUST || primary_type == GOAL_JUST);
 
   /* Print: fof(<name>| c_ID, role, */
   if (fof_leaf)
@@ -1918,6 +2233,14 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
   if (is_fof && primary_type == GOAL_JUST)
     fprintf(fp, "conjecture, ");
   else if (primary_type == DENY_JUST || c->goal_derived)
+    fprintf(fp, "negated_conjecture, ");
+  else if (primary_type == INPUT_JUST &&
+           get_int_attribute(c->attributes, get_tptp_neg_conj_attr(), 1) == 1)
+    /* cnf() input record whose role was negated_conjecture: the clause is
+       already the denial and is otherwise indistinguishable from an axiom
+       here, but the leaf must keep the role or GDV cannot match it as a
+       copy of the problem's negated_conjecture (and its thm-of-the-problem
+       fallback necessarily fails on a denial). */
     fprintf(fp, "negated_conjecture, ");
   else if (primary_type == INPUT_JUST)
     fprintf(fp, "axiom, ");
@@ -1943,12 +2266,12 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
   /* Print the source / inference annotation. */
   if (fof_leaf) {
     /* Input formula leaf: cite the problem file. */
-    fprintf(fp, ", file('%s',%s)).\n", tptp_problem_file(), qname);
+    fprintf(fp, ", file('%s',%s)).\n", clause_source_file(c), qname);
   }
   else if (primary_type == INPUT_JUST || primary_type == GOAL_JUST) {
     /* CNF input clause (no clausification): a leaf citing the problem. */
     if (tptp_name)
-      fprintf(fp, ", file('%s',%s)).\n", tptp_problem_file(), qname);
+      fprintf(fp, ", file('%s',%s)).\n", clause_source_file(c), qname);
     else if (primary_type == GOAL_JUST)
       fprintf(fp, ", introduced(conjecture,[],[])).\n");
     else
@@ -1958,6 +2281,7 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
     /* If this clause is part of a Skolemizing group, its skolemize node was
        already emitted; print it as a split_conjunct (thm) of that node. */
     struct sk_group *skg = skolem_group_of(c);
+    const char *st;
     if (skg != NULL) {
       fprintf(fp, ", inference(split_conjunct, [status(thm)], [%s])).\n",
               skg->skname);
@@ -1979,7 +2303,7 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
     }
     /* FOF-to-CNF: status(thm) when the clause is a logical consequence of
        its parent formula, status(esa) when it carries a Skolem witness. */
-    const char *st = clause_has_skolem(c) ? "esa" : "thm";
+    st = clause_has_skolem(c) ? "esa" : "thm";
     if (tptp_name) {
       fprintf(fp, ", inference(clausify, ");
       fprint_clausify_status(fp, c, st);
@@ -2001,6 +2325,7 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
        node keeps this a normal clausify step.  status(thm) unless it
        introduces a Skolem witness. */
     struct sk_group *skg = skolem_group_of(c);
+    const char *st;
     if (skg != NULL) {
       fprintf(fp, ", inference(split_conjunct, [status(thm)], [%s])).\n",
               skg->skname);
@@ -2020,7 +2345,7 @@ void fprint_clause_tptp(FILE *fp, Topform c, BOOL full_fof)
         return;
       }
     }
-    const char *st = clause_has_skolem(c) ? "esa" : "thm";
+    st = clause_has_skolem(c) ? "esa" : "thm";
     if (tptp_name) {
       char nqname[520];
       make_neg_name(nqname, sizeof(nqname), tptp_name);
@@ -2214,6 +2539,9 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
 {
   Plist p;
   Variable_style orig_style = variable_style();
+  I3list jmap;
+  Plist expanded;
+  BOOL has_fof;
 
   /* Reset the per-proof set of already-declared fresh (Skolem/definition)
      symbols, so new_symbols() declarations are emitted exactly once. */
@@ -2232,14 +2560,22 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
      This unrolls resolve+rewrite+unit_del chains so that each TSTP
      inference step has a single operation with correct intermediate
      clause bodies.  Without this, back-demodulated parent bodies
-     make compound steps un-verifiable. */
-  I3list jmap = NULL;
-  Plist expanded = expand_proof(proof, &jmap);
-  if (expanded == NULL)
+     make compound steps un-verifiable.  AC-mode DEMOD_JUST steps are
+     now expandable too (see ac_expand.c); AC-mode PARA_JUST steps are
+     not yet (a separate phase) -- expand_proof falls back gracefully
+     (returns NULL) if it hits one, exactly like any other replay
+     failure. */
+  jmap = NULL;
+  expanded = expand_proof(proof, &jmap);
+  if (expanded == NULL) {
     /* Replay failure (see expand_proof): print the original steps.
        Compound justifications stay collapsed, but the output is complete
        and well-formed. */
+    if (assoc_comm_symbols())
+      fprintf(fp, "%% AC proof: expansion skipped "
+	      "(a step could not be replayed -- see stderr).\n");
     expanded = proof;
+  }
 
   /* Group clausify/deny clauses by their Skolemizing parent, so each such
      group is emitted as one skolemize step + split_conjunct steps. */
@@ -2323,7 +2659,7 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
      file, and their clausify children cite them with the
      correct SZS status (thm, or esa for Skolemization).  This gives GDV a
      complete, verifiable derivation rather than dangling parent names. */
-  BOOL has_fof = FALSE;
+  has_fof = FALSE;
   for (p = expanded; p && !has_fof; p = p->next) {
     Topform c = (Topform) p->v;
     if (c->is_formula && c->justification &&
@@ -2339,6 +2675,14 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
        as a split_conjunct of it.  Otherwise, if c is a definitional clausify
        step, emit its introduced(definition) leaves (once each) first. */
     struct sk_group *skg = skolem_group_of(c);
+    /* An input/goal placeholder whose original formula is still in the ID
+       table is printed as an FOF leaf, so it needs FOF (named) variable
+       style; genuine CNF clauses use PROLOG_STYLE for uppercase variables. */
+    Topform orig = find_clause_by_id((int) c->id);
+    BOOL fof_out = c->is_formula ||
+                   (orig != NULL && orig->formula != NULL && c->justification &&
+                    (c->justification->type == INPUT_JUST ||
+                     c->justification->type == GOAL_JUST));
     if (skg != NULL && !skg->emitted) {
       set_variable_style(orig_style);
       emit_skolemize_node(fp, skg);
@@ -2353,14 +2697,6 @@ void fprint_proof_tptp(FILE *fp, Plist proof)
         zap_ilist(ds);
       }
     }
-    /* An input/goal placeholder whose original formula is still in the ID
-       table is printed as an FOF leaf, so it needs FOF (named) variable
-       style; genuine CNF clauses use PROLOG_STYLE for uppercase variables. */
-    Topform orig = find_clause_by_id((int) c->id);
-    BOOL fof_out = c->is_formula ||
-                   (orig != NULL && orig->formula != NULL && c->justification &&
-                    (c->justification->type == INPUT_JUST ||
-                     c->justification->type == GOAL_JUST));
     if (fof_out)
       set_variable_style(orig_style);
     else
@@ -2621,6 +2957,13 @@ void exit_if_over_limit(void)
 static
 BOOL inferences_to_make(void)
 {
+  if (flag(Opt->para_pairs))
+    /* Pair mode: sos never drains (clauses are not moved to usable by
+       given selection), so availability is pair-index exhaustion.
+       Before the first pair_inferences() call the index is NULL and
+       there is work iff clauses exist. */
+    return Pair_idx == NULL ? givens_available()
+                            : !pairs_exhausted(Pair_idx);
   return givens_available();
 }  // inferences_to_make
 
@@ -2659,6 +3002,25 @@ BOOL restricted_denial(Topform c)
 
 /*************
  *
+ *   bd_index_maintained()
+ *
+ *   Is the back-demod Mindex being maintained?  Stock: gated on the
+ *   back_demod flag.  With the FPA-AC finder (ac_back_demod +
+ *   ac_bd_index), the index must be maintained as well, even if
+ *   back_demod is off.  All index_back_demod call sites use this so
+ *   INSERT and DELETE stay consistent within a run.
+ *
+ *************/
+
+static
+BOOL bd_index_maintained(void)
+{
+  return flag(Opt->back_demod) ||
+    (assoc_comm_symbols() && flag(Opt->ac_back_demod));
+}  /* bd_index_maintained */
+
+/*************
+ *
  *   disable_clause()
  *
  *************/
@@ -2677,6 +3039,13 @@ void disable_clause(Topform c)
 
   clock_start(Clocks.disable);
 
+  /* para_pairs mode: a disabled clause must leave the pair index
+     (no-op with the flag clear: Pair_idx stays NULL). */
+  if (Pair_idx != NULL && c->in_pair_index) {
+    delete_pair_index(c, pair_wt(c), Pair_idx);
+    c->in_pair_index = 0;
+  }
+
   if (clist_member(c, Glob.demods)) {
     index_demodulator(c, demodulator_type(c,
 					  parm(Opt->lex_dep_demod_lim),
@@ -2687,14 +3056,16 @@ void disable_clause(Topform c)
 
   if (clist_member(c, Glob.usable)) {
     index_literals(c, DELETE, Clocks.index, FALSE);
-    index_back_demod(c, DELETE, Clocks.index, flag(Opt->back_demod));
+    if (!c->ac_extension)   /* never inserted (see the INSERT guards) */
+      index_back_demod(c, DELETE, Clocks.index, bd_index_maintained());
     if (!restricted_denial(c))
       index_clashable(c, DELETE);
     clist_remove(c, Glob.usable);
   }
   else if (clist_member(c, Glob.sos)) {
     index_literals(c, DELETE, Clocks.index, FALSE);
-    index_back_demod(c, DELETE, Clocks.index, flag(Opt->back_demod));
+    if (!c->ac_extension)   /* never inserted (see the INSERT guards) */
+      index_back_demod(c, DELETE, Clocks.index, bd_index_maintained());
     remove_from_sos2(c, Glob.sos);
   }
   else if (clist_member(c, Glob.limbo)) {
@@ -2888,7 +3259,19 @@ void handle_proof_and_maybe_exit(Topform empty_clause)
     printf("%% Level of proof is %d.\n", clause_level(empty_clause));
     printf("%% Maximum clause weight is %.3f.\n", max_clause_weight(proof));
     printf("%% Given clauses %s.\n\n", comma_num(Stats.given));
+    /* Reset to plain TPTP printing: clear any native infix/prefix-paren
+       declarations (e.g. "+" printed infix by default in native syntax,
+       invalid in standalone TPTP -- functors must be prefix, "plus(A,B)"
+       not "A + B") picked up during input parsing, then re-declare only
+       the standard TPTP connective/punctuation types. Search is already
+       complete at this point (proof is fully found), so this is pure
+       output formatting with no effect on search behavior. Matches the
+       pattern the -cnf dump-and-exit path already uses. */
+    clear_parse_type_for_all_symbols();
+    declare_tptp_output_types();
+    Proof_terminal_empty_clause = empty_clause;
     fprint_proof_tptp(stdout, proof);
+    Proof_terminal_empty_clause = NULL;
   }
   else if (flag(Opt->print_proofs)) {
     /* Native Prover9 proof output */
@@ -2959,9 +3342,16 @@ void handle_proof_and_maybe_exit(Topform empty_clause)
       I3list jmap = NULL;
       if (flag(Opt->print_expanded_proof)) {
         proof_to_print = expand_proof(proof, &jmap);
-        if (proof_to_print == NULL)
-          /* Replay failure (see expand_proof): print the unexpanded proof. */
+        if (proof_to_print == NULL) {
+          /* Replay failure (see expand_proof) -- most commonly an
+             AC-mode PARA_JUST step, not yet expandable (a separate
+             phase; AC-mode DEMOD_JUST steps are, see ac_expand.c).
+             Print the unexpanded proof. */
+          if (assoc_comm_symbols())
+            printf("%% AC proof: print_expanded_proof ignored "
+                   "(a step could not be replayed -- see stderr).\n");
           proof_to_print = proof;
+        }
         else {
         /* Restore original goal/input bodies - expand_proof may rewrite
            a goal body as a side effect of CNF processing.  Deep-copy
@@ -3173,7 +3563,11 @@ void cl_process_simplify(Topform c)
     }
     clock_stop(Clocks.demod);
   }
-  else if (!clist_empty(Glob.demods)) {
+  else if (!clist_empty(Glob.demods) && !c->ac_extension) {
+    /* ac_extension guard: a demodulator built from the parent equation
+       instantly rewrites its own extension f(s,X)=f(t,X) to a tautology,
+       deleting it before it can ever act on a sub-multiset.  Extensions
+       are kept unnormalized; everything else demodulates as always. */
     if (flag(Opt->lex_order_vars)) {
       renumber_variables(c, MAX_VARS);
       c->normal_vars = FALSE;  // demodulation can make vars non-normal
@@ -3433,6 +3827,102 @@ BOOL skip_black_white_tests(Topform c)
 }  /* skip_black_white_tests */
 
 
+/*************
+ *
+ *   discard_patterns()
+ *
+ *   Convert a list(discard) of equation TERMS into canonical unit-clause
+ *   pattern Topforms.  Any generated clause SUBSUMED by one of these
+ *   patterns is deleted in cl_process_delete -- an ablation instrument
+ *   for asking whether a proof exists that avoids a family of lemmas
+ *   (e.g. idempotence x+x=x).  Patterns are ac_canonical in AC mode so a
+ *   pattern subsumes AC-variants of a clause (clauses leave cl_process
+ *   ac_canonical too).  NOTE: discarding removes clauses the calculus
+ *   might NEED, so a resulting SEARCH FAILED is inconclusive (lost
+ *   completeness), while a proof found despite the discards is genuine.
+ *
+ *************/
+
+static
+Plist discard_patterns(Plist terms)
+{
+  Plist out = NULL, p;
+  int bit;
+  if (terms == NULL)
+    return NULL;
+  bit = claim_term_flag();
+  for (p = terms; p != NULL; p = p->next) {
+    Term t = copy_term(p->v);
+    Topform c = term_to_clause(t);
+    clause_set_variables(c, MAX_VARS);  // late-letter symbols -> variables
+                                        // (TERMS-list parse leaves them constants)
+    renumber_variables(c, MAX_VARS);
+    upward_clause_links(c);
+    out = plist_append(out, c);
+    (void) bit;
+  }
+  release_term_flag(bit);
+  return out;
+}  /* discard_patterns */
+
+/*************
+ *
+ *   freeze_vars_term() / clause_subsumed_by_discard()
+ *
+ *   subsumes_bt() will bind a pattern variable to a subject constant or
+ *   compound, but NOT to a subject VARIABLE -- so an identical universal
+ *   (x+x=x pattern vs a derived x+x=x) is not matched.  Freeze the
+ *   candidate's variables to fresh constants first: subsumption is
+ *   preserved (a pattern subsumes C iff it subsumes C with its variables
+ *   frozen), and the frozen form has no subject variables to refuse.
+ *   Fresh constant names use an unusual prefix to avoid clashing with
+ *   problem symbols.
+ *
+ *************/
+
+static
+Term freeze_vars_term(Term t)
+{
+  if (VARIABLE(t)) {
+    char name[32];
+    sprintf(name, "$$dfz%d", VARNUM(t));
+    return get_rigid_term(name, 0);
+  }
+  else {
+    int i;
+    Term nt = get_rigid_term_like(t);
+    for (i = 0; i < ARITY(t); i++)
+      ARG(nt, i) = freeze_vars_term(ARG(t, i));
+    return nt;
+  }
+}  /* freeze_vars_term */
+
+static
+BOOL clause_subsumed_by_discard(Topform c)
+{
+  Topform frozen;
+  Literals lit, flit, *tail;
+  Plist dp;
+  BOOL hit = FALSE;
+
+  /* Build a copy of c with variables frozen to fresh constants. */
+  frozen = get_topform();
+  tail = &frozen->literals;
+  for (lit = c->literals; lit != NULL; lit = lit->next) {
+    flit = new_literal(lit->sign, freeze_vars_term(lit->atom));
+    *tail = flit;
+    tail = &flit->next;
+  }
+  upward_clause_links(frozen);
+
+  for (dp = Glob.discard; dp != NULL && !hit; dp = dp->next)
+    if (subsumes_bt((Topform) dp->v, frozen))
+      hit = TRUE;
+
+  delete_clause(frozen);
+  return hit;
+}  /* clause_subsumed_by_discard */
+
 static
 BOOL cl_process_delete(Topform c)
 {
@@ -3443,6 +3933,25 @@ BOOL cl_process_delete(Topform c)
       printf("%stautology\n", TPTP_PFX);
     Stats.subsumed++;
     return TRUE;  // delete
+  }
+
+  // list(discard) ablation: delete any generated clause subsumed by a
+  // discard pattern.  Gated on Glob.searching so input/initial clauses
+  // are never discarded, and on c->used so a unit-conflict participant
+  // survives.  Zero cost when the list is empty (default).
+  /* list(discard): delete any DERIVED clause subsumed by a discard
+     pattern.  Protect genuine input clauses (has_input_just), restricted
+     denials, and unit-conflict participants; everything else derived is
+     eligible, whether generated during preprocessing or deep in search.
+     Zero cost when the list is empty (default). */
+  if (Glob.discard != NULL && !has_input_just(c) &&
+      !restricted_denial(c) && !c->used) {
+    if (clause_subsumed_by_discard(c)) {
+      if (flag(Opt->print_gen))
+        printf("%sdiscard_rule applied.\n", TPTP_PFX);
+      Stats.deleted_by_rule++;
+      return TRUE;  // delete
+    }
   }
 
   clause_wt_with_adjustments(c);  // possibly sets c->matching_hint
@@ -3501,7 +4010,6 @@ BOOL cl_process_delete(Topform c)
   }
 }  // cl_process_delete
 
-static
 void cl_process(Topform c)
 {
   // If the infer_clock is running, stop it and restart it when done.
@@ -3522,6 +4030,32 @@ void cl_process(Topform c)
   if (flag(Opt->print_gen)) {
     printf("\n%sgenerated: ", TPTP_PFX);
     fwrite_clause(stdout, c, CL_FORM_STD);
+  }
+
+  /* AC mode: bound derived clauses BEFORE simplification.  A giant AC
+     paramodulant costs up to demod_step_limit rewrites (with btm AC
+     matching) before any deletion test would see it; EQP bounded its
+     own runs the same way in 1996 (max_weight 70 in that era's
+     configuration).  Uses raw symbol count against max_weight;
+     input/initial clauses are never discarded. */
+  if (assoc_comm_symbols() && Glob.searching) {
+    int amw = parm(Opt->ac_max_weight);
+    if (amw >= 0) {
+      int sc = 0;
+      Literals l;
+      for (l = c->literals; l != NULL; l = l->next)
+        sc += symbol_count(l->atom);
+      if (sc > amw) {
+        if (flag(Opt->print_gen))
+          printf("%sac max_weight applied (%d).\n", TPTP_PFX, sc);
+        Stats.sos_limit_deleted++;
+        delete_clause(c);
+        clock_stop(Clocks.preprocess);
+        if (infer_clock_stopped)
+          clock_start(Clocks.infer);
+        return;
+      }
+    }
   }
 
   cl_process_simplify(c);            // all simplification
@@ -3571,7 +4105,22 @@ void back_demod(Topform demod)
   Plist results, p, prev;
 
   clock_start(Clocks.back_demod);
-  results = back_demodulatable(demod,
+  if (assoc_comm_symbols() && flag(Opt->ac_back_demod)) {
+    /* AC (btm) candidate finding (EQP's get_bd_clauses).  Opt-in:
+       set(ac_back_demod); effective only with back_demod (which
+       gates the calls to this function).  Default: FPA-AC indexed
+       finder (EQP INDEX_BD) -- the back-demod Mindex is built with
+       BACKTRACK_UNIF in this mode, so FPA supplies superset
+       candidates (paths stop at AC symbols) and btm partial match
+       confirms.  clear(ac_bd_index) falls back to the linear scan
+       of usable+sos (for A/B validation). */
+    if (flag(Opt->ac_bd_index))
+      results = back_demodulatable_ac_idx(demod);
+    else
+      results = back_demodulatable_ac(demod, Glob.usable, Glob.sos);
+  }
+  else
+    results = back_demodulatable(demod,
 			       demodulator_type(demod,
 						parm(Opt->lex_dep_demod_lim),
 						flag(Opt->lex_dep_demod_sane)),
@@ -3954,7 +4503,8 @@ void limbo_process(BOOL pre_search)
     if (restricted_denial(c)) {
       // do not index_clashable!  disable_clause should not unindex_clashable!
       clist_append(c, Glob.usable);
-      index_back_demod(c, INSERT, Clocks.index, flag(Opt->back_demod));
+      if (!c->ac_extension)   /* extensions must not be back-demodulated */
+        index_back_demod(c, INSERT, Clocks.index, bd_index_maintained());
     }
     else {
       // Move to Sos and index to be found for back demodulation.
@@ -3968,7 +4518,8 @@ void limbo_process(BOOL pre_search)
       else
 	c->initial = FALSE;
       insert_into_sos2(c, Glob.sos);
-      index_back_demod(c, INSERT, Clocks.index, flag(Opt->back_demod));
+      if (!c->ac_extension)   /* extensions must not be back-demodulated */
+        index_back_demod(c, INSERT, Clocks.index, bd_index_maintained());
     }
 
     // Report if this single iteration took a long time
@@ -4132,11 +4683,108 @@ void rebuild_sos_index(void)
  *
  *************/
 
+/* ---- EQP-style pair-selection inference (set(para_pairs)) ----------
+   Fully optional: with the flag clear (default), none of this runs and
+   the ordinary given-clause loop below is untouched.  One PAIR of
+   clauses is processed per make_inferences() call, so the main loop's
+   limbo processing, checkpointing, and exit checks interleave exactly
+   as they do between givens.  The pair index (ladr/pindex.c, McCune's
+   EQP port) yields pairs in increasing combined-weight order and
+   supports incremental insert/delete. */
+
+static
+void pair_insert(Topform c)
+{
+  if (!c->in_pair_index && !c->is_formula && c->literals != NULL) {
+    insert_pair_index(c, pair_wt(c), Pair_idx);
+    c->in_pair_index = 1;
+    if (c->id > Pair_watermark)
+      Pair_watermark = c->id;
+  }
+}  /* pair_insert */
+
+static
+void pair_inferences(void)
+{
+  Topform c1, c2;
+
+  if (Pair_idx == NULL) {
+    double mw = floatparm(Opt->max_weight);
+    Clist_pos p;
+    Pair_n = (mw > 0 && mw <= 1000) ? (int) mw + 1 : 128;
+    Pair_idx = init_pair_index(Pair_n);
+    for (p = Glob.usable->first; p; p = p->next)
+      pair_insert(p->c);
+    for (p = Glob.sos->first; p; p = p->next)
+      pair_insert(p->c);
+  }
+  else {
+    /* Absorb clauses that limbo processing appended to sos since the
+       last call (appends are in ascending id order). */
+    Clist_pos p;
+    for (p = Glob.sos->last; p && p->c->id > Pair_watermark; p = p->prev)
+      ;  /* find the first new one from the tail */
+    p = (p == NULL) ? Glob.sos->first : p->next;
+    for ( ; p; p = p->next)
+      pair_insert(p->c);
+  }
+
+  retrieve_pair(Pair_idx, &c1, &c2);
+
+  if (c1 == NULL || c2 == NULL) {
+    /* Nothing retrievable now.  If the index is truly exhausted, the
+       main loop's inferences_to_make() ends the search (sos-empty
+       semantics); otherwise limbo may still feed new clauses. */
+    return;
+  }
+
+  /* First participation = activation: generate the AC extension
+     exactly as the given loop does at usable-append (item A). */
+  if (assoc_comm_symbols()) {
+    Topform mem[2];
+    int k;
+    mem[0] = c1; mem[1] = c2;
+    for (k = 0; k < 2; k++) {
+      if (!mem[k]->was_given) {
+        Topform ext = ac_extension_of(mem[k]);
+        mem[k]->was_given = TRUE;   /* activated (pair-mode marker) */
+        if (ext != NULL)
+          cl_process(ext);
+      }
+    }
+  }
+
+  Stats.given++;   /* one pair counts as one given for limits/reports */
+  set_hints_given_count(Stats.given);
+  if (flag(Opt->print_given)) {
+    printf("%spair #%llu (wt=%d+%d): %u %u\n", TPTP_PFX,
+	   Stats.given, pair_wt(c1), pair_wt(c2),
+	   (unsigned) c1->id, (unsigned) c2->id);
+    fflush(stdout);
+  }
+
+  if (!restricted_denial(c1) && !restricted_denial(c2) &&
+      !over_parm_limit(number_of_literals(c1->literals), Opt->para_lit_limit) &&
+      !over_parm_limit(number_of_literals(c2->literals), Opt->para_lit_limit)) {
+    Context cf = get_context();
+    Context ci = get_context();
+    para_from_into(c1, cf, c2, ci, FALSE, cl_process);
+    para_from_into(c2, cf, c1, ci, TRUE, cl_process);
+    free_context(cf);
+    free_context(ci);
+  }
+}  /* pair_inferences */
+
 static
 void make_inferences(void)
 {
   Topform given_clause;
   char *selection_type;
+
+  if (flag(Opt->para_pairs)) {
+    pair_inferences();
+    return;
+  }
 
   clock_start(Clocks.pick_given);
   given_clause = get_given_clause2(Glob.sos,Stats.given, Opt, &selection_type);
@@ -4234,6 +4882,15 @@ void make_inferences(void)
     }
 
     clist_append(given_clause, Glob.usable);
+
+    /* AC extension rules (Peterson-Stickel), generated at activation:
+       when AC symbols are declared, each given positive unit equation
+       with an AC top contributes f(s,X)=f(t,X) as a derived clause. */
+    if (assoc_comm_symbols()) {
+      Topform ext = ac_extension_of(given_clause);
+      if (ext != NULL)
+        cl_process(ext);
+    }
     index_clashable(given_clause, INSERT);
     given_infer(given_clause);
   }
@@ -4447,8 +5104,17 @@ void auto_denials(Clist sos, Clist usable, Prover_options opt)
 	     changes);
 
     if (Glob.number_of_neg_clauses > 1 && parm(opt->max_proofs) == 1
-        && !flag(opt->tptp_output)) {
-      /* In TPTP mode, max_proofs stays at 1 (standard ATP behavior). */
+        && !flag(opt->tptp_output) && !flag(opt->single_proof_race)) {
+      /* In TPTP mode, max_proofs stays at 1 (standard ATP behavior).
+         single_proof_race is the analogous exclusion for a -cores LADR
+         child: max_proofs was deliberately forced to 1 so the scheduler
+         can race N distinct strategies to a single proof of ANY goal,
+         not sweep every goal in the file -- this bump would otherwise
+         silently undo that the moment search() itself runs (this
+         function is called from inside search(), after the child's own
+         pre-search assignment), so checking only "is max_proofs
+         currently 1" isn't enough to tell a deliberate force apart from
+         the untouched default. */
       if (!quiet) {
         printf("%s", changes == 0 ? "\n" : "");
         printf("  %% assign(max_proofs, %d)."
@@ -4558,6 +5224,14 @@ void init_search_early(void)
   else if (stringparm(Opt->order, "kbo")) {
     assign_order_method(KBO_METHOD);
   }
+
+  /* AC unifier superset restriction (EQP heritage; -1 = unlimited). */
+  set_ac_superset_limit(parm(Opt->ac_superset_limit));
+
+  /* AC walk budget: bound each backtrack-unification attempt (iteration
+     count across all nested AC subproblems, plus CPU seconds per crank)
+     so that one pair of big AC terms cannot wedge the search. */
+  set_ac_walk_budget(parm(Opt->ac_combo_budget), parm(Opt->ac_unify_seconds));
 
 }  /* init_search_early */
 
@@ -4710,6 +5384,7 @@ void index_and_process_initial_clauses(void)
 {
   Clist_pos p;
   Clist temp_sos;
+  int fpa_depth;
 
   // Index Usable clauses if hyper, UR, or binary-res are set.
 
@@ -4725,12 +5400,27 @@ void index_and_process_initial_clauses(void)
   set_fpa_hash_threshold(parm(Opt->fpa_hash_threshold));
   set_discrim_hash_threshold(parm(Opt->discrim_hash_threshold));
 
-  int fpa_depth = parm(Opt->fpa_depth);
+  fpa_depth = parm(Opt->fpa_depth);
   init_literals_index(fpa_depth);  // fsub, bsub, fudel, budel, ucon
 
-  init_demodulator_index(DISCRIM_BIND, ORDINARY_UNIF, 0);
+  if (assoc_comm_symbols())
+    /* AC demodulation (item D): wild discrimination tree + backtrack
+       (btm) matching, the EQP demodulation-modulo-AC machinery.  The
+       BACKTRACK_UNIF index routes demodulate_clause through
+       demodulate_ac (sub-multiset rewriting at AC roots). */
+    init_demodulator_index(DISCRIM_WILD, BACKTRACK_UNIF, 0);
+  else
+    init_demodulator_index(DISCRIM_BIND, ORDINARY_UNIF, 0);
 
-  init_back_demod_index(FPA, ORDINARY_UNIF, fpa_depth);
+  if (assoc_comm_symbols() && flag(Opt->ac_back_demod))
+    /* FPA-AC back-demod finder (EQP INDEX_BD): FPA candidate paths
+       stop at AC symbols (a sound superset), and BACKTRACK_UNIF makes
+       mindex retrieval confirm candidates with btm partial matching.
+       Only under ac_back_demod, so plain AC runs keep the stock
+       ORDINARY_UNIF index behavior unchanged. */
+    init_back_demod_index(FPA, BACKTRACK_UNIF, fpa_depth);
+  else
+    init_back_demod_index(FPA, ORDINARY_UNIF, fpa_depth);
 
   Glob.clashable_idx = lindex_init(FPA, ORDINARY_UNIF, fpa_depth,
 				   FPA, ORDINARY_UNIF, fpa_depth);
@@ -4766,7 +5456,8 @@ void index_and_process_initial_clauses(void)
     else
       c = orient_input_eq(c);  /* this replaces c if any flipping occurs */
     index_literals(c, INSERT, Clocks.index, FALSE);
-    index_back_demod(c, INSERT, Clocks.index, flag(Opt->back_demod));
+    if (!c->ac_extension)   /* extensions must not be back-demodulated */
+        index_back_demod(c, INSERT, Clocks.index, bd_index_maintained());
     index_clashable(c, INSERT);
   }
 
@@ -4979,7 +5670,8 @@ void index_and_process_initial_clauses(void)
 	c->initial = TRUE;
 	insert_into_sos2(c, Glob.sos);
 	index_literals(c, INSERT, Clocks.index, FALSE);
-	index_back_demod(c, INSERT, Clocks.index, flag(Opt->back_demod));
+	if (!c->ac_extension)   /* extensions must not be back-demodulated */
+        index_back_demod(c, INSERT, Clocks.index, bd_index_maintained());
       }
     }
   }
@@ -5621,9 +6313,9 @@ void restore_fpa_ids(const char *dir)
 static void remove_checkpoint_dir(const char *path)
 {
   DIR *d = opendir(path);
-  if (!d) return;
   struct dirent *ent;
   char filepath[1024];
+  if (!d) return;
   while ((ent = readdir(d)) != NULL) {
     if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
       continue;
@@ -5648,6 +6340,7 @@ static void remove_checkpoint_dir(const char *path)
 static void record_auto_checkpoint(const char *dirname)
 {
   int keep = parm(Opt->checkpoint_keep);
+  int slot;
 
   /* Initialize or resize circular buffer if needed */
   if (Auto_ckpt_dirs == NULL || Auto_ckpt_capacity < keep) {
@@ -5681,7 +6374,7 @@ static void record_auto_checkpoint(const char *dirname)
   }
 
   /* Add new entry */
-  int slot = (Auto_ckpt_head + Auto_ckpt_count) % Auto_ckpt_capacity;
+  slot = (Auto_ckpt_head + Auto_ckpt_count) % Auto_ckpt_capacity;
   Auto_ckpt_dirs[slot] = strdup(dirname);
   Auto_ckpt_count++;
 }  /* record_auto_checkpoint */
@@ -7136,8 +7829,19 @@ void load_checkpoint_into_loop(void)
 
   fpa_depth = parm(Opt->fpa_depth);
   init_literals_index(fpa_depth);
-  init_demodulator_index(DISCRIM_BIND, ORDINARY_UNIF, 0);
-  init_back_demod_index(FPA, ORDINARY_UNIF, fpa_depth);
+  if (assoc_comm_symbols())
+    /* AC demodulation (item D): wild discrimination tree + backtrack
+       (btm) matching, the EQP demodulation-modulo-AC machinery.  The
+       BACKTRACK_UNIF index routes demodulate_clause through
+       demodulate_ac (sub-multiset rewriting at AC roots). */
+    init_demodulator_index(DISCRIM_WILD, BACKTRACK_UNIF, 0);
+  else
+    init_demodulator_index(DISCRIM_BIND, ORDINARY_UNIF, 0);
+  if (assoc_comm_symbols() && flag(Opt->ac_back_demod))
+    /* FPA-AC back-demod finder; see init_search_late. */
+    init_back_demod_index(FPA, BACKTRACK_UNIF, fpa_depth);
+  else
+    init_back_demod_index(FPA, ORDINARY_UNIF, fpa_depth);
   Glob.clashable_idx = lindex_init(FPA, ORDINARY_UNIF, fpa_depth,
                                    FPA, ORDINARY_UNIF, fpa_depth);
   init_hints(ORDINARY_UNIF, Att.bsub_hint_wt,
@@ -7330,7 +8034,8 @@ void load_checkpoint_into_loop(void)
         for (idx = 0; idx < n_all; idx++) {
           Topform c = all_clauses[idx];
           index_literals_fpa_only(c, INSERT, Clocks.index, FALSE);
-          index_back_demod(c, INSERT, Clocks.index, flag(Opt->back_demod));
+          if (!c->ac_extension)   /* extensions must not be back-demodulated */
+        index_back_demod(c, INSERT, Clocks.index, bd_index_maintained());
           if (is_usable[idx])
             index_clashable(c, INSERT);
           if ((idx + 1) % 1000000 == 0) {
@@ -7602,6 +8307,7 @@ Prover_results search(Prover_input p)
     Glob.given_selection  = tlist_copy(p->given_selection);
     Glob.keep_rules       = tlist_copy(p->keep_rules);
     Glob.delete_rules     = tlist_copy(p->delete_rules);
+    Glob.discard          = discard_patterns(p->discard);
 
     // Allocate auxiliary clause lists.
 

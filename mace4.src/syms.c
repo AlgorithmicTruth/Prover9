@@ -31,6 +31,8 @@ int Domain_constant_val[MAX_DOMAIN_CONSTANTS];
 int Num_domain_constants = 0;
 
 extern struct cell *Cells;
+extern Term *Domain;
+extern Term Bool_domain[2];
 
 /*************
  *
@@ -214,6 +216,23 @@ int id_to_domain_size(int id)
   Symbol_data s = Cells[id].symbol;
   return (s->type == RELATION ? 2 : Domain_size);
 }  /* id_to_domain_size */
+
+/*************
+ *
+ *   domain_value()
+ *
+ *   Return the Term representing "assignment i" for this cell -- the
+ *   shared boolean pair for a RELATION cell, the real domain element
+ *   otherwise.  i must be in [0, id_to_domain_size(id)).  See
+ *   docs/mace4-domain-size-1-spec.md.
+ *
+ *************/
+
+Term domain_value(int id, int i)
+{
+  Symbol_data s = Cells[id].symbol;
+  return (s->type == RELATION ? Bool_domain[i] : Domain[i]);
+}  /* domain_value */
 
 /*************
  *

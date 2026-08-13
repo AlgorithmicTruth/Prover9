@@ -18,6 +18,26 @@
 
 #include "btu.h"
 
+/* AC unifier superset restriction (EQP heritage).  -1 = unlimited. */
+static int Ac_superset_limit = -1;
+
+void set_ac_superset_limit(int n)
+{
+  Ac_superset_limit = n;
+}  /* set_ac_superset_limit */
+
+/* DOCUMENTATION
+Current AC superset limit (see set_ac_superset_limit) -- lets a caller
+that needs COMPLETE AC unification (e.g. post-hoc proof expansion)
+save the search's restricted setting, switch to -1, and restore.
+*/
+
+/* PUBLIC */
+int get_ac_superset_limit(void)
+{
+  return Ac_superset_limit;
+}  /* get_ac_superset_limit */
+
 /* Private definitions and types */
 
 #define MAX_ACU_ARGS 500
@@ -71,6 +91,20 @@ struct btu_state {
 #define POP       5
 #define BACKTRACK 6
 
+/* Scratch for unify_ac first-call flatten/prep only.  Nested AC subproblems
+   call unify_ac only after the outer setup finished, so a small nesting
+   stack covers concurrent first-call setups without ~20KB stack frames
+   (and the macOS chkstk probe) on every call. */
+#define AC_U_SCRATCH_DEPTH 16
+struct ac_u_scratch {
+  Term a1[MAX_ACU_ARGS], a2[MAX_ACU_ARGS];
+  Context ac1[MAX_ACU_ARGS], ac2[MAX_ACU_ARGS];
+  int mults1[MAX_ACU_ARGS], mults2[MAX_ACU_ARGS];
+  int ab[MAX_COEF];
+};
+static struct ac_u_scratch Ac_u_scratch[AC_U_SCRATCH_DEPTH];
+static int Ac_u_scratch_top = 0;
+
 /******** bind a variable, record binding in a bt_node ********/
 
 #define BIND_BT(i, c1, t2, c2, bt) {  \
@@ -100,8 +134,17 @@ static unsigned Ac_position_gets, Ac_position_frees;
 static
 Btu_state get_btu_state(void)
 {
-  Btu_state p = get_cmem(PTRS_BTU_STATE);
+  /* Small struct but hot on AC subproblems; skip full get_cmem memset. */
+  Btu_state p = get_mem(PTRS_BTU_STATE);
+  p->parent = p->next = p->prev = p->first_child = p->last_child = NULL;
+  p->t1 = p->t2 = NULL;
+  p->c1 = p->c2 = NULL;
   p->varnum = -1;
+  p->cb = NULL;
+  p->alternative = NO_ALT;
+  p->flipped = 0;
+  p->position_bt = NULL;
+  p->ac = NULL;
   Btu_state_gets++;
   return(p);
 }  /* get_btu_state */
@@ -128,7 +171,17 @@ void free_btu_state(Btu_state p)
 static
 Ac_position get_ac_position(void)
 {
-  Ac_position p = get_cmem(PTRS_AC_POSITION);
+  /* ~379KB struct.  get_cmem memset of the whole block on every reuse was a
+     major user-time cost on AC-heavy runs (basis/combos/basis_terms arrays
+     dominate).  unify_ac always fills the numeric arrays before reading
+     them; only pointer fields need a defined initial value. */
+  Ac_position p = get_mem(PTRS_AC_POSITION);
+  p->c3 = NULL;
+  p->sub_position = NULL;
+  p->next = NULL;
+  p->m = p->n = p->num_basis = 0;
+  p->superset_limit = -1;
+  p->combos_remaining = 0;
   Ac_position_gets++;
   return(p);
 }  /* get_ac_position */
@@ -201,31 +254,6 @@ void p_btu_mem()
  */
 /*************
  *
- *   p_binding()
- *
- *************/
-
-#if 0
-static
-void p_binding(int vnum, Context vc, Term t, Context tc)
-{
-  Term vt, ti;
-  vt = get_variable_term(vnum);
-  ti = apply(vt, vc);
-  printf("[");
-  fprint_term(stdout,vt);
-  printf(",0x%x:%d] -> [", (unsigned) vc, vc->multiplier);
-  fprint_term(stdout,t);
-  printf(",0x%x:%d] (", (unsigned) tc, tc->multiplier);
-  fprint_term(stdout,ti);
-  printf(")\n");
-  free_term(vt);
-  free_term(ti);
-}  /* p_binding */
-#endif
-
-/*************
- *
  *    flatten_deref
  *
  *    Given a term (t) with AC symbol and a context (tc), fill in an
@@ -240,9 +268,17 @@ void p_binding(int vnum, Context vc, Term t, Context tc)
  *
  *************/
 
+/* Count of unification attempts abandoned because a dereferenced term
+   flattened to more than MAX_ACU_ARGS arguments.  Substitution
+   composition can blow up flattened sizes at runtime even when all
+   input clauses are small, so this must NOT be fatal: like the AC
+   walk budget, the attempt is abandoned (AC unification is already
+   incomplete), and the search goes on. */
+static long Flatten_overflows = 0;
+
 static
-void flatten_deref(Term t, Context tc,
-		   Term *a, Context *ac, int *ip)
+int flatten_deref(Term t, Context tc,
+		  Term *a, Context *ac, int *ip)
 {
   Term t1;
   Context c1;
@@ -255,20 +291,19 @@ void flatten_deref(Term t, Context tc,
     c1 = tc;
     DEREFERENCE(t1, c1);
 
-    if (SYMNUM(t1) == sn)
-      flatten_deref(t1, c1, a, ac, ip);
+    if (SYMNUM(t1) == sn) {
+      if (!flatten_deref(t1, c1, a, ac, ip))
+	return 0;
+    }
     else {
-      if (*ip >= MAX_ACU_ARGS) {
-	p_term(t1);
-	fatal_error("flatten_deref, too many arguments.");
-      }
-      else {
-	a[*ip] = t1;
-	ac[*ip] = c1;
-      }
+      if (*ip >= MAX_ACU_ARGS)
+	return 0;  /* too many arguments: caller abandons the attempt */
+      a[*ip] = t1;
+      ac[*ip] = c1;
       (*ip)++;
     }
   }
+  return 1;
 }  /* flatten_deref(t) */
 
 /*************
@@ -333,16 +368,18 @@ int compare_ncv_context(Term t1, Term t2,
 
 /*************
  *
- *    sort_ac(a, c, n)
+ *    sort_ac_quadratic(a, c, n)
  *
- *    Sort an array of terms and their associated contexts.
- *    I intend for the number of terms to be small, so this is 
- *    a quadratic sort.
+ *    Selection sort.  Stable: min_i only moves to a strictly-lesser
+ *    candidate, and the final swap is a straight two-element exchange,
+ *    so terms that compare SAME_AS keep their original relative order.
+ *    Good on constants for small n (the overwhelmingly common case:
+ *    flattened AC argument lists are usually tiny).
  *
  *************/
 
 static
-void sort_ac(Term *a, Context *c, int n)
+void sort_ac_quadratic(Term *a, Context *c, int n)
 {
   int i, j, min_i;
   Term min_t;
@@ -367,6 +404,81 @@ void sort_ac(Term *a, Context *c, int n)
     }
   }
 
+}  /* sort_ac_quadratic */
+
+/*************
+ *
+ *    merge_ac() / merge_sort_ac()
+ *
+ *    Stable merge sort for the large-n case: on a tie (SAME_AS) the
+ *    left run's element is taken first, matching sort_ac_quadratic's
+ *    tie-breaking exactly (see its comment).  Two stable sorts under
+ *    the same comparator always produce the same output for the same
+ *    input, so this is a drop-in replacement, not just "equivalent
+ *    order" -- it reproduces sort_ac_quadratic's output bit-for-bit.
+ *
+ *************/
+
+static
+void merge_ac(Term *a, Context *c, Term *tmp_a, Context *tmp_c,
+	      int lo, int mid, int hi)
+{
+  int i = lo, j = mid, k = lo;
+  while (i < mid && j < hi) {
+    if (compare_ncv_context(a[j], a[i], c[j], c[i]) == LESS_THAN) {
+      tmp_a[k] = a[j]; tmp_c[k] = c[j]; j++;
+    }
+    else {
+      tmp_a[k] = a[i]; tmp_c[k] = c[i]; i++;
+    }
+    k++;
+  }
+  while (i < mid) { tmp_a[k] = a[i]; tmp_c[k] = c[i]; i++; k++; }
+  while (j < hi)  { tmp_a[k] = a[j]; tmp_c[k] = c[j]; j++; k++; }
+  memcpy(a + lo, tmp_a + lo, (hi - lo) * sizeof(Term));
+  memcpy(c + lo, tmp_c + lo, (hi - lo) * sizeof(Context));
+}  /* merge_ac */
+
+static
+void merge_sort_ac(Term *a, Context *c, Term *tmp_a, Context *tmp_c,
+		    int lo, int hi)
+{
+  if (hi - lo > 1) {
+    int mid = lo + (hi - lo) / 2;
+    merge_sort_ac(a, c, tmp_a, tmp_c, lo, mid);
+    merge_sort_ac(a, c, tmp_a, tmp_c, mid, hi);
+    merge_ac(a, c, tmp_a, tmp_c, lo, mid, hi);
+  }
+}  /* merge_sort_ac: recursion depth is O(log n); n is bounded by
+      MAX_ACM_ARGS (2500), so depth is trivially small (~12). */
+
+/*************
+ *
+ *    sort_ac(a, c, n)
+ *
+ *    Sort an array of terms and their associated contexts.  Below the
+ *    threshold, the quadratic sort wins on constant factors (flattened
+ *    AC argument lists are usually tiny); above it, switch to O(n log
+ *    n) merge sort.  Both are stable under compare_ncv_context, so the
+ *    output is identical either way -- this is a constant-factor
+ *    threshold choice, not a behavior change.
+ *
+ *************/
+
+#define SORT_AC_THRESHOLD 16
+
+static
+void sort_ac(Term *a, Context *c, int n)
+{
+  if (n <= SORT_AC_THRESHOLD)
+    sort_ac_quadratic(a, c, n);
+  else {
+    Term *tmp_a = safe_malloc(n * sizeof(Term));
+    Context *tmp_c = safe_malloc(n * sizeof(Context));
+    merge_sort_ac(a, c, tmp_a, tmp_c, 0, n);
+    safe_free(tmp_a);
+    safe_free(tmp_c);
+  }
 }  /* sort_ac */
 
 /*************
@@ -496,6 +608,68 @@ void ac_prepare(Term *a1, Term *a2,
   }
 }  /* ac_prepare */
 
+/*
+ *  Freelist of arity-2 rigid nodes used only for AC basis_terms trees.
+ *  set_up_basis_terms builds many short-lived f(v, f(v, ...)) skeletons
+ *  per unify_ac attempt; recycling them avoids get_term/free_mem churn
+ *  (variables stay shared and are never freed).
+ *
+ *  IMPORTANT: combo construction mutates ARG(shell,1) as a temporary
+ *  cdr link between shells.  Freeing must match the historical pattern
+ *  zap_term(ARG(shell,0)); free_term(shell); -- never walk ARG(shell,1).
+ *  Content nodes are f(var, content) with ARG1 the real spine.
+ */
+static Term Basis_bin_avail = NULL;
+
+static
+Term get_basis_bin(int sn)
+{
+  Term t;
+  if (Basis_bin_avail != NULL) {
+    t = Basis_bin_avail;
+    Basis_bin_avail = (Term) t->u.vp;
+    t->private_symbol = -sn;
+    t->private_flags = 0;
+    t->container = NULL;
+    t->u.vp = NULL;
+    ARG(t, 0) = NULL;
+    ARG(t, 1) = NULL;
+    return t;
+  }
+  return get_rigid_term_dangerously(sn, 2);
+}
+
+static
+void recycle_basis_bin(Term t)
+{
+  ARG(t, 0) = NULL;
+  ARG(t, 1) = NULL;
+  t->u.vp = Basis_bin_avail;
+  Basis_bin_avail = t;
+}
+
+/* Free content spine f(var, f(var, ...)) / variables. */
+static
+void free_basis_content(Term t)
+{
+  if (t == NULL || VARIABLE(t))
+    return;
+  /* ARG0 is a variable (shared); ARG1 is the rest of the content chain. */
+  free_basis_content(ARG(t, 1));
+  recycle_basis_bin(t);
+}
+
+/* Free one basis_terms[i][j] shell: f(content, link-or-NULL). */
+static
+void free_basis_shell(Term shell)
+{
+  if (shell == NULL)
+    return;
+  free_basis_content(ARG(shell, 0));
+  /* Do not free ARG(shell,1): combo may have linked another shell there. */
+  recycle_basis_bin(shell);
+}
+
 /*************
  *
  *    set_up_basis_terms
@@ -525,12 +699,12 @@ void set_up_basis_terms(int sn, int (*basis)[MAX_COEF], int num_basis,
 	t1 = get_variable_term(i);
 	for (k = 2; k <= basis[i][j]; k++) {
 	  t2 = get_variable_term(i);
-	  t3 = get_rigid_term_dangerously(sn, 2);
+	  t3 = get_basis_bin(sn);
 	  ARG(t3,0) = t2;
 	  ARG(t3,1) = t1;
 	  t1 = t3;
 	}
-	t2 = get_rigid_term_dangerously(sn, 2);
+	t2 = get_basis_bin(sn);
 	ARG(t2,0) = t1;
 	ARG(t2,1) = NULL;
 	basis_terms[i][j] = t2;
@@ -563,14 +737,17 @@ int unify_ac(Term t1, Context c1,
   Term t3, t4, ti;
   Btu_state sub_problems, bt2, bt3;
   Ac_position ac;
-  Term a1[MAX_ACU_ARGS], a2[MAX_ACU_ARGS];
-  Context ac1[MAX_ACU_ARGS], ac2[MAX_ACU_ARGS], ci;
-  int mults1[MAX_ACU_ARGS], mults2[MAX_ACU_ARGS];
-  int ab[MAX_COEF], num_basis, n1, n2;
+  Term *a1, *a2;
+  Context *ac1, *ac2, ci;
+  int *mults1, *mults2, *ab;
+  int num_basis, n1, n2;
   int i, j, length, vn, ok, status;
   Unif_alternative continuation;
+  struct ac_u_scratch *scr;
 
   num_basis = length = 0;  /* to quiet compiler */
+  a1 = a2 = NULL; ac1 = ac2 = NULL; mults1 = mults2 = ab = NULL;  /* quiet */
+  scr = NULL;
 
   continuation = bt->alternative;
 
@@ -579,24 +756,50 @@ int unify_ac(Term t1, Context c1,
     /* Stats[AC_INITIATIONS]++; */
     bt->alternative = AC_ALT;
 
+    if (Ac_u_scratch_top >= AC_U_SCRATCH_DEPTH)
+      fatal_error("unify_ac: AC scratch nesting too deep");
+    scr = &Ac_u_scratch[Ac_u_scratch_top++];
+    a1 = scr->a1; a2 = scr->a2;
+    ac1 = scr->ac1; ac2 = scr->ac2;
+    mults1 = scr->mults1; mults2 = scr->mults2;
+    ab = scr->ab;
+
     ac = get_ac_position();
     bt->ac = ac;
     ac->c3 = get_context();
-    ac->superset_limit = -1;  /* Parms[AC_SUPERSET_LIMIT].val; */
+    ac->superset_limit = Ac_superset_limit;  /* EQP's AC_SUPERSET_LIMIT,
+                                 revived: set via set_ac_superset_limit()
+                                 (prover9 parm ac_superset_limit; -1 =
+                                 unlimited, the old hardcoded behavior;
+                                 0 = basic superset restriction, EQP's
+                                 classic default). */
 
 #ifdef DEBUG
     printf("\nunify_ac, new problem:\n");
-    printf("    "); fprint_term(stdout, t1); printf(" [0x%x:%d]\n", (unsigned) c1, c1->multiplier);
-    printf("    "); fprint_term(stdout, t2); printf(" [0x%x:%d]\n", (unsigned) c2, c2->multiplier);
-    printf("    c3 context is [0x%x:%d]\n", (unsigned) ac->c3, ac->c3->multiplier);
+    printf("    "); fprint_term(stdout, t1); printf(" [%p:%d]\n", (void *) c1, c1->multiplier);
+    printf("    "); fprint_term(stdout, t2); printf(" [%p:%d]\n", (void *) c2, c2->multiplier);
+    printf("    c3 context is [%p:%d]\n", (void *) ac->c3, ac->c3->multiplier);
 
 #endif
 
     n1 = 0;
-    flatten_deref(t1,c1,a1,ac1,&n1);   /* put args in a1, incl. deref */
-    sort_ac(a1, ac1, n1);              /* sort args */
     n2 = 0;
-    flatten_deref(t2,c2,a2,ac2,&n2);  
+    if (!flatten_deref(t1,c1,a1,ac1,&n1) ||   /* put args in a1/a2, */
+	!flatten_deref(t2,c2,a2,ac2,&n2)) {   /* including deref    */
+      /* Flattened size exceeds MAX_ACU_ARGS: no unifier for this
+	 attempt (see Flatten_overflows above). */
+      Flatten_overflows++;
+      if (Flatten_overflows <= 20)
+	printf("flatten_deref: more than %d arguments;"
+	       " attempt abandoned.\n", MAX_ACU_ARGS);
+      free_context(ac->c3);
+      free_ac_position(bt->ac);
+      bt->ac = NULL;
+      bt->alternative = NO_ALT;
+      Ac_u_scratch_top--;
+      return(0);
+    }
+    sort_ac(a1, ac1, n1);              /* sort args */
     sort_ac(a2, ac2, n2);
 	
     elim_con_context(a1, a2, ac1, ac2, n1, n2);  /* elim. common terms */
@@ -651,6 +854,8 @@ int unify_ac(Term t1, Context c1,
 	}
       }
     }
+    /* Setup done: free scratch before combo walk / nested unify_ac. */
+    Ac_u_scratch_top--;
   }
 
   else {  /* continuation */
@@ -659,9 +864,9 @@ int unify_ac(Term t1, Context c1,
     ac = bt->ac;
 #ifdef DEBUG
     printf("\nunify_ac, continuation:\n");
-    printf("    "); fprint_term(stdout, t1); printf(" [0x%x:%d]\n", (unsigned) c1, c1->multiplier);
-    printf("    "); fprint_term(stdout, t2); printf(" [0x%x:%d]\n", (unsigned) c2, c2->multiplier);
-    printf("    c3 context is [0x%x:%d]\n", (unsigned) ac->c3, ac->c3->multiplier);
+    printf("    "); fprint_term(stdout, t1); printf(" [%p:%d]\n", (void *) c1, c1->multiplier);
+    printf("    "); fprint_term(stdout, t2); printf(" [%p:%d]\n", (void *) c2, c2->multiplier);
+    printf("    c3 context is [%p:%d]\n", (void *) ac->c3, ac->c3->multiplier);
 
 #endif
     if (ac->sub_position) { /* if subproblems pending */
@@ -689,7 +894,6 @@ int unify_ac(Term t1, Context c1,
 #ifdef DEBUG
 	  printf("<-<-<- clearing (ci) ");
 	  fflush(stdout);
-	  p_binding(vn, ci, ci->terms[vn], ci->contexts[vn]);
 #endif
 	  ci->terms[vn] = NULL;
 	  ci->contexts[vn] = NULL;
@@ -698,9 +902,6 @@ int unify_ac(Term t1, Context c1,
 	else if (CONSTANT(ti) || (!ci && VARIABLE(ti))) {
 #ifdef DEBUG
 	  printf("<-<-<- clearing (c3)"); fprint_term(stdout, ac->new_terms[i]);
-	  p_binding(SYMNUM(ac->new_terms[i]), ac->c3,
-		    ac->c3->terms[VARNUM(ac->new_terms[i])],
-		    ac->c3->contexts[VARNUM(ac->new_terms[i])]);
 #endif
 	  ac->c3->terms[VARNUM(ac->new_terms[i])] = NULL;
 	  ac->c3->contexts[VARNUM(ac->new_terms[i])] = NULL;
@@ -778,7 +979,6 @@ int unify_ac(Term t1, Context c1,
 	  ci->contexts[vn] = ac->c3;
 #ifdef DEBUG
 	  printf("->->->-> binding (ci) ");
-	  p_binding(vn, ci, t4, ac->c3);
 #endif
 	}
 	else if (CONSTANT(ti) || (!ci && VARIABLE(ti))) {
@@ -786,7 +986,6 @@ int unify_ac(Term t1, Context c1,
 	  ac->c3->contexts[VARNUM(t4)] = ci;
 #ifdef DEBUG
 	  printf("->->->-> binding (c3)");
-	  p_binding(VARNUM(t4), ac->c3, ti, ci);
 #endif
 	}
 	else {
@@ -804,9 +1003,9 @@ int unify_ac(Term t1, Context c1,
 #ifdef DEBUG
 	  printf("->->->-> subproblem  [");
 	  fprint_term(stdout,t4);
-	  printf(",0x%x:%d] :: [", (unsigned) ac->c3, ac->c3->multiplier);
+	  printf(",%p:%d] :: [", (void *) ac->c3, ac->c3->multiplier);
 	  fprint_term(stdout,ti);
-	  printf(",0x%x:%d]\n", (unsigned) ci, ci->multiplier);
+	  printf(",%p:%d]\n", (void *) ci, ci->multiplier);
 #endif
 	}
       }  /* for each arg */
@@ -835,15 +1034,15 @@ int unify_ac(Term t1, Context c1,
   if (status == SUCCESS) {
 #ifdef DEBUG
     printf("\nunify_ac, success:\n");
-    printf("    "); fprint_term(stdout, t1); printf(" [0x%x:%d]\n", (unsigned) c1, c1->multiplier);
-    printf("    "); fprint_term(stdout, t2); printf(" [0x%x:%d]\n", (unsigned) c2, c2->multiplier);
-    printf("    c3 context is [0x%x:%d]\n", (unsigned) ac->c3, ac->c3->multiplier);
+    printf("    "); fprint_term(stdout, t1); printf(" [%p:%d]\n", (void *) c1, c1->multiplier);
+    printf("    "); fprint_term(stdout, t2); printf(" [%p:%d]\n", (void *) c2, c2->multiplier);
+    printf("    c3 context is [%p:%d]\n", (void *) ac->c3, ac->c3->multiplier);
     {
       Term s1, s2;
       s1 = apply(t1, c1);
       s2 = apply(t2, c2);
-      printf("    t1 instance: "); fprint_term_nl(stdout, s1);
-      printf("    t2 instance: "); fprint_term_nl(stdout, s2);
+      printf("    t1 instance: "); fprint_term(stdout, s1); printf("\n");
+      printf("    t2 instance: "); fprint_term(stdout, s2); printf("\n");
       zap_term(s1);
       zap_term(s2);
     }
@@ -857,19 +1056,18 @@ int unify_ac(Term t1, Context c1,
 
 #ifdef DEBUG
     printf("\nunify_ac, %s:\n", status == EXHAUSTED ? "finished" : "fail");
-    printf("    "); fprint_term(stdout, t1); printf(" [0x%x:%d]\n", (unsigned) c1, c1->multiplier);
-    printf("    "); fprint_term(stdout, t2); printf(" [0x%x:%d]\n", (unsigned) c2, c2->multiplier);
-    printf("    c3 context is [0x%x]\n", (unsigned) ac->c3);
+    printf("    "); fprint_term(stdout, t1); printf(" [%p:%d]\n", (void *) c1, c1->multiplier);
+    printf("    "); fprint_term(stdout, t2); printf(" [%p:%d]\n", (void *) c2, c2->multiplier);
+    printf("    c3 context is [%p]\n", (void *) ac->c3);
 
 #endif
     if (status == EXHAUSTED) {
-      /* Delete all terms in basis_terms. */
+      /* Recycle all terms in basis_terms (pooled binary nodes). */
       for (i = 0; i < num_basis; i++)
 	for (j = 0; j < length; j++)
 	  if (ac->basis_terms[i][j]) {
-	    t2 = ac->basis_terms[i][j];
-	    zap_term(ARG(t2,0));
-	    free_term(t2);
+	    free_basis_shell(ac->basis_terms[i][j]);
+	    ac->basis_terms[i][j] = NULL;
 	  }
     }
 
@@ -898,7 +1096,7 @@ void unify_ac_cancel(Ac_position ac)
 {
   int i, j, length, vn;
   Context ci;
-  Term t2, ti;
+  Term ti;
   Btu_state bt;
 
   length = ac->m + ac->n;
@@ -921,14 +1119,13 @@ void unify_ac_cancel(Ac_position ac)
     }
   }
     
-  /* Delete all terms in basis_terms. */
+  /* Recycle all terms in basis_terms (pooled binary nodes). */
     
   for (i = 0; i < ac->num_basis; i++)
     for (j = 0; j < length; j++)
       if (ac->basis_terms[i][j]) {
-	t2 = ac->basis_terms[i][j];
-	zap_term(ARG(t2,0));
-	free_term(t2);
+	free_basis_shell(ac->basis_terms[i][j]);
+	ac->basis_terms[i][j] = NULL;
       }
 
   if (ac->sub_position) {
@@ -1155,6 +1352,7 @@ Btu_state unify_bt_first(Term t1, Context c1,
   Btu_state bt = get_btu_state();
   bt->t1 = t1; bt->t2 = t2; bt->c1 = c1; bt->c2 = c2;
   /* p_term(t1); p_term(t2); printf("\n"); */
+  reset_ac_walk_budget();  /* fresh AC walk budget for this attempt */
   return(unify_bt_guts(bt));
 }  /* unify_bt */
 
@@ -1175,6 +1373,8 @@ See unify_bt_first() for an explanation.
 Btu_state unify_bt_next(Btu_state bt1)
 {
   /* Go to last node in tree, then back up to a node with an alternative. */
+
+  reclock_ac_walk_budget();  /* per-crank clock; count persists */
 
   while (bt1->next != NULL)
     bt1 = bt1->next;

@@ -43,6 +43,16 @@ by itself for testing.  The command for doing so is "gcc -DSOLO dioph.c".
 
 /* Public function prototypes from dioph.c */
 
+void set_ac_walk_budget(int combos, int seconds);
+
+void get_ac_walk_budget(int *combos, int *seconds);
+
+void reset_ac_walk_budget(void);
+
+void reclock_ac_walk_budget(void);
+
+long ac_walk_abandonments(void);
+
 int dio(int ab[MAX_COEF],
 	int m, int n,
 	int constraints[MAX_COEF],

@@ -72,7 +72,12 @@ static BOOL tptp_needs_quote(const char *name)
 /*************
  *
  *   fprint_tptp_sym() - print a TPTP symbol, quoting if needed.
- *   Internal single quotes are escaped as \'.
+ *   Internal single quotes and backslashes are escaped as \' and \\.
+ *   A literal backslash left unescaped is invalid inside a TPTP quoted
+ *   atom (the lexer expects \ to always be followed by \ or ') -- found
+ *   live, 2026-08-09, on a distinct object whose name (carried into the
+ *   symbol table with its "do_" prefix) contained a literal backslash,
+ *   producing output tptp4X correctly rejected as a syntax error.
  *
  *************/
 
@@ -84,6 +89,8 @@ static void fprint_tptp_sym(FILE *fp, const char *name)
     for (p = name; *p != '\0'; p++) {
       if (*p == '\'')
         fprintf(fp, "\\'");
+      else if (*p == '\\')
+        fprintf(fp, "\\\\");
       else
         fputc(*p, fp);
     }
@@ -447,6 +454,7 @@ void print_model_tptp(FILE *fp)
       int sn = p->i;
       char *name = sn_to_str(sn);
       int arity = sn_to_arity(sn);
+      int n;
       if (variable_name(name)) continue;
       if (is_eq_symbol(sn)) continue;
       if (natural_string(name) >= 0) continue;
@@ -454,7 +462,7 @@ void print_model_tptp(FILE *fp)
       if (name[0] == '$') continue;
       /* This function was eliminated during clausification.
          Output a default interpretation (all values = d0). */
-      int n = int_power(Domain_size, arity);
+      n = int_power(Domain_size, arity);
       for (i = 0; i < n; i++) {
         if (has_functions || conjunct_count > 0)
           fprintf(fp, "fof(interp_extra_%s, interpretation-mappings, (\n    ", name);
@@ -484,12 +492,13 @@ void print_model_tptp(FILE *fp)
       int sn = p->i;
       char *name = sn_to_str(sn);
       int arity = sn_to_arity(sn);
+      int n;
       if (variable_name(name)) continue;
       if (is_eq_symbol(sn)) continue;
       if (find_symbol_data(sn) != NULL) continue;
       if (name[0] == '$') continue;
       /* Output default interpretation (all false) in a single fof block */
-      int n = int_power(Domain_size, arity);
+      n = int_power(Domain_size, arity);
       fprintf(fp, "fof(interp_extra_%s, interpretation-mappings, (\n", name);
       for (i = 0; i < n; i++) {
         if (i > 0)

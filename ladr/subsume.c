@@ -846,6 +846,13 @@ BOOL eq_removable_literal(Topform c, Literals lit)
 2. Remove any literals t!=t.
 3. If there are any literals s!=t, where unify(s,t), without instantiating
    any other literals, remove the literal.
+4. If there are any literals s!=t where TPTP's implicit distinctness rule
+   alone forces s and s to be different (provably_distinct(), ladr/
+   literals.c -- distinct objects, or numerals with different values),
+   the clause becomes true_sym(), same as t=t (docs/distinctness-
+   unification-spec.md).
+5. Remove any literal s=t where provably_distinct(s,t) -- the literal is
+   FALSE by the same rule, symmetric to item 4.
 */
 
 /* PUBLIC */
@@ -863,10 +870,13 @@ void simplify_literals2(Topform c)
     Term a = l->atom;
     BOOL sign = l->sign;
     if ((!sign && eq_term(a) && term_ident(ARG(a,0), ARG(a,1))) ||
+	(sign && eq_term(a) && provably_distinct(ARG(a,0), ARG(a,1))) ||
 	/* (!sign && true_term(a)) || */
 	/* (sign && false_term(a)) || */
 	eq_removable_literal(c, l)) {
-      /* literal is FALSE, so remove it */
+      /* literal is FALSE, so remove it -- either syntactically (t != t)
+	 or because TPTP's implicit distinctness rule forces the two
+	 sides of an asserted s = t apart (item 5, above) */
       c->justification = append_just(c->justification, xx_just(i));
       zap_term(l->atom);
       l->atom = NULL;
@@ -879,6 +889,7 @@ void simplify_literals2(Topform c)
       null_literals = TRUE;
     }
     else if ((sign && eq_term(a) && term_ident(ARG(a,0), ARG(a,1))) ||
+	     (!sign && eq_term(a) && provably_distinct(ARG(a,0), ARG(a,1))) ||
 	     (sign && true_term(a)) ||
 	     (!sign && false_term(a)))
       tautological = TRUE;

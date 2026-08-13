@@ -85,6 +85,9 @@ struct topform {
   char   subsumer;        /* has this clause back subsumed anything? */
   char   was_given;       /* was this clause selected as given? */
   char   goal_derived;   /* descended from a denied goal (negated conjecture) */
+  char   ac_extension;    /* AC extension rule f(s,X)=f(t,X); do not demodulate
+                             or re-extend (see search.c make_ac_extension) */
+  char   in_pair_index;   /* member of the para_pairs pair index (search.c) */
 
 };
 

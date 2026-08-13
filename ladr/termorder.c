@@ -17,7 +17,10 @@
 */
 
 #include "termorder.h"
+#include "accanon.h"
+#include "termflag.h"
 #include "multiset.h"
+#include "std_options.h"
 
 /* Private definitions and types */
 
@@ -25,6 +28,18 @@ Order_method Ordering_method = LRPO_METHOD; /* see assign_order_method() */
 
 #define TERM_PAIR_STACK_SIZE 1000
 #define TERM_STACK_SIZE 1000
+
+/* Small-buffer-optimization on-stack sizes for the growable stacks
+   below (see e.g. term_compare_basic()).  Deliberately much smaller
+   than TERM_PAIR_STACK_SIZE/TERM_STACK_SIZE above: those constants now
+   only seed a doubling-growth ceiling reference in comments/history --
+   a 1000-entry array placed directly in every call's stack frame would
+   itself be a measurable per-call cost at these functions' call volume
+   (they are on the hottest part of the search).  64 covers the common
+   shallow-term case at zero allocation cost; deeper terms spill to a
+   growable heap array, matching flatterm.c's convention. */
+#define TERM_PAIR_SBO_SIZE 64
+#define TERM_STACK_SBO_SIZE 64
 
 /*************
  *
@@ -57,7 +72,15 @@ and lexigocgaphic by ASCII ordering.  The range of return values is
 /* PUBLIC */
 Ordertype term_compare_basic(Term t1, Term t2)
 {
-  struct { Term a; Term b; int child; } stack[TERM_PAIR_STACK_SIZE];
+  /* Iterative term-pair walk using an explicit stack.  Small-buffer
+     optimization: a small on-stack buffer handles the common shallow
+     case at zero allocation cost; only pathologically deep terms spill
+     to a growable heap array (safe_malloc/free doubling) -- a fixed
+     array here silently corrupts memory on very deep terms. */
+  typedef struct { Term a; Term b; int child; } Frame;
+  Frame sbo_buf[TERM_PAIR_SBO_SIZE];
+  Frame *stack = sbo_buf;
+  int cap = TERM_PAIR_SBO_SIZE;
   int top = 0;
   Ordertype rc = SAME_AS;
 
@@ -79,8 +102,15 @@ Ordertype term_compare_basic(Term t1, Term t2)
         int minarity = (a1 < a2 ? a1 : a2);
         if (i < minarity) {
           /* Push next child pair */
-          if (top + 1 >= TERM_PAIR_STACK_SIZE)
-            fatal_error("term_compare_basic: stack overflow");
+          if (top + 1 >= cap) {
+            int new_cap = cap * 2;
+            Frame *new_stack = safe_malloc(new_cap * sizeof(Frame));
+            memcpy(new_stack, stack, cap * sizeof(Frame));
+            if (stack != sbo_buf)
+              safe_free(stack);
+            stack = new_stack;
+            cap = new_cap;
+          }
           stack[top].child = i + 1;
           top++;
           stack[top].a = ARG(a, i);
@@ -120,11 +150,15 @@ Ordertype term_compare_basic(Term t1, Term t2)
     }
   }
 
+  if (stack != sbo_buf)
+    safe_free(stack);
   return rc;
 
 done:
   /* rc is not SAME_AS, so it propagates all the way up (the for loop
      in the original breaks on rc != SAME_AS). */
+  if (stack != sbo_buf)
+    safe_free(stack);
   return rc;
 }  /* term_compare_basic */
 
@@ -144,7 +178,15 @@ and lexigocgaphic by SYMNUM.  The range of return values is<BR>
 /* PUBLIC */
 Ordertype term_compare_ncv(Term t1, Term t2)
 {
-  struct { Term a; Term b; int child; } stack[TERM_PAIR_STACK_SIZE];
+  /* Iterative term-pair walk using an explicit stack.  Small-buffer
+     optimization: a small on-stack buffer handles the common shallow
+     case at zero allocation cost; only pathologically deep terms spill
+     to a growable heap array (safe_malloc/free doubling) -- a fixed
+     array here silently corrupts memory on very deep terms. */
+  typedef struct { Term a; Term b; int child; } Frame;
+  Frame sbo_buf[TERM_PAIR_SBO_SIZE];
+  Frame *stack = sbo_buf;
+  int cap = TERM_PAIR_SBO_SIZE;
   int top = 0;
   Ordertype rc = SAME_AS;
 
@@ -160,8 +202,15 @@ Ordertype term_compare_ncv(Term t1, Term t2)
       if (SYMNUM(a) == SYMNUM(b)) {
         int i = stack[top].child;
         if (i < ARITY(a)) {
-          if (top + 1 >= TERM_PAIR_STACK_SIZE)
-            fatal_error("term_compare_ncv: stack overflow");
+          if (top + 1 >= cap) {
+            int new_cap = cap * 2;
+            Frame *new_stack = safe_malloc(new_cap * sizeof(Frame));
+            memcpy(new_stack, stack, cap * sizeof(Frame));
+            if (stack != sbo_buf)
+              safe_free(stack);
+            stack = new_stack;
+            cap = new_cap;
+          }
           stack[top].child = i + 1;
           top++;
           stack[top].a = ARG(a, i);
@@ -203,9 +252,13 @@ Ordertype term_compare_ncv(Term t1, Term t2)
     }
   }
 
+  if (stack != sbo_buf)
+    safe_free(stack);
   return rc;
 
 done:
+  if (stack != sbo_buf)
+    safe_free(stack);
   return rc;
 }  /* term_compare_ncv */
 
@@ -225,7 +278,15 @@ and lexigocgaphic by SYMNUM.  The range of return values is<BR>
 /* PUBLIC */
 Ordertype term_compare_vcp(Term t1, Term t2)
 {
-  struct { Term a; Term b; int child; } stack[TERM_PAIR_STACK_SIZE];
+  /* Iterative term-pair walk using an explicit stack.  Small-buffer
+     optimization: a small on-stack buffer handles the common shallow
+     case at zero allocation cost; only pathologically deep terms spill
+     to a growable heap array (safe_malloc/free doubling) -- a fixed
+     array here silently corrupts memory on very deep terms. */
+  typedef struct { Term a; Term b; int child; } Frame;
+  Frame sbo_buf[TERM_PAIR_SBO_SIZE];
+  Frame *stack = sbo_buf;
+  int cap = TERM_PAIR_SBO_SIZE;
   int top = 0;
   Ordertype rc = SAME_AS;
 
@@ -241,8 +302,15 @@ Ordertype term_compare_vcp(Term t1, Term t2)
       if (SYMNUM(a) == SYMNUM(b)) {
         int i = stack[top].child;
         if (i < ARITY(a)) {
-          if (top + 1 >= TERM_PAIR_STACK_SIZE)
-            fatal_error("term_compare_vcp: stack overflow");
+          if (top + 1 >= cap) {
+            int new_cap = cap * 2;
+            Frame *new_stack = safe_malloc(new_cap * sizeof(Frame));
+            memcpy(new_stack, stack, cap * sizeof(Frame));
+            if (stack != sbo_buf)
+              safe_free(stack);
+            stack = new_stack;
+            cap = new_cap;
+          }
           stack[top].child = i + 1;
           top++;
           stack[top].a = ARG(a, i);
@@ -283,9 +351,13 @@ Ordertype term_compare_vcp(Term t1, Term t2)
     }
   }
 
+  if (stack != sbo_buf)
+    safe_free(stack);
   return rc;
 
 done:
+  if (stack != sbo_buf)
+    safe_free(stack);
   return rc;
 }  /* term_compare_vcp */
 
@@ -305,7 +377,15 @@ and lexigocgaphic by symbol precedence.  The range of return values is<BR>
 /* PUBLIC */
 Ordertype term_compare_vr(Term t1, Term t2)
 {
-  struct { Term a; Term b; int child; } stack[TERM_PAIR_STACK_SIZE];
+  /* Iterative term-pair walk using an explicit stack.  Small-buffer
+     optimization: a small on-stack buffer handles the common shallow
+     case at zero allocation cost; only pathologically deep terms spill
+     to a growable heap array (safe_malloc/free doubling) -- a fixed
+     array here silently corrupts memory on very deep terms. */
+  typedef struct { Term a; Term b; int child; } Frame;
+  Frame sbo_buf[TERM_PAIR_SBO_SIZE];
+  Frame *stack = sbo_buf;
+  int cap = TERM_PAIR_SBO_SIZE;
   int top = 0;
   Ordertype rc = SAME_AS;
 
@@ -321,8 +401,15 @@ Ordertype term_compare_vr(Term t1, Term t2)
       if (SYMNUM(a) == SYMNUM(b)) {
         int i = stack[top].child;
         if (i < ARITY(a)) {
-          if (top + 1 >= TERM_PAIR_STACK_SIZE)
-            fatal_error("term_compare_vr: stack overflow");
+          if (top + 1 >= cap) {
+            int new_cap = cap * 2;
+            Frame *new_stack = safe_malloc(new_cap * sizeof(Frame));
+            memcpy(new_stack, stack, cap * sizeof(Frame));
+            if (stack != sbo_buf)
+              safe_free(stack);
+            stack = new_stack;
+            cap = new_cap;
+          }
           stack[top].child = i + 1;
           top++;
           stack[top].a = ARG(a, i);
@@ -355,9 +442,13 @@ Ordertype term_compare_vr(Term t1, Term t2)
     }
   }
 
+  if (stack != sbo_buf)
+    safe_free(stack);
   return rc;
 
 done:
+  if (stack != sbo_buf)
+    safe_free(stack);
   return rc;
 }  /* term_compare_vr */
 
@@ -377,7 +468,16 @@ and lexigocgaphic by symbol precedence.  The range of return values is<BR>
 /* PUBLIC */
 Ordertype flatterm_compare_vr(Flatterm a, Flatterm b)
 {
-  struct { Flatterm a; Flatterm b; Flatterm ai; Flatterm bi; int child; int arity; } stack[TERM_PAIR_STACK_SIZE];
+  /* Iterative flatterm-pair walk using an explicit stack.  Small-buffer
+     optimization: a small on-stack buffer handles the common shallow
+     case at zero allocation cost; only pathologically deep terms spill
+     to a growable heap array (safe_malloc/free doubling) -- a fixed
+     array here silently corrupts memory on very deep terms. */
+  typedef struct { Flatterm a; Flatterm b; Flatterm ai; Flatterm bi;
+                   int child; int arity; } Frame;
+  Frame sbo_buf[TERM_PAIR_SBO_SIZE];
+  Frame *stack = sbo_buf;
+  int cap = TERM_PAIR_SBO_SIZE;
   int top = 0;
   Ordertype rc = SAME_AS;
 
@@ -412,8 +512,15 @@ Ordertype flatterm_compare_vr(Flatterm a, Flatterm b)
           stack[top].bi = bi_cur->end->next;
           stack[top].child = i + 1;
           /* Push child pair */
-          if (top + 1 >= TERM_PAIR_STACK_SIZE)
-            fatal_error("flatterm_compare_vr: stack overflow");
+          if (top + 1 >= cap) {
+            int new_cap = cap * 2;
+            Frame *new_stack = safe_malloc(new_cap * sizeof(Frame));
+            memcpy(new_stack, stack, cap * sizeof(Frame));
+            if (stack != sbo_buf)
+              safe_free(stack);
+            stack = new_stack;
+            cap = new_cap;
+          }
           top++;
           stack[top].a = ai_cur;
           stack[top].b = bi_cur;
@@ -446,9 +553,13 @@ Ordertype flatterm_compare_vr(Flatterm a, Flatterm b)
     }
   }
 
+  if (stack != sbo_buf)
+    safe_free(stack);
   return rc;
 
 done:
+  if (stack != sbo_buf)
+    safe_free(stack);
   return rc;
 }  /* flatterm_compare_vr */
 
@@ -634,7 +745,14 @@ void init_kbo_weights(Plist weights)
 /* PUBLIC */
 int kbo_weight(Term t)
 {
-  Term stack[TERM_STACK_SIZE];
+  /* Iterative in-place traversal using an explicit stack.  Small-buffer
+     optimization: a small on-stack buffer handles the common shallow
+     case at zero allocation cost; only pathologically deep terms spill
+     to a growable heap array (safe_malloc/free doubling) -- a fixed
+     array here silently corrupts memory on very deep terms. */
+  Term sbo_buf[TERM_STACK_SBO_SIZE];
+  Term *stack = sbo_buf;
+  int cap = TERM_STACK_SBO_SIZE;
   int top = 0;
   int wt = 0;
 
@@ -651,13 +769,22 @@ int kbo_weight(Term t)
       /* Push children in reverse order so leftmost is processed first
          (order doesn't matter for sum, but matches original traversal). */
       for (i = ARITY(cur) - 1; i >= 0; i--) {
-        if (top + 1 >= TERM_STACK_SIZE)
-          fatal_error("kbo_weight: stack overflow");
+        if (top + 1 >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[++top] = ARG(cur, i);
       }
     }
   }
 
+  if (stack != sbo_buf)
+    safe_free(stack);
   return wt;
 }  /* kbo_weight */
 
@@ -765,6 +892,179 @@ Return GREATER_THAN, LESS_THAN, SAME_AS, or NOT_COMPARABLE.
 */
 
 /* PUBLIC */
+/*************
+ *
+ *   ac_term_order()
+ *
+ *   AC-compatible primary term ordering (used in place of term_order
+ *   when assoc_comm symbols are declared).  Compares AC-canonical
+ *   copies by total symbol count with KBO's variable condition:
+ *
+ *     alpha > beta  iff  w(alpha) > w(beta)  and every variable occurs
+ *                        at least as often in alpha as in beta
+ *
+ *   (weights on canonical forms are AC-invariant, so AC-equal terms
+ *   compare SAME_AS).  There is deliberately NO lexicographic
+ *   tiebreak: an oriented rule strictly decreases an AC-invariant,
+ *   substitution-stable, monotone measure, so demodulation modulo AC
+ *   terminates by construction.  Equal-weight equations stay
+ *   unoriented and participate in paramodulation only.  This is the
+ *   conservative v1 ordering; a multiset-status AC-KBO tiebreak can
+ *   orient more later (doc/AC-unification-implementation-notes.md,
+ *   item C).
+ *
+ *************/
+
+static
+void ac_count_vars(Term t, int *counts)
+{
+  if (VARIABLE(t)) {
+    if (VARNUM(t) < MAX_VARS)
+      counts[VARNUM(t)]++;
+  }
+  else {
+    int i;
+    for (i = 0; i < ARITY(t); i++)
+      ac_count_vars(ARG(t,i), counts);
+  }
+}  /* ac_count_vars */
+
+/*************
+ *
+ *   ac_var_cond()
+ *
+ *   KBO variable condition: every variable occurs in a at least as
+ *   often as in b.
+ *
+ *************/
+
+static
+BOOL ac_var_cond(Term a, Term b)
+{
+  int va[MAX_VARS], vb[MAX_VARS], v;
+  memset(va, 0, sizeof(va));
+  memset(vb, 0, sizeof(vb));
+  ac_count_vars(a, va);
+  ac_count_vars(b, vb);
+  for (v = 0; v < MAX_VARS; v++)
+    if (va[v] < vb[v])
+      return FALSE;
+  return TRUE;
+}  /* ac_var_cond */
+
+/*************
+ *
+ *   ac_kbo_cmp()
+ *
+ *   Recursive AC-KBO comparison of two ac_canonical terms: the safe
+ *   fragment of AC-KBO (Steinbach 1990, corrected by Yamada, Winkler,
+ *   Middeldorp, Sternagel 2016).  Weight first (with the variable
+ *   condition), then, at equal weight: head-symbol precedence for
+ *   distinct heads, lexicographic recursion on arguments for a shared
+ *   non-AC head.  The one genuinely hard case of the literature --
+ *   equal weight under a shared AC head -- is REFUSED
+ *   (NOT_COMPARABLE): argument positions under an AC symbol are not
+ *   substitution-stable, and refusing costs only orienting power.
+ *   Every case decided here agrees with full AC-KBO, so the relation
+ *   is a subset of a reduction ordering compatible with AC: stable,
+ *   monotonic, and well-founded.  Argument positions of non-AC
+ *   symbols are fixed syntax, so the lexicographic case is safe.
+ *
+ *************/
+
+static
+Ordertype ac_kbo_cmp(Term a, Term b)
+{
+  if (term_ident(a, b))
+    return SAME_AS;
+  if (VARIABLE(a) && VARIABLE(b))
+    return NOT_COMPARABLE;
+  if (VARIABLE(b))
+    return occurs_in(b, a) ? GREATER_THAN : NOT_COMPARABLE;
+  if (VARIABLE(a))
+    return occurs_in(a, b) ? LESS_THAN : NOT_COMPARABLE;
+  {
+    int wa = symbol_count(a);
+    int wb = symbol_count(b);
+    if (wa > wb)
+      return ac_var_cond(a, b) ? GREATER_THAN : NOT_COMPARABLE;
+    if (wb > wa)
+      return ac_var_cond(b, a) ? LESS_THAN : NOT_COMPARABLE;
+  }
+  if (SYMNUM(a) != SYMNUM(b)) {
+    Ordertype p = sym_precedence(SYMNUM(a), SYMNUM(b));
+    if (p == GREATER_THAN)
+      return ac_var_cond(a, b) ? GREATER_THAN : NOT_COMPARABLE;
+    if (p == LESS_THAN)
+      return ac_var_cond(b, a) ? LESS_THAN : NOT_COMPARABLE;
+    return NOT_COMPARABLE;
+  }
+  if (is_assoc_comm(SYMNUM(a)))
+    return NOT_COMPARABLE;    /* refused case: equal weight, same AC head */
+  {
+    int i;
+    for (i = 0; i < ARITY(a); i++) {
+      if (!term_ident(ARG(a, i), ARG(b, i))) {
+        Ordertype r = ac_kbo_cmp(ARG(a, i), ARG(b, i));
+        if (r == GREATER_THAN)
+          return ac_var_cond(a, b) ? GREATER_THAN : NOT_COMPARABLE;
+        if (r == LESS_THAN)
+          return ac_var_cond(b, a) ? LESS_THAN : NOT_COMPARABLE;
+        return NOT_COMPARABLE;
+      }
+    }
+  }
+  return SAME_AS;
+}  /* ac_kbo_cmp */
+
+Ordertype ac_term_order(Term alpha, Term beta)
+{
+  Term ca = copy_term(alpha);
+  Term cb = copy_term(beta);
+  Ordertype result = NOT_COMPARABLE;
+  int bit = claim_term_flag();
+  ac_canonical(ca, bit);
+  ac_canonical(cb, bit);
+  release_term_flag(bit);
+  if (term_ident(ca, cb))
+    result = SAME_AS;
+  else {
+    int wa = symbol_count(ca);
+    int wb = symbol_count(cb);
+    if (wa != wb) {
+      int va[MAX_VARS], vb[MAX_VARS], v;
+      BOOL ok = TRUE;
+      memset(va, 0, sizeof(va));
+      memset(vb, 0, sizeof(vb));
+      ac_count_vars(ca, va);
+      ac_count_vars(cb, vb);
+      if (wa > wb) {
+        for (v = 0; v < MAX_VARS && ok; v++)
+          if (va[v] < vb[v]) ok = FALSE;
+        if (ok) result = GREATER_THAN;
+      }
+      else {
+        for (v = 0; v < MAX_VARS && ok; v++)
+          if (vb[v] < va[v]) ok = FALSE;
+        if (ok) result = LESS_THAN;
+      }
+    }
+    else if (flag(ac_kbo_tie_id())) {
+      /* Equal weight: AC-KBO tiebreak (item C v2), opt-in via
+         set(ac_kbo_tie), default clear.  Goes beyond the 1996 EQP
+         engine, which oriented by weight alone; measured neutral in
+         practice on regression runs so far (never fired on any
+         successful search). */
+      result = ac_kbo_cmp(ca, cb);
+      if (result == SAME_AS)
+        result = NOT_COMPARABLE;  /* distinct canonical forms; guard */
+    }
+  }
+  zap_term(ca);
+  zap_term(cb);
+  return result;
+}  /* ac_term_order */
+
 Ordertype term_order(Term alpha, Term beta)
 {
   if (term_greater(alpha, beta, FALSE))

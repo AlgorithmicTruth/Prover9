@@ -64,6 +64,8 @@ BOOL term_greater(Term alpha, Term beta, BOOL lex_order_vars);
 
 Ordertype term_order(Term alpha, Term beta);
 
+Ordertype ac_term_order(Term alpha, Term beta);
+
 int flat_kbo_weight(Flatterm f);
 
 BOOL flat_lrpo(Flatterm s, Flatterm t, BOOL lex_order_vars);

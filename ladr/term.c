@@ -318,16 +318,34 @@ refer to t after calling zap_term(t).
 /* PUBLIC */
 void zap_term(Term t)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t;
   while (top > 0) {
     Term s = stack[--top];
     int i;
-    for (i = ARITY(s) - 1; i >= 0; i--)
+    for (i = ARITY(s) - 1; i >= 0; i--) {
+      if (top >= cap) {
+        int new_cap = cap * 2;
+        Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+        memcpy(new_stack, stack, cap * sizeof(Term));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       stack[top++] = ARG(s,i);
+    }
     free_term(s);
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
 }  /* zap_term */
 
 /*************
@@ -348,20 +366,42 @@ bits or u are NOT checked.
 /* PUBLIC */
 BOOL term_ident(Term t1, Term t2)
 {
-  struct { Term a; Term b; } stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  typedef struct { Term a; Term b; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top].a = t1; stack[top].b = t2; top++;
   while (top > 0) {
-    top--;
-    Term a = stack[top].a;
-    Term b = stack[top].b;
-    if (a->private_symbol != b->private_symbol)
-      return 0;
+    Term a, b;
     int i;
+    top--;
+    a = stack[top].a;
+    b = stack[top].b;
+    if (a->private_symbol != b->private_symbol) {
+      if (stack != sbo_buf)
+        safe_free(stack);
+      return 0;
+    }
     for (i = ARITY(a)-1; i >= 0; i--) {
+      if (top >= cap) {
+        int new_cap = cap * 2;
+        Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+        memcpy(new_stack, stack, cap * sizeof(Sframe));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       stack[top].a = ARG(a,i); stack[top].b = ARG(b,i); top++;
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return 1;
 }  /* term_ident */
 
@@ -382,17 +422,25 @@ NOT copied.
 /* PUBLIC */
 Term copy_term(Term t)
 {
+  /* Iterative deep copy using explicit stack.
+     Each frame: source term, dest term, next child index to process.
+     Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  typedef struct { Term src; Term dst; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
+  int top = 0;
+  Term root;
+
   if (t == NULL)
     return NULL;
   if (VARIABLE(t))
     return get_variable_term(VARNUM(t));
 
-  /* Iterative deep copy using explicit stack.
-     Each frame: source term, dest term, next child index to process. */
-  struct { Term src; Term dst; int child; } stack[1000];
-  int top = 0;
-
-  Term root = get_rigid_term_like(t);
+  root = get_rigid_term_like(t);
   stack[top].src = t; stack[top].dst = root; stack[top].child = 0; top++;
 
   while (top > 0) {
@@ -405,8 +453,9 @@ Term copy_term(Term t)
       top--;  /* done with this node */
     }
     else {
+      Term child_src;
       stack[idx].child = c + 1;
-      Term child_src = ARG(src, c);
+      child_src = ARG(src, c);
       if (VARIABLE(child_src)) {
         ARG(dst, c) = get_variable_term(VARNUM(child_src));
       }
@@ -414,6 +463,15 @@ Term copy_term(Term t)
         Term child_dst = get_rigid_term_like(child_src);
         ARG(dst, c) = child_dst;
         if (ARITY(child_src) > 0) {
+          if (top >= cap) {
+            int new_cap = cap * 2;
+            Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+            memcpy(new_stack, stack, cap * sizeof(Sframe));
+            if (stack != sbo_buf)
+              safe_free(stack);
+            stack = new_stack;
+            cap = new_cap;
+          }
           stack[top].src = child_src;
           stack[top].dst = child_dst;
           stack[top].child = 0;
@@ -422,6 +480,8 @@ Term copy_term(Term t)
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return root;
 }  /* copy_term */
 
@@ -438,16 +498,38 @@ This function checks if a term is ground, that is, has no variables.
 /* PUBLIC */
 BOOL ground_term(Term t)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t;
   while (top > 0) {
     Term s = stack[--top];
-    if (VARIABLE(s)) return FALSE;
     int i;
-    for (i = ARITY(s) - 1; i >= 0; i--)
+    if (VARIABLE(s)) {
+      if (stack != sbo_buf)
+        safe_free(stack);
+      return FALSE;
+    }
+    for (i = ARITY(s) - 1; i >= 0; i--) {
+      if (top >= cap) {
+        int new_cap = cap * 2;
+        Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+        memcpy(new_stack, stack, cap * sizeof(Term));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       stack[top++] = ARG(s,i);
+    }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return TRUE;
 }  /* ground_term */
 
@@ -465,7 +547,13 @@ the given term t.  If t is ground, -1 is returned.
 /* PUBLIC */
 int biggest_variable(Term t)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   int max = -1;
   stack[top++] = t;
@@ -477,10 +565,22 @@ int biggest_variable(Term t)
     }
     else {
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return max;
 }  /* biggest_variable */
 
@@ -497,25 +597,45 @@ Return the depth of a term.  Variables and constants have depth 0.
 /* PUBLIC */
 int term_depth(Term t)
 {
-  /* Iterative depth computation using explicit stack with depth tracking. */
-  struct { Term t; int depth; } stack[1000];
+  /* Iterative depth computation using explicit stack with depth tracking.
+     Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  typedef struct { Term t; int depth; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   int max_depth = 0;
   stack[top].t = t; stack[top].depth = 0; top++;
   while (top > 0) {
+    Term s;
+    int d;
     top--;
-    Term s = stack[top].t;
-    int d = stack[top].depth;
+    s = stack[top].t;
+    d = stack[top].depth;
     if (VARIABLE(s) || CONSTANT(s)) {
       if (d > max_depth) max_depth = d;
     }
     else {
       int i;
       for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top].t = ARG(s,i); stack[top].depth = d+1; top++;
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return max_depth;
 }  /* term_depth */
 
@@ -533,17 +653,35 @@ nodes) in the given term t.
 /* PUBLIC */
 int symbol_count(Term t)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   int count = 0;
   stack[top++] = t;
   while (top > 0) {
     Term s = stack[--top];
-    count++;
     int i;
-    for (i = ARITY(s) - 1; i >= 0; i--)
+    count++;
+    for (i = ARITY(s) - 1; i >= 0; i--) {
+      if (top >= cap) {
+        int new_cap = cap * 2;
+        Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+        memcpy(new_stack, stack, cap * sizeof(Term));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       stack[top++] = ARG(s,i);
+    }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return count;
 }  /* symbol_count  */
 
@@ -565,17 +703,38 @@ checked.
 /* PUBLIC */
 BOOL occurs_in(Term t1, Term t2)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t2;
   while (top > 0) {
     Term s = stack[--top];
-    if (term_ident(t1, s))
-      return TRUE;
     int i;
-    for (i = ARITY(s) - 1; i >= 0; i--)
+    if (term_ident(t1, s)) {
+      if (stack != sbo_buf)
+        safe_free(stack);
+      return TRUE;
+    }
+    for (i = ARITY(s) - 1; i >= 0; i--) {
+      if (top >= cap) {
+        int new_cap = cap * 2;
+        Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+        memcpy(new_stack, stack, cap * sizeof(Term));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       stack[top++] = ARG(s,i);
+    }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return FALSE;
 }  /* occurs_in */
 
@@ -592,14 +751,22 @@ This routine prints (to FILE *fp) a term.  A newline is NOT printed.
 /* PUBLIC */
 void fprint_term(FILE *fp, Term t)
 {
+  /* Iterative term printing using explicit stack.
+     Each frame: term, next child to print, arity.
+     Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  typedef struct { Term t; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
+  int top = 0;
+
   if (t == NULL) {
     fprintf(fp, "fprint_term: NULL term\n");
     return;
   }
-  /* Iterative term printing using explicit stack.
-     Each frame: term, next child to print, arity. */
-  struct { Term t; int child; } stack[1000];
-  int top = 0;
   stack[top].t = t; stack[top].child = -1; top++;
 
   while (top > 0) {
@@ -628,6 +795,15 @@ void fprint_term(FILE *fp, Term t)
       if (c > 0) fprintf(fp, ",");
       stack[idx].child = c + 1;
       /* Push child */
+      if (top >= cap) {
+        int new_cap = cap * 2;
+        Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+        memcpy(new_stack, stack, cap * sizeof(Sframe));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       stack[top].t = ARG(s, c); stack[top].child = -1; top++;
     }
     else {
@@ -636,6 +812,8 @@ void fprint_term(FILE *fp, Term t)
       top--;
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   fflush(fp);
 }  /* fprint_term */
 
@@ -653,12 +831,20 @@ a String_buf.  A newline is not included.
 /* PUBLIC */
 void sprint_term(String_buf sb, Term t)
 {
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  typedef struct { Term t; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
+  int top = 0;
+
   if (t == NULL) {
     printf("sprint_term: NULL term\n");
     return;
   }
-  struct { Term t; int child; } stack[1000];
-  int top = 0;
   stack[top].t = t; stack[top].child = -1; top++;
 
   while (top > 0) {
@@ -687,6 +873,15 @@ void sprint_term(String_buf sb, Term t)
     else if (c < ARITY(s)) {
       if (c > 0) sb_append(sb, ",");
       stack[idx].child = c + 1;
+      if (top >= cap) {
+        int new_cap = cap * 2;
+        Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+        memcpy(new_stack, stack, cap * sizeof(Sframe));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       stack[top].t = ARG(s, c); stack[top].child = -1; top++;
     }
     else {
@@ -694,6 +889,8 @@ void sprint_term(String_buf sb, Term t)
       top--;
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
 }  /* sprint_term */
 
 /*************
@@ -914,14 +1111,22 @@ and return the result.
 /* PUBLIC */
 Term subst_var_term(Term t, int symnum, int varnum)
 {
+  /* Iterative: walk and replace matching constants in place.
+     Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  typedef struct { Term t; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
+  int top = 0;
+
   if (CONSTANT(t) && SYMNUM(t) == symnum) {
     Term v = get_variable_term(varnum);
     zap_term(t);
     return v;
   }
-  /* Iterative: walk and replace matching constants in place. */
-  struct { Term t; int child; } stack[1000];
-  int top = 0;
   stack[top].t = t; stack[top].child = 0; top++;
   while (top > 0) {
     int idx = top - 1;
@@ -931,17 +1136,29 @@ Term subst_var_term(Term t, int symnum, int varnum)
       top--;
     }
     else {
+      Term child;
       stack[idx].child = c + 1;
-      Term child = ARG(s,c);
+      child = ARG(s,c);
       if (CONSTANT(child) && SYMNUM(child) == symnum) {
         ARG(s,c) = get_variable_term(varnum);
         zap_term(child);
       }
       else if (!VARIABLE(child) && ARITY(child) > 0) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top].t = child; stack[top].child = 0; top++;
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return t;
 }  /* subst_var_term */
 
@@ -959,7 +1176,13 @@ If the term is ground, -1 is returned.
 /* PUBLIC */
 int greatest_variable(Term t)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   int max = -1;
   stack[top++] = t;
@@ -971,10 +1194,22 @@ int greatest_variable(Term t)
     }
     else {
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return max;
 }  /* greatest_variable */
 
@@ -993,7 +1228,13 @@ If the term is a VARIABLE, return -1.
 /* PUBLIC */
 int greatest_symnum_in_term(Term t)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   int max = -1;
   stack[top++] = t;
@@ -1001,12 +1242,24 @@ int greatest_symnum_in_term(Term t)
     Term s = stack[--top];
     if (!VARIABLE(s)) {
       int sn = SYMNUM(s);
-      if (sn > max) max = sn;
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      if (sn > max) max = sn;
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return max;
 }  /* greatest_symnum_in_term */
 
@@ -1024,18 +1277,36 @@ except variables, point to (void *) p.
 /* PUBLIC */
 void upward_term_links(Term t, void *p)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t;
   while (top > 0) {
     Term s = stack[--top];
     if (!VARIABLE(s)) {
-      s->container = p;
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      s->container = p;
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
 }  /* upward_term_links */
 
 /*************
@@ -1052,18 +1323,40 @@ except variables, point to (void *) p.
 /* PUBLIC */
 BOOL check_upward_term_links(Term t, void *p)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t;
   while (top > 0) {
     Term s = stack[--top];
     if (!VARIABLE(s)) {
-      if (s->container != p) return FALSE;
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      if (s->container != p) {
+        if (stack != sbo_buf)
+          safe_free(stack);
+        return FALSE;
+      }
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return TRUE;
 }  /* check_upward_term_links */
 
@@ -1081,9 +1374,15 @@ The checks are made with term_ident().
 /* PUBLIC */
 int occurrences(Term t, Term target)
 {
-  Term stack[1000];
-  int top = 0;
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int n = 0;
+  int top = 0;
   stack[top++] = t;
   while (top > 0) {
     Term s = stack[--top];
@@ -1091,10 +1390,22 @@ int occurrences(Term t, Term target)
       n++;
     else {
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return n;
 }  /* occurrences */
 
@@ -1109,6 +1420,17 @@ int occurrences(Term t, Term target)
 static
 Term trm_set_vars_recurse(Term t, char **varnames, int max_vars)
 {
+  /* Iterative traversal for complex terms.  Small-buffer optimization:
+     use an on-stack buffer for the common shallow case, and only
+     spill to a growable heap array (safe_malloc doubling) for very
+     deep terms, which would otherwise silently corrupt memory with a
+     fixed array. */
+  typedef struct { Term t; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
+  int top = 0;
+
   /* Handle root being a constant that becomes a variable.
      Skip symbols marked as quoted (from TPTP quoted atoms or
      distinct objects - these are constants regardless of case). */
@@ -1128,9 +1450,6 @@ Term trm_set_vars_recurse(Term t, char **varnames, int max_vars)
     return t;
   }
 
-  /* Iterative traversal for complex terms */
-  struct { Term t; int child; } stack[1000];
-  int top = 0;
   stack[top].t = t; stack[top].child = 0; top++;
   while (top > 0) {
     int idx = top - 1;
@@ -1140,8 +1459,9 @@ Term trm_set_vars_recurse(Term t, char **varnames, int max_vars)
       top--;
     }
     else {
+      Term child;
       stack[idx].child = c + 1;
-      Term child = ARG(s,c);
+      child = ARG(s,c);
       if (CONSTANT(child)) {
         char *name = sn_to_str(SYMNUM(child));
         if (variable_name(name) && !is_quoted(SYMNUM(child))) {
@@ -1157,10 +1477,21 @@ Term trm_set_vars_recurse(Term t, char **varnames, int max_vars)
         }
       }
       else if (!VARIABLE(child) && ARITY(child) > 0) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top].t = child; stack[top].child = 0; top++;
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return t;
 }  /* trm_set_vars_recurse */
 
@@ -1530,18 +1861,36 @@ An Ilist of symbol IDs (symnums) is returned
 /* PUBLIC */
 I2list symbols_in_term(Term t, I2list g)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t;
   while (top > 0) {
     Term s = stack[--top];
     if (!VARIABLE(s)) {
-      g = multiset_add(g, SYMNUM(s));
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      g = multiset_add(g, SYMNUM(s));
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return g;
 }  /* symbols_in_term */
 
@@ -1595,8 +1944,20 @@ Term renum_vars_recurse(Term t, int vmap[], int max_vars)
     return get_variable_term(i);
   }
 
-  /* Iterative traversal for non-variable terms */
-  struct { Term t; int child; } stack[1000];
+  /* Iterative traversal for non-variable terms.  Small-buffer
+     optimization: a small on-stack buffer handles the common shallow
+     case at zero allocation cost; only pathologically deep terms spill
+     to a growable heap array. A fixed array here silently corrupts
+     memory on very deep terms (confirmed: stack smashing on NUM925+3,
+     TPTP v9.2.0); an unconditional heap allocation on every call is
+     measurably slower at this function's call volume (confirmed ~40%
+     wall-clock regression on Scharle24_2D3_D3_to_Nicod_16h, 136M+
+     clause generations). */
+  {
+  typedef struct { Term t; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top].t = t; stack[top].child = 0; top++;
   while (top > 0) {
@@ -1607,8 +1968,9 @@ Term renum_vars_recurse(Term t, int vmap[], int max_vars)
       top--;
     }
     else {
+      Term child;
       stack[idx].child = c + 1;
-      Term child = ARG(s,c);
+      child = ARG(s,c);
       if (VARIABLE(child)) {
         int i = 0;
         while (i < max_vars && vmap[i] != -1 && vmap[i] != VARNUM(child))
@@ -1621,11 +1983,23 @@ Term renum_vars_recurse(Term t, int vmap[], int max_vars)
         ARG(s,c) = get_variable_term(i);
       }
       else if (ARITY(child) > 0) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top].t = child; stack[top].child = 0; top++;
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return t;
+  }
 }  /* renum_vars_recurse */
 
 /*************
@@ -1646,6 +2020,16 @@ given term is itself becomes a variable.
 /* PUBLIC */
 Term set_vars_recurse(Term t, char *vnames[], int max_vars)
 {
+  /* Iterative traversal.  Small-buffer optimization: use an on-stack
+     buffer for the common shallow case, and only spill to a growable
+     heap array (safe_malloc doubling) for very deep terms, which
+     would otherwise silently corrupt memory with a fixed array. */
+  typedef struct { Term t; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
+  int top = 0;
+
   /* Handle root constant becoming a variable.
      Skip symbols marked as quoted (TPTP quoted/distinct objects). */
   if (CONSTANT(t)) {
@@ -1664,9 +2048,6 @@ Term set_vars_recurse(Term t, char *vnames[], int max_vars)
     return t;
   }
 
-  /* Iterative traversal */
-  struct { Term t; int child; } stack[1000];
-  int top = 0;
   stack[top].t = t; stack[top].child = 0; top++;
   while (top > 0) {
     int idx = top - 1;
@@ -1676,8 +2057,9 @@ Term set_vars_recurse(Term t, char *vnames[], int max_vars)
       top--;
     }
     else {
+      Term child;
       stack[idx].child = c + 1;
-      Term child = ARG(s,c);
+      child = ARG(s,c);
       if (CONSTANT(child)) {
         char *name = sn_to_str(SYMNUM(child));
         if (variable_name(name) && !is_quoted(SYMNUM(child))) {
@@ -1693,10 +2075,21 @@ Term set_vars_recurse(Term t, char *vnames[], int max_vars)
         }
       }
       else if (!VARIABLE(child) && ARITY(child) > 0) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top].t = child; stack[top].child = 0; top++;
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return t;
 }  /* set_vars_recurse */
 
@@ -1712,7 +2105,13 @@ Term set_vars_recurse(Term t, char *vnames[], int max_vars)
 /* PUBLIC */
 I2list multiset_of_vars(Term t, I2list vars)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t;
   while (top > 0) {
@@ -1721,10 +2120,22 @@ I2list multiset_of_vars(Term t, I2list vars)
       vars = multiset_add(vars, VARNUM(s));
     else {
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return vars;
 }  /* multiset_of_vars */
 
@@ -1756,7 +2167,13 @@ See set_of_variables(t).
 /* PUBLIC */
 Plist set_of_vars(Term t, Plist vars)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t;
   while (top > 0) {
@@ -1767,10 +2184,22 @@ Plist set_of_vars(Term t, Plist vars)
     }
     else {
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return vars;
 }  /* set_of_vars */
 
@@ -1822,7 +2251,13 @@ See set_of_ivariables(t).
 /* PUBLIC */
 Ilist set_of_ivars(Term t, Ilist ivars)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t;
   while (top > 0) {
@@ -1833,10 +2268,22 @@ Ilist set_of_ivars(Term t, Ilist ivars)
     }
     else {
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return ivars;
 }  /* set_of_ivars */
 
@@ -1938,17 +2385,25 @@ Term term_at_pos(Term t, Ilist pos)
 static
 Ilist pos_of_subterm(Term t, Term subterm)
 {
+  /* Iterative DFS. When found, build position by walking back up the stack.
+     At each level j, stack[j].child holds the NEXT child to try, which is
+     c+1 after we selected child c. This equals the original code's loop
+     variable i after increment, which is the value prepended to the path.
+     Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  typedef struct { Term t; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
+  int top = 0;
+
   if (VARIABLE(t))
     return NULL;
   if (t == subterm)
     return ilist_prepend(NULL, INT_MAX);  /* terminator */
 
-  /* Iterative DFS. When found, build position by walking back up the stack.
-     At each level j, stack[j].child holds the NEXT child to try, which is
-     c+1 after we selected child c. This equals the original code's loop
-     variable i after increment, which is the value prepended to the path. */
-  struct { Term t; int child; } stack[1000];
-  int top = 0;
   stack[top].t = t; stack[top].child = 0; top++;
 
   while (top > 0) {
@@ -1959,24 +2414,38 @@ Ilist pos_of_subterm(Term t, Term subterm)
       top--;
     }
     else {
+      Term child;
       stack[idx].child = c + 1;
-      Term child = ARG(s, c);
+      child = ARG(s, c);
       if (!VARIABLE(child)) {
         if (child == subterm) {
           /* Build position from bottom of stack to top, then leaf. */
           Ilist p = ilist_prepend(NULL, INT_MAX);  /* terminator */
-          p = ilist_prepend(p, c + 1);
           int j;
+          p = ilist_prepend(p, c + 1);
           for (j = idx - 1; j >= 0; j--)
             p = ilist_prepend(p, stack[j].child);
+          if (stack != sbo_buf)
+            safe_free(stack);
           return p;
         }
         else if (ARITY(child) > 0) {
+          if (top >= cap) {
+            int new_cap = cap * 2;
+            Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+            memcpy(new_stack, stack, cap * sizeof(Sframe));
+            if (stack != sbo_buf)
+              safe_free(stack);
+            stack = new_stack;
+            cap = new_cap;
+          }
           stack[top].t = child; stack[top].child = 0; top++;
         }
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return NULL;
 }  /* pos_of_subterm */
 
@@ -2013,19 +2482,37 @@ Return the number of occurrences of a symbol in a term.
 /* PUBLIC */
 int symbol_occurrences(Term t, int symnum)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   int n = 0;
   stack[top++] = t;
   while (top > 0) {
     Term s = stack[--top];
     if (!VARIABLE(s)) {
-      if (SYMNUM(s) == symnum) n++;
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      if (SYMNUM(s) == symnum) n++;
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return n;
 }  /* symbol_occurrences */
 
@@ -2095,8 +2582,15 @@ BOOL args_distinct_vars(Term t)
 unsigned hash_term(Term t)
 {
   /* Iterative hash using a stack. We need to process children left-to-right
-     and combine with shifts, so we use a post-order approach. */
-  struct { Term t; int child; unsigned hash; } stack[1000];
+     and combine with shifts, so we use a post-order approach.
+     Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  typedef struct { Term t; int child; unsigned hash; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
 
   if (VARIABLE(t)) return VARNUM(t);
@@ -2116,6 +2610,8 @@ unsigned hash_term(Term t)
         stack[top-1].child++;
       }
       else {
+        if (stack != sbo_buf)
+          safe_free(stack);
         return h;
       }
     }
@@ -2127,11 +2623,22 @@ unsigned hash_term(Term t)
       }
       else {
         /* Push child */
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top].t = child; stack[top].child = 0;
         stack[top].hash = SYMNUM(child); top++;
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return 0;  /* unreachable */
 }  /* hash_term */
 
@@ -2162,18 +2669,40 @@ BOOL skolem_term(Term t)
 /* PUBLIC */
 BOOL contains_skolem_term(Term t)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t;
   while (top > 0) {
     Term s = stack[--top];
     if (!VARIABLE(s)) {
-      if (skolem_term(s)) return TRUE;
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      if (skolem_term(s)) {
+        if (stack != sbo_buf)
+          safe_free(stack);
+        return TRUE;
+      }
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return FALSE;
 }  /* contains_skolem_term */
 
@@ -2189,18 +2718,40 @@ BOOL contains_skolem_term(Term t)
 /* PUBLIC */
 BOOL contains_skolem_function(Term t)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t;
   while (top > 0) {
     Term s = stack[--top];
     if (!VARIABLE(s)) {
-      if (COMPLEX(s) && skolem_term(s)) return TRUE;
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      if (COMPLEX(s) && skolem_term(s)) {
+        if (stack != sbo_buf)
+          safe_free(stack);
+        return TRUE;
+      }
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return FALSE;
 }  /* contains_skolem_function */
 
@@ -2269,18 +2820,40 @@ Term term2(char *sym, Term arg1, Term arg2)
 /* PUBLIC */
 BOOL symbol_in_term(int symnum, Term t)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t;
   while (top > 0) {
     Term s = stack[--top];
     if (!VARIABLE(s)) {
-      if (SYMNUM(s) == symnum) return TRUE;
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      if (SYMNUM(s) == symnum) {
+        if (stack != sbo_buf)
+          safe_free(stack);
+        return TRUE;
+      }
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return FALSE;
 }  /* symbol_in_term */
 
@@ -2297,26 +2870,51 @@ If variables are ignored, are the terms identical?
 /* PUBLIC */
 BOOL same_structure(Term a, Term b)
 {
-  struct { Term a; Term b; } stack[1000];
+  /* Small-buffer optimization: use an on-stack buffer for the common
+     shallow case, and only spill to a growable heap array (safe_malloc
+     doubling) for very deep terms, which would otherwise silently
+     corrupt memory with a fixed array. */
+  typedef struct { Term a; Term b; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top].a = a; stack[top].b = b; top++;
   while (top > 0) {
+    Term sa, sb;
     top--;
-    Term sa = stack[top].a;
-    Term sb = stack[top].b;
+    sa = stack[top].a;
+    sb = stack[top].b;
     if (VARIABLE(sa) || VARIABLE(sb)) {
-      if (!(VARIABLE(sa) && VARIABLE(sb))) return FALSE;
+      if (!(VARIABLE(sa) && VARIABLE(sb))) {
+        if (stack != sbo_buf)
+          safe_free(stack);
+        return FALSE;
+      }
     }
     else if (SYMNUM(sa) != SYMNUM(sb)) {
+      if (stack != sbo_buf)
+        safe_free(stack);
       return FALSE;
     }
     else {
       int i;
       for (i = ARITY(sa)-1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top].a = ARG(sa,i); stack[top].b = ARG(sb,i); top++;
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return TRUE;
 }  /* same_structure */
 
@@ -2499,14 +3097,18 @@ the list should be deallocated with zap_tlist().
 /* PUBLIC */
 Plist free_vars_term(Term t, Plist vars)
 {
+  /* Growable stack (safe_realloc doubling, the cnf.c walker pattern):
+     a fixed array here silently corrupts memory on very deep terms. */
+  int cap;
+  Term *stack;
+  int top;
+
   if (VARIABLE(t))
     fatal_error("free_vars_term, VARIABLE term");
 
-  /* Growable stack (safe_realloc doubling, the cnf.c walker pattern):
-     a fixed array here silently corrupts memory on very deep terms. */
-  int cap = 1000;
-  Term *stack = safe_malloc(cap * sizeof(Term));
-  int top = 0;
+  cap = 1000;
+  stack = safe_malloc(cap * sizeof(Term));
+  top = 0;
   stack[top++] = t;
   while (top > 0) {
     Term s = stack[--top];
@@ -2515,7 +3117,20 @@ Plist free_vars_term(Term t, Plist vars)
       fatal_error("free_vars_term, VARIABLE term");
     }
     if (ARITY(s) == 0) {
-      if (variable_name(sn_to_str(SYMNUM(s))) && !tlist_member(s, vars))
+      /* Skip symbols marked as quoted (TPTP quoted/distinct objects) --
+         same guard set_vars_recurse() (above) already applies.  A
+         single-quoted TPTP atom is never a variable no matter what its
+         unquoted text looks like; without this, universal_closure()
+         (formula.c, via free_vars()) wraps a quoted constant like
+         'DreadburyMansion' in a bogus "! [DreadburyMansion] :" -- a
+         different formula, not just a cosmetic rename, since a
+         genuinely free constant used consistently throughout the body
+         is not the same claim as "for all DreadburyMansion" (found
+         2026-08-04, real CASC-era PUZ001+2/PUZ128+2 TSTP output during
+         the StarExec release-gate sweep -- proofcheck correctly flagged
+         the printed leaf as not matching the problem's own axiom). */
+      if (variable_name(sn_to_str(SYMNUM(s))) && !is_quoted(SYMNUM(s)) &&
+          !tlist_member(s, vars))
         vars = plist_append(vars, copy_term(s));
     }
     else {

@@ -29,6 +29,7 @@ extern Symbol_data *Sn_to_mace_sn;
 
 extern int Domain_size;
 extern Term *Domain;
+extern Term Bool_domain[2];
 
 extern int Relation_flag;  /* term flag */
 
@@ -279,7 +280,7 @@ void negprop_near_assign(int subterm_id, Term alpha, Term beta, int pos,
 	if (j != VARNUM(beta)) {
 	  id = base_id;
 	  for (i = 0; i < Domain_size; i++) {
-	    if (Cells[id].value == Domain[j]) {
+	    if (Cells[id].value == (LITERAL(alpha) ? Bool_domain[j] : Domain[j])) {
 	      Mstats.neg_near_assign_attempts++;
 	      new_elimination(subterm_id, Domain[i], state);
 	      if (!state->ok)

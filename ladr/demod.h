@@ -45,6 +45,8 @@ unsigned long long demod_rewrites();
 
 Term demodulate(Term t, Mindex demods, Ilist *just_head, BOOL lex_order_vars);
 
+Term demodulate_ac(Term t, Mindex demods, I3list *steps, int *sequence);
+
 void demod1(Topform c, Topform demodulator, int direction,
 	    Ilist *fpos, Ilist *ipos,
 	    BOOL lex_order_vars);

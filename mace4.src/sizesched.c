@@ -279,6 +279,7 @@ static pid_t fork_size_child(Plist clauses, int size, int *out_fd)
 
   if (pid == 0) {
     /* ---- child ---- */
+    int code;
     /* Restore default signal handling; the parent owns the deadline. */
     signal(SIGALRM, SIG_DFL);
     signal(SIGTERM, SIG_DFL);
@@ -297,7 +298,7 @@ static pid_t fork_size_child(Plist clauses, int size, int *out_fd)
        SZS status line, status-first, when it publishes the winner. */
     Mace4_cores_child = 1;
 
-    int code = mace4_one_size_exit_code(clauses, size);
+    code = mace4_one_size_exit_code(clauses, size);
     fflush(stdout);
     _exit(code);
   }
@@ -422,14 +423,16 @@ Mace_results mace4_parallel(Plist clauses, Mace_options opt, int ncores)
       w = waitpid(kids[i].pid, &status, WNOHANG);
       if (w == kids[i].pid) {
         /* Child exited: final drain to capture trailing output. */
+        int code;
+        int sz;
         drain_kid(&kids[i]);
         sched_untrack_kid(kids[i].pid);
         kids[i].exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
         close(kids[i].fd); kids[i].fd = -1;
         kids[i].done = 1;
 
-        int code = kids[i].exit_code;
-        int sz   = kids[i].size;
+        code = kids[i].exit_code;
+        sz   = kids[i].size;
 
         if (code == MAX_MODELS_EXIT || code == ALL_MODELS_EXIT ||
             code == MAX_SEC_YES_EXIT || code == MAX_MEGS_YES_EXIT) {

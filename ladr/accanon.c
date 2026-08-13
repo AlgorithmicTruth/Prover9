@@ -39,6 +39,38 @@ void flatten(Term t, Term *a, int *ip)
   int sn, i;
 
   sn = SYMNUM(t);
+
+  /* Fast path: binary right-associated AC (ac_canonical form is always
+     this shape: f(a1, f(a2, f(a3, an))) with no left child headed by f).
+     Avoids recursion and is the common case after ac_canonical / demod. */
+  if (ARITY(t) == 2) {
+    int start = *ip;
+    Term u = t;
+    int ok = 1;
+    while (ok && COMPLEX(u) && SYMNUM(u) == sn && ARITY(u) == 2) {
+      Term left = ARG(u, 0);
+      if (COMPLEX(left) && SYMNUM(left) == sn) {
+	ok = 0;  /* left-nested: fall back to general */
+	break;
+      }
+      if (*ip >= MAX_ACM_ARGS) {
+	fprint_term(stdout, t);
+	fatal_error("flatten, too many arguments.");
+      }
+      a[(*ip)++] = left;
+      u = ARG(u, 1);
+    }
+    if (ok) {
+      if (*ip >= MAX_ACM_ARGS) {
+	fprint_term(stdout, t);
+	fatal_error("flatten, too many arguments.");
+      }
+      a[(*ip)++] = u;
+      return;
+    }
+    *ip = start;  /* rewind partial fast-path write */
+  }
+
   for (i = 0; i < ARITY(t); i++) {
     t1 = ARG(t,i);
     if (SYMNUM(t1) == sn)
@@ -117,23 +149,80 @@ void right_associate(Term t)
 /* DOCUMENTATION
 */
 
+/* True if binary AC term is already right-associated: f(a1, f(a2, an))
+   with no left child headed by f. */
+static
+int ac_is_right_assoc(Term t, int sn)
+{
+  while (COMPLEX(t) && SYMNUM(t) == sn && ARITY(t) == 2) {
+    Term left = ARG(t, 0);
+    if (COMPLEX(left) && SYMNUM(left) == sn)
+      return 0;
+    t = ARG(t, 1);
+  }
+  return 1;
+}
+
+/*
+ *  Flatten/sort scratch for AC nodes only.  Previously each ac_canonical2
+ *  frame reserved Term args[2500] + work[2500] (~40KB) even for non-AC
+ *  tops and reduced early-outs -- pure chkstk tax on the demod hot path.
+ *  Nested AC canonicalization (children) uses deeper pool slots.
+ */
+#define AC_CANON_SCRATCH_DEPTH 16
+struct ac_canon_scratch {
+  Term args[MAX_ACM_ARGS];
+  Term work[MAX_ACM_ARGS];
+};
+static struct ac_canon_scratch Ac_canon_scratch[AC_CANON_SCRATCH_DEPTH];
+static int Ac_canon_scratch_top = 0;
+
 /* PUBLIC */
 void ac_canonical2(Term t, int bit,
 		   Ordertype (*term_compare_proc) (Term, Term))
 {
-  Term args[MAX_ACM_ARGS], work[MAX_ACM_ARGS];
-  Term t1;
-  int n, i;
+  int sn, i;
 
   /* if (!Internal_flags[AC_PRESENT]) return; WORK */
 
-  if (is_assoc_comm(SYMNUM(t))) {
+  /* Documented contract: reduced mark implies AC-canonical -- skip. */
+  if (bit != -1 && term_flag(t, bit))
+    return;
+
+  sn = SYMNUM(t);
+  if (is_assoc_comm(sn)) {
+    struct ac_canon_scratch *scr;
+    Term *args, *work;
+    Term t1;
+    int n, already_sorted;
+
+    if (Ac_canon_scratch_top >= AC_CANON_SCRATCH_DEPTH)
+      fatal_error("ac_canonical2: scratch nesting too deep");
+    scr = &Ac_canon_scratch[Ac_canon_scratch_top++];
+    args = scr->args;
+    work = scr->work;
+
     /* Get array of arguments, sort, right assoc tree, then insert. */
     n = 0;
     flatten(t, args, &n);
     for (i = 0; i < n; i++)
       if (bit == -1 || !term_flag(args[i], bit))  /* if not reduced */
 	ac_canonical2(args[i], bit, term_compare_proc);
+
+    /* Hot path (demod bottom-up on already-canonical clauses): children
+       are reduced, args already sorted and right-associated -- skip
+       merge_sort + right_associate. */
+    already_sorted = 1;
+    for (i = 1; i < n; i++) {
+      if ((*term_compare_proc)(args[i-1], args[i]) == GREATER_THAN) {
+	already_sorted = 0;
+	break;
+      }
+    }
+    if (already_sorted && ARITY(t) == 2 && ac_is_right_assoc(t, sn)) {
+      Ac_canon_scratch_top--;
+      return;
+    }
 
     merge_sort_recurse((void **) args, (void **) work, 0, n-1,
 	       (Ordertype (*)(void*,void*)) term_compare_proc);
@@ -148,6 +237,7 @@ void ac_canonical2(Term t, int bit,
     }
     ARG(t1,0) = args[n-2];
     ARG(t1,1) = args[n-1];
+    Ac_canon_scratch_top--;
   }
   else {  /* Top symbol is not AC, so just recurse on arguments. */
     for (i = 0; i < ARITY(t); i++)

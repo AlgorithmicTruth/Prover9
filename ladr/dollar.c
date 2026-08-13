@@ -142,9 +142,10 @@ void init_dollar_eval(Clist rules)
     }
     {
       int symnum = SYMNUM(alpha);
+      struct rule *r;
       if (symnum >= Symbols_size)
 	fatal_error("init_dollar_eval, symnum too big");
-      struct rule *r = safe_malloc(sizeof(struct rule));
+      r = safe_malloc(sizeof(struct rule));
       r->c = c;
       r->alpha = alpha;
       r->beta = beta;
@@ -225,7 +226,7 @@ Term dollar_eval(Term t)
 	break;
       case MAX_OP:
 	if (term_to_int(ARG(t,0), &i0) && term_to_int(ARG(t,1), &i1))
-	  result = int_to_term(i0 > i1 ? i1 : i1);
+	  result = int_to_term(i0 > i1 ? i0 : i1);
 	break;
 
 	/* INT -> INT */
@@ -370,7 +371,7 @@ Term rewrite_top(Term t, int flag, I3list *steps)
     Local_evals++;
     return t1;
   }
-  else if (SYMNUM(t) >= Symbols_size)
+  else if (SYMNUM(t) < 0 || SYMNUM(t) >= Symbols_size)
     return t;
   else if (Rules[SYMNUM(t)] == NULL)  /* we know it's not a variable */
     return t;

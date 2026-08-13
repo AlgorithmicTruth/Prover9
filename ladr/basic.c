@@ -142,8 +142,13 @@ void mark_term_nonbasic(Term t)
 /* PUBLIC */
 void mark_all_nonbasic(Term t)
 {
-  /* Iterative pre-order traversal. */
-  Term stack[1000];
+  /* Iterative pre-order traversal.  Small-buffer optimization: a small
+     on-stack buffer handles the common shallow case at zero allocation
+     cost; only pathologically deep terms spill to a growable heap
+     array (safe_malloc/free doubling). */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[0] = t;
 
@@ -154,11 +159,22 @@ void mark_all_nonbasic(Term t)
       int i;
       mark_term_nonbasic(cur);
       for (i = ARITY(cur) - 1; i >= 0; i--) {
+        if (top + 1 >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         top++;
         stack[top] = ARG(cur, i);
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
 }  /* mark_all_nonbasic */
 
 /*************
@@ -223,8 +239,15 @@ This is similar to apply(), but it makes "nonbasic" marks for
 Term apply_basic(Term t, Context c)
 {
   /* Iterative substitution application with basic-paramod marking.
+     Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling).
      Stack frames: (src_raw, src_deref, dst_parent, child_index). */
-  struct { Term raw; Term deref; Term dst; int child; } stack[1000];
+  typedef struct { Term raw; Term deref; Term dst; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = -1;
   Term result;
   Term raw_t = t;
@@ -288,6 +311,15 @@ Term apply_basic(Term t, Context c)
           mark_term_nonbasic(ch_dst);
         ARG(stack[top].dst, ci) = ch_dst;
         if (ARITY(ch_deref) > 0) {
+          if (top + 1 >= cap) {
+            int new_cap = cap * 2;
+            Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+            memcpy(new_stack, stack, cap * sizeof(Sframe));
+            if (stack != sbo_buf)
+              safe_free(stack);
+            stack = new_stack;
+            cap = new_cap;
+          }
           top++;
           stack[top].raw = ch_raw;
           stack[top].deref = ch_deref;
@@ -297,6 +329,8 @@ Term apply_basic(Term t, Context c)
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return result;
 }  /* apply_basic */
 
@@ -315,8 +349,15 @@ This is similar to apply_substitute(), but it makes "nonbasic" marks for
 Term apply_basic_substitute(Term t, Term beta, Context c_from,
 			    Term into_term, Context c_into)
 {
-  /* Iterative term copy with substitution at into_term. */
-  struct { Term src; Term dst; int child; } stack[1000];
+  /* Iterative term copy with substitution at into_term.
+     Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). */
+  typedef struct { Term src; Term dst; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = -1;
   Term result;
 
@@ -358,6 +399,15 @@ Term apply_basic_substitute(Term t, Term beta, Context c_from,
           mark_term_nonbasic(ch_dst);
         ARG(stack[top].dst, ci) = ch_dst;
         if (ARITY(ch) > 0) {
+          if (top + 1 >= cap) {
+            int new_cap = cap * 2;
+            Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+            memcpy(new_stack, stack, cap * sizeof(Sframe));
+            if (stack != sbo_buf)
+              safe_free(stack);
+            stack = new_stack;
+            cap = new_cap;
+          }
           top++;
           stack[top].src = ch;
           stack[top].dst = ch_dst;
@@ -366,6 +416,8 @@ Term apply_basic_substitute(Term t, Term beta, Context c_from,
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return result;
 }  /* apply_basic_substitute */
 
@@ -381,8 +433,13 @@ Term apply_basic_substitute(Term t, Term beta, Context c_from,
 /* PUBLIC */
 void clear_all_nonbasic_marks(Term t)
 {
-  /* Iterative pre-order traversal. */
-  Term stack[1000];
+  /* Iterative pre-order traversal.  Small-buffer optimization: a small
+     on-stack buffer handles the common shallow case at zero allocation
+     cost; only pathologically deep terms spill to a growable heap
+     array (safe_malloc/free doubling). */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[0] = t;
 
@@ -393,11 +450,22 @@ void clear_all_nonbasic_marks(Term t)
       int i;
       term_flag_clear(cur, Nonbasic_flag);
       for (i = ARITY(cur) - 1; i >= 0; i--) {
+        if (top + 1 >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         top++;
         stack[top] = ARG(cur, i);
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
 }  /* clear_all_nonbasic_marks */
 
 /*************
@@ -412,8 +480,14 @@ void clear_all_nonbasic_marks(Term t)
 /* PUBLIC */
 void p_term_basic(Term t)
 {
-  /* Iterative term printing using explicit stack. */
-  struct { Term node; int child; } stack[1000];
+  /* Iterative term printing using explicit stack.  Small-buffer
+     optimization: a small on-stack buffer handles the common shallow
+     case at zero allocation cost; only pathologically deep terms spill
+     to a growable heap array (safe_malloc/free doubling). */
+  typedef struct { Term node; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[0].node = t;
   stack[0].child = 0;
@@ -440,6 +514,15 @@ void p_term_basic(Term t)
       if (ci > 0)
         printf(",");
       stack[top].child++;
+      if (top + 1 >= cap) {
+        int new_cap = cap * 2;
+        Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+        memcpy(new_stack, stack, cap * sizeof(Sframe));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       top++;
       stack[top].node = ARG(cur, ci);
       stack[top].child = 0;
@@ -450,5 +533,7 @@ void p_term_basic(Term t)
       top--;
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   fflush(stdout);
 }  /* p_term_basic */

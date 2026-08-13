@@ -51,6 +51,8 @@ void demodulate_clause(Topform c, int step_limit, int increase_limit,
 
 Plist back_demodulatable(Topform demod, int type, BOOL lex_order_vars);
 
+Plist back_demodulatable_ac_idx(Topform demod);
+
 void back_demod_idx_report(void);
 
 void write_fpa_back_demod_index(const char *dir);

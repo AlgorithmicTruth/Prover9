@@ -18,6 +18,10 @@
 
 #include "dioph.h"
 
+#ifndef SOLO
+#include "clock.h"  /* user_seconds(), for the AC walk budget */
+#endif
+
 /*************
  *
  *   gcd(x,y) - greatest common divisor
@@ -364,6 +368,143 @@ int dio(int ab[MAX_COEF],
 
 /*************
  *
+ *    AC walk budget
+ *
+ *    The next_combo_* walkers below enumerate subsets of the basis with
+ *    no iteration limit of their own: MAX_COMBOS caps the number of
+ *    ACCEPTED combinations per enumeration (next_combo_ss), not the
+ *    number of subsets VISITED, and unify_ac() multiplies nested
+ *    enumerations (each accepted combination spawns AC subproblems with
+ *    their own enumerations), so a single backtrack-unification attempt
+ *    can run essentially forever (a pathological wt-44 x wt-25
+ *    AC-unification wedge case, 2026-07: 18+ CPU-hours inside one
+ *    attempt).
+ *
+ *    The budget below is shared by all walk iterations in one attempt,
+ *    across all nesting levels.  unify_bt_first() resets it for each new
+ *    attempt; unify_bt_next() restarts the clock (but not the count) for
+ *    each new crank.  When the budget is exhausted the walkers report
+ *    "no more combinations", and exhaustion is sticky until the next
+ *    reset, so the whole nested attempt collapses finitely.  Missing
+ *    unifiers only makes AC unification incomplete, which it already is
+ *    (MAX_COMBOS, superset restriction); soundness is unaffected.
+ *
+ *    Defaults are "no limit" so that library users and the SOLO test
+ *    harness are unaffected; prover9 enables the budget via the parms
+ *    ac_combo_budget and ac_unify_seconds.
+ *
+ *************/
+
+static long Walk_budget       = -1;  /* iterations per attempt; -1 = no limit */
+static int  Walk_seconds      = -1;  /* CPU seconds per crank;  -1 = no limit */
+static long Walk_count        = 0;
+static double Walk_start      = -1.0;  /* <0 = clock not yet read this crank */
+static int  Walk_exhausted    = 0;
+static long Walk_abandonments = 0;   /* total attempts abandoned */
+
+/* DOCUMENTATION
+Set the AC walk budget: combos is the maximum number of next_combo
+iterations per backtrack-unification attempt, and seconds is the
+maximum user CPU seconds per crank (call to unify_bt_first/next).
+Either can be -1, meaning no limit.
+*/
+
+/* PUBLIC */
+void set_ac_walk_budget(int combos, int seconds)
+{
+  Walk_budget = combos;
+  Walk_seconds = seconds;
+}  /* set_ac_walk_budget */
+
+/* DOCUMENTATION
+Current AC walk budget (see set_ac_walk_budget) -- lets a caller that
+needs COMPLETE, un-abandoned AC unification (e.g. post-hoc proof
+expansion) save the search's setting, lift the limits, and restore.
+*/
+
+/* PUBLIC */
+void get_ac_walk_budget(int *combos, int *seconds)
+{
+  *combos = (int) Walk_budget;
+  *seconds = Walk_seconds;
+}  /* get_ac_walk_budget */
+
+/* DOCUMENTATION
+Start a fresh AC walk budget for a new backtrack-unification attempt.
+*/
+
+/* PUBLIC */
+void reset_ac_walk_budget(void)
+{
+  Walk_count = 0;
+  Walk_exhausted = 0;
+  Walk_start = -1.0;
+}  /* reset_ac_walk_budget */
+
+/* DOCUMENTATION
+Restart the AC walk clock (but not the iteration count) for another
+crank of an existing attempt, so that time the caller spends between
+unify_bt_next() calls is not charged to the attempt.
+*/
+
+/* PUBLIC */
+void reclock_ac_walk_budget(void)
+{
+  Walk_start = -1.0;
+}  /* reclock_ac_walk_budget */
+
+/* DOCUMENTATION
+Return the number of backtrack-unification attempts abandoned because
+the AC walk budget was exhausted.
+*/
+
+/* PUBLIC */
+long ac_walk_abandonments(void)
+{
+  return Walk_abandonments;
+}  /* ac_walk_abandonments */
+
+/*************
+ *
+ *    walk_budget_spent()
+ *
+ *    Charge one walker iteration against the budget.  Return 1 if the
+ *    budget is exhausted (the walker should report no more combos).
+ *    The CPU clock is read lazily, every 16384 iterations, so attempts
+ *    that never walk that far never pay for a clock call.
+ *
+ *************/
+
+static
+int walk_budget_spent(void)
+{
+  if (Walk_exhausted)
+    return 1;
+  Walk_count++;
+  if (Walk_budget >= 0 && Walk_count > Walk_budget)
+    Walk_exhausted = 1;
+#ifndef SOLO
+  else if (Walk_seconds >= 0 && (Walk_count & 0x3FFF) == 0) {
+    if (Walk_start < 0)
+      Walk_start = user_seconds();
+    else if (user_seconds() - Walk_start > Walk_seconds)
+      Walk_exhausted = 1;
+  }
+#endif
+  if (Walk_exhausted) {
+    Walk_abandonments++;
+    if (Walk_abandonments <= 20)
+      printf("ac_walk_budget: abandoning AC unification attempt"
+	     " (%ld iterations).%s\n", Walk_count,
+	     Walk_abandonments == 20 ?
+	     "  (Further messages suppressed; see stats.)" : "");
+    return 1;
+  }
+  return 0;
+}  /* walk_budget_spent */
+
+/*************
+ *
  *    next_combo_a
  *
  *************/
@@ -407,6 +548,8 @@ int next_combo_a(int length, int basis[MAX_BASIS][MAX_COEF],
   go = (pos >= 0);
   while (go && !success) {
     int backup = 1;
+    if (walk_budget_spent())
+      return 0;
     if (!combo[pos]) {
       combo[pos] = 1;  /* All following positions 0. */
       ADD_TO_SUM(sum, basis, pos, length);
@@ -473,6 +616,8 @@ int next_combo_b(int length, int basis[MAX_BASIS][MAX_COEF],
   success = 0; go = 1;
 
   while (go && !success) {
+    if (walk_budget_spent())
+      return 0;
     if (pos == num_basis-1) {
       success = 1;
       for (i = 0; i < length && success; i++)
@@ -553,6 +698,8 @@ int next_combo_c(int length, int basis[MAX_BASIS][MAX_COEF],
   }
 
   while (status != SUCCESS && status != FAILURE) {
+    if (walk_budget_spent())
+      return 0;
     if (status == DOWN) {
       /* go to left child */
       if (pos == -1 || combo[pos] == 0) {
@@ -605,25 +752,41 @@ int next_combo_c(int length, int basis[MAX_BASIS][MAX_COEF],
 
 /*************
  *
- *    superset_degree
+ *    superset_degree_bits / pack_combo_bits
  *
- *    If a is not a superset of b, return -1, else return |a-b|.
+ *    Bitset replacement for the old int-array superset_degree(a,b,n):
+ *    if a is not a superset of b (over the low n bits), return -1,
+ *    else return |a-b|.  Same result, O(SS_WORDS) word ops instead of
+ *    O(n) int compares -- n is bounded by MAX_BASIS (100), so this
+ *    turns an O(B) inner test into an O(1) one (2 words).
  *
  *************/
 
+#define SS_WORD_BITS (8 * (int) sizeof(unsigned long long))
+#define SS_WORDS ((MAX_BASIS + SS_WORD_BITS - 1) / SS_WORD_BITS)
+
 static
-int superset_degree(int *a, int *b, int n)
+void pack_combo_bits(int *combo, int n, unsigned long long *bits)
 {
-  int i, c;
-    
-  for (i=0, c=0; i<n && c>=0; i++) {
-    if (b[i] && !a[i])
-      c = -1;
-    else if (a[i] && !b[i])
-      c++;
-  }
+  int i;
+  for (i = 0; i < SS_WORDS; i++)
+    bits[i] = 0;
+  for (i = 0; i < n; i++)
+    if (combo[i])
+      bits[i / SS_WORD_BITS] |= (1ULL << (i % SS_WORD_BITS));
+}  /* pack_combo_bits */
+
+static
+int superset_degree_bits(unsigned long long *abits, unsigned long long *bbits)
+{
+  int w, c;
+  for (w = 0; w < SS_WORDS; w++)
+    if (bbits[w] & ~abits[w])
+      return -1;
+  for (w = 0, c = 0; w < SS_WORDS; w++)
+    c += __builtin_popcountll(abits[w] & ~bbits[w]);
   return c;
-}  /* superset_degree */
+}  /* superset_degree_bits */
 
 /*************
  *
@@ -669,13 +832,22 @@ int next_combo_ss(int length, int basis[MAX_BASIS][MAX_COEF],
   int i, go, ok;
 
   if (start_flag) {
+    /* Bitset cache of accepted combos, parallel to combos[][]: turns
+       the O(*np) inner loop's per-comparison cost from O(num_basis)
+       (superset_degree) into O(1) (superset_degree_bits).  Local, not
+       static: next_combo_ss's setup phase is self-contained per call,
+       so this stays reentrancy-safe. */
+    unsigned long long combos_bits[MAX_COMBOS][SS_WORDS];
+    unsigned long long combo_bits[SS_WORDS];
+
     *np = 0;
     go = next_combo_a(length,basis,num_basis,constraints,combo,sum,1);
     while (go) {
+      pack_combo_bits(combo, num_basis, combo_bits);
       for (i=0, ok = 1; i < *np && ok; i++)
 	/* 0 means basic superset test */
 	/* n means allow supersets that have n more elements. */
-	if (superset_degree(combo, combos[i], num_basis) > ss_parm)
+	if (superset_degree_bits(combo_bits, combos_bits[i]) > ss_parm)
 	  ok = 0;
 
       if (ok) {
@@ -686,6 +858,8 @@ int next_combo_ss(int length, int basis[MAX_BASIS][MAX_COEF],
 	else {
 	  for (i=0; i<num_basis; i++)
 	    combos[*np][i] = combo[i];
+	  for (i=0; i<SS_WORDS; i++)
+	    combos_bits[*np][i] = combo_bits[i];
 	  (*np)++;
 	}
       }

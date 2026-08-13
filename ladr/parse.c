@@ -31,6 +31,7 @@ static int Quantifier_precedence = 0;  /* see declare_quantifier_precedence */
 static BOOL Parenthesize = FALSE;
 static BOOL Check_for_illegal_symbols = TRUE;
 static BOOL Simple_parse = FALSE;
+static BOOL Use_modern_ladr_parser = FALSE;
 
 /*
  * Parse-type cache, indexed by symnum of arity-0 Pterms.
@@ -877,17 +878,105 @@ BOOL quant_prefix(Pterm start, Pterm end)
 
 /*************
  *
+ *   terms_to_term() memoization
+ *
+ *   terms_to_term() (below) tries candidate operator tokens left to
+ *   right; when a candidate is wrong, it recurses into a right-hand
+ *   sub-range that overlaps heavily with the sub-range the NEXT wrong
+ *   candidate will also recurse into.  For a flat, wide chain of many
+ *   same-or-higher-precedence operators (e.g. hundreds of "!=" joined
+ *   by "&", the longhand form of "these N things are pairwise
+ *   distinct"), those overlapping failed re-explorations compound
+ *   combinatorially -- found live, 2026-08-10, ~561 "!=" literals in
+ *   one "&"-chain took 31 seconds and 2 billion sn_to_str() calls to
+ *   parse (profiled with gprof).  Caching each (start, end, m)
+ *   sub-result the first time it's computed turns that combinatorial
+ *   re-exploration into a lookup, without changing WHAT is tried or
+ *   in what order -- same guarantee memoized (Packrat) recursive
+ *   descent always gives: identical parse result, just without
+ *   redoing an already-answered sub-question.
+ *
+ *   Scoped to one top-level toks_to_term() call (created/destroyed
+ *   around that single call, below) via a file-static pointer rather
+ *   than threading a parameter through every recursive call site --
+ *   safe because LADR parsing is single-threaded and never re-enters
+ *   toks_to_term() while a call is already in progress.
+ *
+ *************/
+
+struct ttt_cache_entry {
+  Pterm start, end;
+  int m;
+  BOOL failed;   /* TRUE = cached sub-parse failed (result is NULL) */
+  Term result;   /* this cache's own copy; never handed out directly */
+  struct ttt_cache_entry *next;  /* collision chain */
+};
+
+#define TTT_CACHE_BUCKETS 4093  /* prime, plenty for typical formulas */
+
+struct ttt_cache {
+  struct ttt_cache_entry *buckets[TTT_CACHE_BUCKETS];
+};
+
+static struct ttt_cache *Current_ttt_cache = NULL;
+
+static unsigned ttt_hash(Pterm start, Pterm end, int m)
+{
+  uintptr_t h = ((uintptr_t) start) * 2654435761u;
+  h ^= ((uintptr_t) end) * 40503u;
+  h ^= (unsigned) m;
+  return (unsigned) (h % TTT_CACHE_BUCKETS);
+}
+
+static struct ttt_cache *ttt_cache_create(void)
+{
+  struct ttt_cache *c = safe_malloc(sizeof(struct ttt_cache));
+  memset(c->buckets, 0, sizeof(c->buckets));
+  return c;
+}
+
+static void ttt_cache_destroy(struct ttt_cache *c)
+{
+  int i;
+#ifdef DEBUG
+  int n = 0;
+#endif
+  for (i = 0; i < TTT_CACHE_BUCKETS; i++) {
+    struct ttt_cache_entry *e = c->buckets[i];
+    while (e != NULL) {
+      struct ttt_cache_entry *next = e->next;
+#ifdef DEBUG
+      n++;
+#endif
+      if (e->result != NULL)
+        zap_term(e->result);
+      safe_free(e);
+      e = next;
+    }
+  }
+#ifdef DEBUG
+  fprintf(stderr, "%% terms_to_term cache: %d entries\n", n);
+#endif
+  safe_free(c);
+}  /* ttt_cache_destroy */
+
+/* Forward declaration: terms_to_term_uncached()'s recursive calls (below)
+   go through the memoizing wrapper terms_to_term(), defined after it. */
+static Term terms_to_term(Pterm start, Pterm end, int m);
+
+/*************
+ *
  *   terms_to_term()
  *
  *   This routine takes a sequence of terms/symbols, and attempts
  *   to construct a term with precedence <= m.
- *   
+ *
  *   On success, the resulting term is an entirely new copy.
  *
  *************/
 
 static
-Term terms_to_term(Pterm start, Pterm end, int m)
+Term terms_to_term_uncached(Pterm start, Pterm end, int m)
 {
   if (start == end) {
     if (is_term(start->t, ",", 0))
@@ -1103,7 +1192,297 @@ Term terms_to_term(Pterm start, Pterm end, int m)
     /* nothing works */
     return NULL;
   }  /* start != end */
+}  /* terms_to_term_uncached */
+
+/*************
+ *
+ *   terms_to_term()
+ *
+ *   Memoizing wrapper around terms_to_term_uncached() -- see the
+ *   "terms_to_term() memoization" comment above.  When no cache is
+ *   active (Current_ttt_cache == NULL, e.g. if this is ever called
+ *   from a context outside toks_to_term()'s scope below), behaves
+ *   exactly like calling terms_to_term_uncached() directly.
+ *
+ *************/
+
+static
+Term terms_to_term(Pterm start, Pterm end, int m)
+{
+  if (Current_ttt_cache == NULL)
+    return terms_to_term_uncached(start, end, m);
+  else {
+    unsigned h = ttt_hash(start, end, m);
+    struct ttt_cache_entry *e = Current_ttt_cache->buckets[h];
+    Term result;
+
+    while (e != NULL) {
+      if (e->start == start && e->end == end && e->m == m)
+        return e->failed ? NULL : copy_term(e->result);
+      e = e->next;
+    }
+
+    result = terms_to_term_uncached(start, end, m);
+
+    e = safe_malloc(sizeof(struct ttt_cache_entry));
+    e->start = start;
+    e->end = end;
+    e->m = m;
+    e->failed = (result == NULL);
+    e->result = (result == NULL) ? NULL : copy_term(result);
+    e->next = Current_ttt_cache->buckets[h];
+    Current_ttt_cache->buckets[h] = e;
+
+    return result;
+  }
 }  /* terms_to_term */
+
+/*************
+ *
+ *   modern LADR parser  (mp_*)
+ *
+ *   An alternative to terms_to_term()/terms_to_term_uncached() above,
+ *   selected by use_modern_ladr_parser(TRUE) (see parse.h). Standard
+ *   precedence climbing (Pratt parsing): each token's role (operand,
+ *   prefix, infix, postfix) is decided once, by POSITION -- expecting
+ *   an operand ("primary") vs. continuing after one -- rather than
+ *   tried and backtracked on failure. This makes it O(n) instead of
+ *   the classic parser's ~O(n^2) (see the "terms_to_term() memoization"
+ *   comment above), at the cost of NOT being guaranteed to resolve
+ *   every input the same way the classic parser does.
+ *
+ *   Specifically: a symbol registered as BOTH a unary (prefix/postfix)
+ *   AND a binary (infix) operator is genuinely ambiguous. The classic
+ *   parser can sometimes resolve this by trying one role, backtracking,
+ *   and trying another -- occasionally succeeding only via a role it
+ *   didn't try first. This parser commits to a fixed rule and never
+ *   backtracks: at an operand position, a registered prefix operator
+ *   wins over treating the token as a plain constant; after an
+ *   operand, a registered infix operator wins over a registered
+ *   postfix operator. For ordinary (non-overloaded) operator tables --
+ *   every real input file this project has tested against -- this
+ *   gives the same results as the classic parser. For a deliberately
+ *   overloaded table, it may choose a different (but still valid)
+ *   parse, or reject input the classic parser could only accept by
+ *   backtracking. Also simplified: POSTFIX_PAREN's "left operand must
+ *   be strictly lower precedence" constraint isn't separately
+ *   re-checked (the classic parser re-parses the left operand
+ *   specially for this; here it's whatever was already built) -- moot
+ *   for the standard operator table, which declares no POSTFIX_PAREN
+ *   operator at all. These trade-offs are intentional: this parser is
+ *   for people who want raw speed and don't need 2009-era edge-case
+ *   parity.
+ *
+ *   Parenthesized/bracketed sub-terms need no special handling here:
+ *   they're already fully resolved into a single opaque Pterm node
+ *   (marked "parenthesized") by toks_to_terms()/toks_to_list() before
+ *   this code ever runs -- just treated as an atomic operand.
+ *
+ *************/
+
+static Term mp_parse_expr(Pterm *cursor, Pterm end, int max_prec);
+
+/*************
+ *
+ *   mp_parse_primary()
+ *
+ *   Parse one operand: a quantified formula, a prefix-operator
+ *   application, a function application, or a plain constant.
+ *   *cursor is advanced past whatever is consumed. Returns NULL on
+ *   failure (no backtracking -- the caller just fails too).
+ *
+ *************/
+
+static
+Term mp_parse_primary(Pterm *cursor, Pterm end, int max_prec)
+{
+  Pterm tok = *cursor;
+
+  if (tok == NULL)
+    return NULL;
+
+  if (tok->parenthesized) {
+    *cursor = tok->next;
+    return copy_term(tok->t);
+  }
+
+  if (Quantifier_precedence <= max_prec && quant_prefix(tok, end)) {
+    Pterm var = tok->next;
+    Term t1;
+    *cursor = var->next;
+    t1 = mp_parse_expr(cursor, end, Quantifier_precedence);
+    if (t1 == NULL)
+      return NULL;
+    else {
+      Term t = get_rigid_term(quant_sym(), 3);
+      ARG(t,0) = copy_term(tok->t);
+      ARG(t,1) = copy_term(var->t);
+      ARG(t,2) = t1;
+      return t;
+    }
+  }
+
+  if (tok != end && ARITY(tok->t) == 0) {
+    /* tok != end: a prefix operator needs a following token to be its
+       argument. Without this guard, a lone prefix-registered symbol at
+       the end of its range (e.g. "wob" as the last element of a
+       comma-list, with nothing after it to apply to) would wrongly be
+       forced into the prefix role instead of falling through to being
+       treated as a plain constant -- terms_to_term_uncached() above
+       gets this for free from its start==end base case never even
+       considering operator roles; this cursor-based design needs it
+       spelled out. */
+    int prec;
+    Parsetype type;
+    char *str = sn_to_str(SYMNUM(tok->t));
+    if (unary_parse_type(str, &prec, &type) && prec <= max_prec &&
+	(type == PREFIX_PAREN || type == PREFIX)) {
+      Term t1;
+      int p = (type == PREFIX_PAREN ? prec-1 : prec);
+      *cursor = tok->next;
+      t1 = mp_parse_expr(cursor, end, p);
+      if (t1 == NULL)
+	return NULL;
+      else {
+	Term t = get_rigid_term(str, 1);
+	ARG(t,0) = t1;
+	return t;
+      }
+    }
+  }
+
+  if (is_term(tok->t, ",", 0))
+    return NULL;  /* don't allow a bare comma as a constant */
+
+  if (ARITY(tok->t) == 0 && max_prec < 998) {
+    /* Don't allow a bare prefix/postfix symbol as a lone constant --
+       except at the top level or in a comma-list (e.g. lex([-,a,b])).
+       Same 998 threshold as the identical check in
+       terms_to_term_uncached() above. */
+    int prec;
+    Parsetype type;
+    char *str = sn_to_str(SYMNUM(tok->t));
+    if (unary_parse_type(str, &prec, &type) &&
+	(type==PREFIX_PAREN || type==PREFIX || type==POSTFIX_PAREN || type==POSTFIX))
+      return NULL;
+  }
+
+  if (tok != end && ARITY(tok->t) == 0 && tok->next->parenthesized) {
+    /* Function application: identifier immediately followed by a
+       parenthesized comma-term, e.g. f(a,b). */
+    Pterm args = tok->next;
+    int num_args = comma_terms(args->t);
+    int argnum = 0;
+    Term t = get_rigid_term(sn_to_str(SYMNUM(tok->t)), num_args);
+    transfer_comma_term(args->t, t, &argnum);
+    *cursor = args->next;
+    return t;
+  }
+
+  *cursor = tok->next;
+  return copy_term(tok->t);
+}  /* mp_parse_primary */
+
+/*************
+ *
+ *   mp_parse_expr()
+ *
+ *   Parse one operand (mp_parse_primary), then repeatedly extend it
+ *   with infix or postfix operators whose precedence fits within
+ *   max_prec. *cursor is advanced past whatever is consumed.
+ *
+ *************/
+
+static
+Term mp_parse_expr(Pterm *cursor, Pterm end, int max_prec)
+{
+  Term left = mp_parse_primary(cursor, end, max_prec);
+  BOOL last_nonassoc = FALSE;  /* TRUE if the last op consumed was xfx */
+  int last_prec = -1;          /* ... and this was its precedence */
+
+  if (left == NULL)
+    return NULL;
+
+  while (*cursor != NULL) {
+    Pterm tok = *cursor;
+    int prec;
+    Parsetype type;
+    char *str;
+
+    if (tok->parenthesized || ARITY(tok->t) != 0)
+      break;  /* can't be an operator token */
+
+    str = sn_to_str(SYMNUM(tok->t));
+
+    /* A non-associative (xfx) operator can't chain with ANOTHER operator
+       at its own precedence (that's what non-associative means -- see
+       the "e * x = x" trace in the modern-parser comment above), but a
+       strictly looser operator afterward is completely normal (that's
+       how "e * x = x" parses at all: "*" at 500, then the looser "="
+       at 700 combines (e*x) with x). Anything strictly tighter than
+       last_prec would already have been absorbed by the recursive RHS
+       call below, so the only same-precedence case that can reach here
+       is a genuine attempt to chain the same level again. */
+    if (binary_parse_type(str, &prec, &type) && prec <= max_prec &&
+	!(last_nonassoc && prec == last_prec)) {
+      Term right;
+      int p_right = (type == INFIX_RIGHT) ? prec : prec-1;
+      *cursor = tok->next;
+      right = mp_parse_expr(cursor, end, p_right);
+      if (right == NULL) {
+	zap_term(left);
+	return NULL;
+      }
+      else {
+	Term t = get_rigid_term(str, 2);
+	ARG(t,0) = left;
+	ARG(t,1) = right;
+	left = t;
+	last_nonassoc = (type == INFIX);
+	last_prec = prec;
+      }
+    }
+    else if (unary_parse_type(str, &prec, &type) && prec <= max_prec &&
+	     (type == POSTFIX_PAREN || type == POSTFIX)) {
+      Term t = get_rigid_term(str, 1);
+      ARG(t,0) = left;
+      left = t;
+      *cursor = tok->next;
+      last_nonassoc = FALSE;
+    }
+    else
+      break;
+  }
+
+  return left;
+}  /* mp_parse_expr */
+
+/*************
+ *
+ *   mp_terms_to_term()
+ *
+ *   Modern-parser equivalent of terms_to_term(start, end, 1000) --
+ *   the entry point called from toks_to_term() when the modern parser
+ *   is selected. Returns NULL if the range can't be resolved to
+ *   exactly one term (a parse error, or trailing leftover tokens).
+ *
+ *************/
+
+static
+Term mp_terms_to_term(Pterm start, Pterm end)
+{
+  Pterm cursor = start;
+  Term t = mp_parse_expr(&cursor, end, 1000);
+  if (t == NULL)
+    return NULL;
+  else if (cursor != NULL) {
+    /* trailing tokens left over, e.g. "a b" with no connecting operator */
+    zap_term(t);
+    return NULL;
+  }
+  else
+    return t;
+}  /* mp_terms_to_term */
 
 /*************
  *
@@ -1375,7 +1754,23 @@ Term toks_to_term(Tok_pos p)
   else {
     Pterm end;
     for (end = terms; end->next != NULL; end = end->next);
-    t = terms_to_term(terms, end, 1000);
+    if (Use_modern_ladr_parser)
+      t = mp_terms_to_term(terms, end);
+    else {
+      struct ttt_cache *saved_cache = Current_ttt_cache;
+      /* Scope the memoization cache to exactly this top-level parse (see
+	 the "terms_to_term() memoization" comment above terms_to_term_uncached).
+	 Save/restore rather than assume NULL on entry: toks_to_term() can
+	 run to parse an included file, a hint, etc. from within another
+	 still-live formula's own parse in the same read_all_input() pass
+	 (e.g. an "include" directive processed while a formula list is
+	 open), so a nested call must not tear down the outer call's
+	 cache out from under it. */
+      Current_ttt_cache = ttt_cache_create();
+      t = terms_to_term(terms, end, 1000);
+      ttt_cache_destroy(Current_ttt_cache);
+      Current_ttt_cache = saved_cache;
+    }
     free_pterm_list(terms);
     if (t == NULL) {
       p->error_message = "A term cannot be constructed from the marked string";
@@ -2136,3 +2531,23 @@ void simple_parse(BOOL setting)
 {
   Simple_parse = setting;
 }  /* simple_parse */
+
+/*************
+ *
+ *   use_modern_ladr_parser()
+ *
+ *************/
+
+/* DOCUMENTATION
+Select the modern (precedence-climbing) LADR-native term/formula parser
+instead of the classic backtracking one (see the "modern LADR parser"
+comment above mp_parse_expr() in this file for what that trades away).
+Defaults to FALSE (classic parser). Meant to be set once, early, from a
+command-line flag -- not a per-formula or mid-parse toggle.
+*/
+
+/* PUBLIC */
+void use_modern_ladr_parser(BOOL setting)
+{
+  Use_modern_ladr_parser = setting;
+}  /* use_modern_ladr_parser */

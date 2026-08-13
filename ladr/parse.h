@@ -102,4 +102,6 @@ void simple_parse(BOOL setting);
 
 void invalidate_parse_type_cache(void);
 
+void use_modern_ladr_parser(BOOL setting);
+
 #endif  /* conditional compilation of whole file */

@@ -359,12 +359,22 @@ void clash_recurse(Clash first,
        4 = try built-in x=x resolution
        5 = done with this literal
   */
-  struct {
+  /* Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep/wide clash searches spill to a growable heap array
+     (safe_malloc/free doubling). A fixed array here silently
+     corrupts memory on a sufficiently deep/wide clash backtracking
+     search; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume. */
+  typedef struct {
     Clash cp;
     int phase;
     Term flip;       /* allocated flip term for phase 2/3 */
     Trail tr;        /* for x=x unification */
-  } stack[500];
+  } Cframe;
+  Cframe sbo_buf[64];
+  Cframe *stack = sbo_buf;
+  int cap = 64;
   int top = -1;
   Clash cur;
 
@@ -406,11 +416,11 @@ void clash_recurse(Clash first,
       if (fnd_atom != NULL) {
         Literals slit = atom_to_literal(fnd_atom);
         if ((*sat_test)(slit)) {
+          Clash nxt = cp->next;
           cp->clashed = TRUE;
           cp->flipped = FALSE;
           cp->sat_lit = slit;
           /* Advance to next clashable literal. */
-          Clash nxt = cp->next;
           while (nxt != NULL && (!nxt->clashable || nxt->clashed))
             nxt = nxt->next;
           if (nxt == NULL) {
@@ -419,6 +429,15 @@ void clash_recurse(Clash first,
             cp->clashed = FALSE;
           }
           else {
+            if (top + 1 >= cap) {
+              int new_cap = cap * 2;
+              Cframe *new_stack = safe_malloc(new_cap * sizeof(Cframe));
+              memcpy(new_stack, stack, cap * sizeof(Cframe));
+              if (stack != sbo_buf)
+                safe_free(stack);
+              stack = new_stack;
+              cap = new_cap;
+            }
             top++;
             stack[top].cp = nxt;
             stack[top].phase = 0;
@@ -437,15 +456,16 @@ void clash_recurse(Clash first,
 
     if (phase == 1) {
       /* Continue iterating normal mates. */
+      Term fnd_atom;
       cp->clashed = FALSE;
-      Term fnd_atom = mindex_retrieve_next(cp->mate_pos);
+      fnd_atom = mindex_retrieve_next(cp->mate_pos);
       if (fnd_atom != NULL) {
         Literals slit = atom_to_literal(fnd_atom);
         if ((*sat_test)(slit)) {
+          Clash nxt = cp->next;
           cp->clashed = TRUE;
           cp->flipped = FALSE;
           cp->sat_lit = slit;
-          Clash nxt = cp->next;
           while (nxt != NULL && (!nxt->clashable || nxt->clashed))
             nxt = nxt->next;
           if (nxt == NULL) {
@@ -454,6 +474,15 @@ void clash_recurse(Clash first,
             cp->clashed = FALSE;
           }
           else {
+            if (top + 1 >= cap) {
+              int new_cap = cap * 2;
+              Cframe *new_stack = safe_malloc(new_cap * sizeof(Cframe));
+              memcpy(new_stack, stack, cap * sizeof(Cframe));
+              if (stack != sbo_buf)
+                safe_free(stack);
+              stack = new_stack;
+              cap = new_cap;
+            }
             top++;
             stack[top].cp = nxt;
             stack[top].phase = 0;
@@ -475,18 +504,19 @@ void clash_recurse(Clash first,
       cp->clashed = FALSE;
       if (eq_term(cp->nuc_lit->atom)) {
         Term flip = top_flip(cp->nuc_lit->atom);
+        Term fnd_atom;
         stack[top].flip = flip;
-        Term fnd_atom = mindex_retrieve_first(flip, cp->mate_index, UNIFY,
-                                               cp->nuc_subst, cp->sat_subst,
-                                               FALSE, &(cp->mate_pos));
+        fnd_atom = mindex_retrieve_first(flip, cp->mate_index, UNIFY,
+                                          cp->nuc_subst, cp->sat_subst,
+                                          FALSE, &(cp->mate_pos));
         stack[top].phase = 3;
         if (fnd_atom != NULL) {
           Literals slit = atom_to_literal(fnd_atom);
           if ((*sat_test)(slit)) {
+            Clash nxt = cp->next;
             cp->clashed = TRUE;
             cp->flipped = TRUE;
             cp->sat_lit = slit;
-            Clash nxt = cp->next;
             while (nxt != NULL && (!nxt->clashable || nxt->clashed))
               nxt = nxt->next;
             if (nxt == NULL) {
@@ -495,6 +525,15 @@ void clash_recurse(Clash first,
               cp->clashed = FALSE;
             }
             else {
+              if (top + 1 >= cap) {
+                int new_cap = cap * 2;
+                Cframe *new_stack = safe_malloc(new_cap * sizeof(Cframe));
+                memcpy(new_stack, stack, cap * sizeof(Cframe));
+                if (stack != sbo_buf)
+                  safe_free(stack);
+                stack = new_stack;
+                cap = new_cap;
+              }
               top++;
               stack[top].cp = nxt;
               stack[top].phase = 0;
@@ -518,15 +557,16 @@ void clash_recurse(Clash first,
 
     if (phase == 3) {
       /* Continue iterating flipped mates. */
+      Term fnd_atom;
       cp->clashed = FALSE;
-      Term fnd_atom = mindex_retrieve_next(cp->mate_pos);
+      fnd_atom = mindex_retrieve_next(cp->mate_pos);
       if (fnd_atom != NULL) {
         Literals slit = atom_to_literal(fnd_atom);
         if ((*sat_test)(slit)) {
+          Clash nxt = cp->next;
           cp->clashed = TRUE;
           cp->flipped = TRUE;
           cp->sat_lit = slit;
-          Clash nxt = cp->next;
           while (nxt != NULL && (!nxt->clashable || nxt->clashed))
             nxt = nxt->next;
           if (nxt == NULL) {
@@ -535,6 +575,15 @@ void clash_recurse(Clash first,
             cp->clashed = FALSE;
           }
           else {
+            if (top + 1 >= cap) {
+              int new_cap = cap * 2;
+              Cframe *new_stack = safe_malloc(new_cap * sizeof(Cframe));
+              memcpy(new_stack, stack, cap * sizeof(Cframe));
+              if (stack != sbo_buf)
+                safe_free(stack);
+              stack = new_stack;
+              cap = new_cap;
+            }
             top++;
             stack[top].cp = nxt;
             stack[top].phase = 0;
@@ -560,11 +609,11 @@ void clash_recurse(Clash first,
         Term beta  = ARG(cp->nuc_lit->atom, 1);
         Trail tr = NULL;
         if (unify(alpha, cp->nuc_subst, beta, cp->nuc_subst, &tr)) {
+          Clash nxt = cp->next;
           cp->clashed = TRUE;
           cp->sat_lit = NULL;
           stack[top].tr = tr;
           stack[top].phase = 5;
-          Clash nxt = cp->next;
           while (nxt != NULL && (!nxt->clashable || nxt->clashed))
             nxt = nxt->next;
           if (nxt == NULL) {
@@ -576,6 +625,15 @@ void clash_recurse(Clash first,
             stack[top].phase = 5;
           }
           else {
+            if (top + 1 >= cap) {
+              int new_cap = cap * 2;
+              Cframe *new_stack = safe_malloc(new_cap * sizeof(Cframe));
+              memcpy(new_stack, stack, cap * sizeof(Cframe));
+              if (stack != sbo_buf)
+                safe_free(stack);
+              stack = new_stack;
+              cap = new_cap;
+            }
             top++;
             stack[top].cp = nxt;
             stack[top].phase = 0;
@@ -605,6 +663,8 @@ void clash_recurse(Clash first,
       continue;
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
 }  /* clash_recurse */
 
 /*************

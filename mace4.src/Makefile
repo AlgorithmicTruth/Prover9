@@ -95,20 +95,30 @@ OBJECTS = estack.o util.o print.o syms.o ground.o arithmetic.o select.o \
 	propagate.o mstate.o negpropindex.o negprop.o ordercells.o \
 	commandline.o msearch.o sizesched.o
 
-all: ladr lib mace4 install
+all: mace4 install
 
 libmace4.a: .build_mode $(OBJECTS)
 	$(AR_CMD) libmace4.a $(OBJECTS)
 
 ##############################################################################
 
+# lib/libmace4 are for callers that want just the archive (provers.src does
+# this) -- NOT listed as a sibling of mace4 in `all` above, because under
+# -j> 1 that raced this same libmace4.a target via two separate processes
+# (this recursive $(MAKE) call, and Make's own native resolution of mace4's
+# own libmace4.a prerequisite below) -- confirmed by reproducing duplicate,
+# interleaved object-file compiles under `make all -j8` before this fix.
 lib libmace4:
 	$(MAKE) libmace4.a
 
 ladr:
 	cd ../ladr && $(MAKE) libladr.a
 
-mace4: libmace4.a mace4.o $(OBJECTS) ../ladr/libladr.a
+# mace4 depends on the `ladr` PHONY TARGET, not just the ../ladr/libladr.a
+# file path -- Make has no rule in this file for building that file, so
+# without the phony prerequisite here, `-j` could run `ladr` and `mace4` as
+# unrelated siblings and let mace4 link before libladr.a is ready.
+mace4: ladr libmace4.a mace4.o $(OBJECTS) ../ladr/libladr.a
 	$(CC) $(CFLAGS) $(LDFLAGS) -o mace4 mace4.o libmace4.a ../ladr/libladr.a
 
 tags:
@@ -120,7 +130,7 @@ clean:
 realclean:
 	/bin/rm -f *.o *.d *.a mace4 .build_mode
 
-install:
+install: mace4
 	codesign -s - -f mace4 2>/dev/null || true
 	/bin/cp -p mace4 ../bin
 

@@ -315,6 +315,8 @@ int main(int argc, char **argv)
   struct syms s;
   int n, i;
   Plist demods;
+  Plist forms;
+  Plist p;
 
   init_standard_ladr();
   i = register_attribute("label",  STRING_ATTRIBUTE);  /* ignore these */
@@ -340,12 +342,12 @@ int main(int argc, char **argv)
     demods = NULL;
   else {
     FILE *head_fp = fopen(argv[i+1], "r");
+    Plist p;
     if (head_fp == NULL)
       fatal_error("demod file cannot be opened for reading");
     demods = read_clause_list(head_fp, stderr, TRUE);
     fclose(head_fp);
 
-    Plist p;
     for (p = demods; p != NULL; p = p->next) {
       /* assume positive equality unit */
       Topform d = p->v;
@@ -356,13 +358,12 @@ int main(int argc, char **argv)
     }
   }
   
-  Plist forms = catalan(num_constants(s));
+  forms = catalan(num_constants(s));
 
   n = 0;
-  Plist p;
   for (p = forms; p; p = p->next) {
-    n++;
     Term t = p->v;
+    n++;
     unary_gen(t, s);
   }
   printf("%% Generated=%llu, Kept=%llu.\n", Generated, Kept);

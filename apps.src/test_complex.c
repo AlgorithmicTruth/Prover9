@@ -40,13 +40,14 @@ int main(int argc, char **argv)
 
   while (t != NULL) {
     int size = symbol_count(t);
+    double x1, x2, x3, x4, x5;
     term_set_variables(t, MAX_VARS);
     n++;
-    double x1 = 1 - term_complexity(t, 2, 0);
-    double x2 = 1 - term_complexity(t, 3, 1);
-    double x3 = 1 - term_complexity(t, 3, 2);
-    double x4 = 1 - term_complexity(t, 3, 3);
-    double x5 = 1 - complex4(t);
+    x1 = 1 - term_complexity(t, 2, 0);
+    x2 = 1 - term_complexity(t, 3, 1);
+    x3 = 1 - term_complexity(t, 3, 2);
+    x4 = 1 - term_complexity(t, 3, 3);
+    x5 = 1 - complex4(t);
     total1 += x1;
     total2 += x2;
     total3 += x3;

@@ -40,4 +40,8 @@ Plist back_demod_linear(Topform demod, Clist lst, Plist rewritables);
 Plist back_demod_indexed(Topform demod, int type, Mindex idx,
 			 BOOL lex_order_vars);
 
+Plist back_demodulatable_ac(Topform demod, Clist lst1, Clist lst2);
+
+Plist back_demodulatable_ac_indexed(Topform demod, Mindex idx);
+
 #endif  /* conditional compilation of whole file */

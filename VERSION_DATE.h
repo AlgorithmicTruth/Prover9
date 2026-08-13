@@ -1,3 +1,3 @@
-#define PROGRAM_DATE     "July 2026, CASC-J13"
-#define PROGRAM_VERSION  "2026-6A"
+#define PROGRAM_DATE     "August 2026"
+#define PROGRAM_VERSION  "2026-8A"
 

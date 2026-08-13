@@ -76,6 +76,17 @@ int First_skolem_cell;
 
 int Domain_size;
 Term *Domain;    /* array of terms representing (shared) domain elements  */
+
+/* Bool_domain[0]/[1] are the false/true values of a RELATION cell.  These
+   used to be represented by literally reusing Domain[0]/Domain[1] (the
+   real domain elements 0 and 1), which only worked because Domain_size
+   was never allowed below 2.  Independent of Domain_size, allocated once
+   per process (initialize_for_search, below) and never freed or rebuilt
+   between domain sizes -- unlike Domain[], a boolean truth value isn't a
+   function of how many FOL domain elements were requested.  See
+   docs/mace4-domain-size-1-spec.md. */
+Term Bool_domain[2];
+
 BOOL Skolems_last;
 
 Plist Ground_clauses;  /* Mclauses (see ground.h) */
@@ -187,7 +198,7 @@ enum {
 void init_mace_options(Mace_options opt)
 {
   opt->domain_size       = init_parm("domain_size",      0,       0, INT_MAX);
-  opt->start_size        = init_parm("start_size",       2,       2, INT_MAX);
+  opt->start_size        = init_parm("start_size",       2,       1, INT_MAX);
   opt->end_size          = init_parm("end_size",        -1,      -1, INT_MAX);
   opt->iterate_up_to     = init_parm("iterate_up_to",   -1,      -1, INT_MAX);
   opt->max_models        = init_parm("max_models",       1,      -1, INT_MAX);
@@ -373,6 +384,35 @@ void mace4_exit(int exit_code)
 
 /*************
  *
+ *   new_uncached_bool_term()
+ *
+ *   Construct a fresh VARIABLE-shaped term with the given VARNUM,
+ *   WITHOUT going through get_variable_term()'s Shared_variables[]
+ *   cache.  get_variable_term(0)/get_variable_term(1) would hand back
+ *   the exact same shared pointers as Domain[0]/Domain[1] -- the whole
+ *   point of Bool_domain is that it must be pointer-distinct from
+ *   those, while still reporting VARNUM 0/1 (see docs/mace4-domain-
+ *   size-1-spec.md 2.2 for why both properties are required).  Mirrors
+ *   get_variable_term()'s own internal construction (ladr/term.c)
+ *   minus the cache write and the var_num>=0 gate (0/1 are always in
+ *   range anyway).
+ *
+ *************/
+
+static
+Term new_uncached_bool_term(int fake_varnum)
+{
+  Term t = safe_malloc(sizeof(struct term));
+  t->private_symbol = fake_varnum;
+  t->arity = 0;
+  t->private_flags = 0;
+  t->container = NULL;
+  t->u.id = 0;
+  return t;
+}  /* new_uncached_bool_term */
+
+/*************
+ *
  *   initialize_for_search()
  *
  *   This is the initialization that has to be done only once
@@ -388,6 +428,14 @@ void initialize_for_search(Plist clauses)
   Symbol_data s;
 
   Mace4_clock = clock_init("Mace4");
+
+  /* Bool_domain is a process-lifetime constant, independent of domain
+     size -- set up once here, not per domain size (unlike Domain[]
+     itself, rebuilt in init_for_domain_size for each size tried). */
+  if (Bool_domain[0] == NULL) {
+    Bool_domain[0] = new_uncached_bool_term(0);
+    Bool_domain[1] = new_uncached_bool_term(1);
+  }
 
   /* In ground clauses, VARIABLEs represent domain elements,
      so from here on, print variables as integers. */
@@ -509,7 +557,7 @@ BOOL init_for_domain_size(void)
     n = id_to_domain_size(id);
     c->possible = safe_malloc(n * sizeof(void *));
     for (j = 0; j < n; j++)
-      c->possible[j] = Domain[j];  /* really just a flag */
+      c->possible[j] = domain_value(id, j);  /* really just a flag */
   }
 
   order_cells(flag(Opt->verbose));
@@ -534,7 +582,7 @@ void built_in_assignments(void)
       int i, j;
       for (i = 0; i < Domain_size; i++)
 	for (j = 0; j < Domain_size; j++)
-          Cells[X2(s->base,i,j)].value = (Domain[i==j ? 1 : 0]);
+          Cells[X2(s->base,i,j)].value = (Bool_domain[i==j ? 1 : 0]);
     }
   }
 }  /* built_in_assignments */
@@ -583,12 +631,12 @@ void special_assignments(void)
       if (is_symbol(s->sn, "<", 2)) {
 	for (i = 0; i < Domain_size; i++)
 	  for (j = 0; j < Domain_size; j++)
-	    Cells[X2(s->base,i,j)].value = (Domain[i<j ? 1 : 0]);
+	    Cells[X2(s->base,i,j)].value = (Bool_domain[i<j ? 1 : 0]);
       }
       if (is_symbol(s->sn, "<=", 2)) {
 	for (i = 0; i < Domain_size; i++)
 	  for (j = 0; j < Domain_size; j++)
-	    Cells[X2(s->base,i,j)].value = (Domain[i<=j ? 1 : 0]);
+	    Cells[X2(s->base,i,j)].value = (Bool_domain[i<=j ? 1 : 0]);
       }
     }
   }
@@ -994,7 +1042,8 @@ int search_iterative(int initial_max_constrained)
     Mstats.assignments++;
     {
       Estack stk = assign_and_propagate(frame->cell_id,
-                                         Domain[frame->value_index]);
+                                         domain_value(frame->cell_id,
+                                                       frame->value_index));
       if (stk != NULL) {
         int new_mc, new_id, new_last;
         frame->stk = stk;
@@ -1186,7 +1235,8 @@ int search_iterative_resume(int start_depth)
     Mstats.assignments++;
     {
       Estack stk = assign_and_propagate(frame->cell_id,
-                                         Domain[frame->value_index]);
+                                         domain_value(frame->cell_id,
+                                                       frame->value_index));
       if (stk != NULL) {
         int new_mc, new_id, new_last;
         frame->stk = stk;
@@ -1513,7 +1563,7 @@ Mace_results mace4(Plist clauses, Mace_options opt)
   }
   rc = SEARCH_GO_NO_MODELS;
 
-  while (n >= 2 && (rc == SEARCH_GO_NO_MODELS || rc == SEARCH_GO_MODELS)) {
+  while (n >= 1 && (rc == SEARCH_GO_NO_MODELS || rc == SEARCH_GO_MODELS)) {
     if (!Mace4_tptp_mode) {
       char str[24];
       sprintf(str, "DOMAIN SIZE %d", n);
@@ -1597,7 +1647,7 @@ Mace_results mace4(Plist clauses, Mace_options opt)
        and the NEXT domain size (so resume starts there). */
     if (mace4_checkpoint_requested()) {
       int next_n = next_domain_size(n);
-      Domain_size = (next_n >= 2) ? next_n : n;
+      Domain_size = (next_n >= 1) ? next_n : n;
       write_mace4_checkpoint(clauses);
       mace4_clear_checkpoint_request();
       if (flag(Opt->checkpoint_exit)) {
@@ -1917,7 +1967,7 @@ int mace4n_resume(Plist clauses, int order,
     int val = saved_trail[d].value_index;
     Estack stk;
 
-    stk = assign_and_propagate(id, Domain[val]);
+    stk = assign_and_propagate(id, domain_value(id, val));
     if (stk == NULL)
       fatal_error("mace4 resume: contradiction during trail replay");
 

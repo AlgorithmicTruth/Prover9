@@ -42,4 +42,10 @@ int prolog_style_variables_id(void);
 
 int otter_style_demod_id(void);
 
+int ac_demod_id(void);
+
+int ac_kbo_tie_id(void);
+
+int ac_demod_weight_id(void);
+
 #endif  /* conditional compilation of whole file */

@@ -63,6 +63,9 @@ struct prover_options {
     para_into_vars,
     para_from_small,
     basic_paramodulation,
+    para_pairs,              // EQP-style pair-selection inference loop
+    ac_back_demod,           // AC (btm) back-demod candidate finding
+    ac_bd_index,             // FPA-AC indexed finder (clear = linear scan)
     initial_nuclei,
 
     process_initial_sos,     // processing generated clauses
@@ -140,7 +143,9 @@ struct prover_options {
     checkpoint_verify,    // verify data structure hashes on resume
     tptp_output,          // TPTP/TSTP output mode
     multi_order_trial,    // try multiple symbol orderings, pick best
-    fast_pred_elim;       // 5-second timeout on predicate elimination
+    fast_pred_elim,       // 5-second timeout on predicate elimination
+    single_proof_race;    // -cores (LADR mode): force max_proofs=1 even
+                           // for a multi-goal Horn set -- see auto_denials()
 
   // Parms (Integer options)
 
@@ -180,6 +185,10 @@ struct prover_options {
     max_vars,
     demod_step_limit,
     demod_increase_limit,
+    ac_superset_limit,       // AC unifier superset restriction (-1 unlimited)
+    ac_max_weight,           // AC pre-simplify discard threshold (-1 off)
+    ac_combo_budget,         // AC walk iterations per unify attempt (-1 unlimited)
+    ac_unify_seconds,        // CPU seconds per unify crank (-1 unlimited)
     max_nohints,             // exit after N consecutive givens w/o hint match
     degrade_limit,           // hint matcher only if degradation_count <= N
     para_restr_beg,          // restricted paramod: skip if both IDs in range
@@ -307,6 +316,8 @@ struct prover_input {
   // term lists
   Plist actions, weights, resonators, kbo_weights, interps;
   Plist given_selection, keep_rules, delete_rules;
+  Plist discard;  // list(discard): pattern clauses; any generated clause
+                  // subsumed by one is deleted (ablation instrument)
   // ordinary options
   Prover_options options;
   // extra options

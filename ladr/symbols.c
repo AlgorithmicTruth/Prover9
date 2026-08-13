@@ -37,6 +37,10 @@ struct symbol {
   Lrpo_status lrpo_status;      /* for LRPO, LPO, RPO */
   BOOL        skolem;
   BOOL        distinct_object;  /* TPTP distinct object ("foo" -> do_foo) */
+  BOOL        numeral;          /* TPTP <number> token (TOK_INTEGER) --
+                                    self-interpreting per SyntaxBNF, set
+                                    ONLY by tptp_parse.c, never in native
+                                    LADR parsing */
   BOOL        quoted;           /* from quoted/distinct token - never a variable */
   BOOL        unfold;
   BOOL        auxiliary;        /* not part of theory, e.g., in hints only */
@@ -447,6 +451,7 @@ Symbol get_symbol(void)
   p->type = UNSPECIFIED_SYMBOL;
   p->skolem = FALSE;
   p->distinct_object = FALSE;
+  p->numeral = FALSE;
   p->quoted = FALSE;
   p->unfold = FALSE;
   p->auxiliary = FALSE;
@@ -1110,6 +1115,12 @@ int special_parse_type(char *str)
 
 static int Assoc_comm_symbols = 0;  /* number declared */
 static int Comm_symbols = 0;        /* number decoared */
+/* When exactly one AC (resp. C) symbol is declared -- a common case for a
+   single-operator algebraic theory -- is_assoc_comm/is_commutative is a
+   single integer compare instead of a symbol-table hash walk on every
+   call.  -1 means "use full lookup". */
+static int Single_ac_sn = -1;
+static int Single_comm_sn = -1;
 
 /*************
  *
@@ -1134,10 +1145,12 @@ void set_assoc_comm(char *str, BOOL set)
   if (set) {
     p->unif_theory = ASSOC_COMMUTE;
     Assoc_comm_symbols++;
+    Single_ac_sn = (Assoc_comm_symbols == 1) ? sn : -1;
   }
   else {
     p->unif_theory = EMPTY_THEORY;
     Assoc_comm_symbols--;
+    Single_ac_sn = -1;  /* invalidate; rare path */
   }
 }  /* set_assoc_comm */
 
@@ -1161,10 +1174,12 @@ void set_commutative(char *str, BOOL set)
   if (set) {
     p->unif_theory = COMMUTE;
     Comm_symbols++;
+    Single_comm_sn = (Comm_symbols == 1) ? sn : -1;
   }
   else {
     p->unif_theory = EMPTY_THEORY;
     Comm_symbols--;
+    Single_comm_sn = -1;
   }
 }  /* set_commutative */
 
@@ -1220,7 +1235,12 @@ and sn_to_str() translate between the two forms.
 /* PUBLIC */
 BOOL is_assoc_comm(int sn)
 {
-  Symbol p = lookup_by_id(sn);
+  Symbol p;
+  if (Assoc_comm_symbols == 0)
+    return FALSE;
+  if (Assoc_comm_symbols == 1 && Single_ac_sn != -1)
+    return sn == Single_ac_sn;
+  p = lookup_by_id(sn);
   return (p == NULL ? 0 : p->unif_theory == ASSOC_COMMUTE);
 }  /* is_assoc_comm */
 
@@ -1242,7 +1262,12 @@ translate between the two forms.
 /* PUBLIC */
 BOOL is_commutative(int sn)
 {
-  Symbol p = lookup_by_id(sn);
+  Symbol p;
+  if (Comm_symbols == 0)
+    return FALSE;
+  if (Comm_symbols == 1 && Single_comm_sn != -1)
+    return sn == Single_comm_sn;
+  p = lookup_by_id(sn);
   return (p == NULL ? 0 : p->unif_theory == COMMUTE);
 }  /* is_commutative */
 
@@ -1985,6 +2010,31 @@ BOOL is_distinct_object(int symnum)
   Symbol p = lookup_by_id(symnum);
   return p->distinct_object;
 }  /* is_distinct_object */
+
+/*************
+ *
+ *   set_numeral() / is_numeral()
+ *
+ *   Mark a symbol as a genuine TPTP <number> token (TOK_INTEGER).
+ *   Called ONLY from tptp_parse.c's TOK_INTEGER branch of parse_term() --
+ *   never true for a native-LADR-parsed symbol or a quoted/distinct-object
+ *   symbol, by construction (docs/distinctness-unification-spec.md).
+ *
+ *************/
+
+/* PUBLIC */
+void set_numeral(int symnum)
+{
+  Symbol p = lookup_by_id(symnum);
+  p->numeral = TRUE;
+}  /* set_numeral */
+
+/* PUBLIC */
+BOOL is_numeral(int symnum)
+{
+  Symbol p = lookup_by_id(symnum);
+  return p->numeral;
+}  /* is_numeral */
 
 /*************
  *

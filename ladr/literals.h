@@ -113,6 +113,8 @@ BOOL true_clause(Literals lits);
 
 BOOL tautology(Literals lits);
 
+BOOL provably_distinct(Term a, Term b);
+
 int symbol_occurrences_in_clause(Literals lits, int symnum);
 
 Literals remove_null_literals(Literals l);

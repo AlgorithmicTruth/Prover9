@@ -62,6 +62,7 @@ int collect_mace4_syms(Plist clauses, BOOL arithmetic);
 void p_symbol_data(Symbol_data s);
 Symbol_data find_symbol_node(int id);
 int id_to_domain_size(int id);
+Term domain_value(int id, int i);
 int max_index(int id, Symbol_data s);
 
 #endif  /* conditional compilation of whole file */

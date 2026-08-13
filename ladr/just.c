@@ -426,6 +426,28 @@ Just back_demod_just(Topform c)
 
 /*************
  *
+ *   ac_ext_just()
+ *
+ *************/
+
+/* DOCUMENTATION
+This routine builds and returns a justification for an AC extension:
+the Peterson-Stickel extension f(alpha,x)=f(beta,x) of a parent
+equation alpha=beta with AC-rooted alpha (or beta).
+*/
+
+/* PUBLIC */
+Just ac_ext_just(Topform c)
+{
+  /* (AC_EXT_JUST parent_id) */
+  Just j = get_just();
+  j->type = AC_EXT_JUST;
+  j->u.id = c->id;
+  return j;
+}  /* ac_ext_just */
+
+/*************
+ *
  *   back_unit_deletion_just()
  *
  *************/
@@ -692,8 +714,14 @@ Just flip_just(int n)
  *************/
 
 /* DOCUMENTATION
-This routine builds and returns a justification for the XX rule,
-which removes literals that are instances of x!=x.
+This routine builds and returns a justification for the XX rule, which
+removes literals that are instances of x!=x -- or, since
+docs/distinctness-unification-spec.md, a positive equality literal s=t
+where TPTP's implicit distinctness rule (provably_distinct(), ladr/
+literals.c) alone forces s and t apart.  Both are "false by the semantics
+of equality/identity, not by resolution," reusing this one rule rather
+than adding a new justification type for the latter (a deliberate scope
+decision, not a mislabel -- see the spec's section 2.2).
 */
 
 /* PUBLIC */
@@ -799,6 +827,7 @@ Just copy_justification(Just j)
     case PROPOSITIONAL_JUST:
     case NEW_SYMBOL_JUST:
     case BACK_DEMOD_JUST:
+    case AC_EXT_JUST:
     case BACK_UNIT_DEL_JUST:
     case FLIP_JUST:
     case XX_JUST:
@@ -876,6 +905,7 @@ char *jstring(Just j)
   case PROPOSITIONAL_JUST: return "propositional";
   case NEW_SYMBOL_JUST:    return "new_symbol";
   case BACK_DEMOD_JUST:    return "back_rewrite";
+  case AC_EXT_JUST:        return "ac_extension";
   case BACK_UNIT_DEL_JUST: return "back_unit_del";
   case EXPAND_DEF_JUST:    return "expand_def";
   case BINARY_RES_JUST:    return "resolve";
@@ -928,6 +958,8 @@ int jstring_to_jtype(char *s)
     return NEW_SYMBOL_JUST;
   else if (str_ident(s, "back_rewrite"))
     return BACK_DEMOD_JUST;
+  else if (str_ident(s, "ac_extension"))
+    return AC_EXT_JUST;
   else if (str_ident(s, "back_unit_del"))
     return BACK_UNIT_DEL_JUST;
   else if (str_ident(s, "expand_def"))
@@ -1268,13 +1300,14 @@ Term copy_term_with_canonical(Term t,
     int orig = VARNUM(t);
     int local, id, pos;
     char buf[32];
+    int electron;
     if (int_to_canon != NULL &&
         orig >= 0 && orig < INT_VARNUM_MAX && int_to_canon[orig] >= 0)
       return get_variable_term(int_to_canon[orig]);
     resolve_var_source(orig, mults, ids, n_ctx, &local, &id, &pos);
     if (id < 0)
       return get_variable_term(orig);
-    int electron = (pos >= 0 && electron_idx != NULL ? electron_idx[pos] : 0);
+    electron = (pos >= 0 && electron_idx != NULL ? electron_idx[pos] : 0);
     clause_var_name(local, id, electron, buf, sizeof(buf));
     return get_rigid_term(buf, 0);
   } else {
@@ -1297,6 +1330,7 @@ Term copy_term_with_canonical(Term t,
 static
 BOOL collect_var_map(Term actual, Term expected, int *map)
 {
+  int i;
   if (VARIABLE(actual) && VARIABLE(expected)) {
     int internal = VARNUM(expected);
     int canon = VARNUM(actual);
@@ -1308,7 +1342,6 @@ BOOL collect_var_map(Term actual, Term expected, int *map)
     return FALSE;
   if (SYMNUM(actual) != SYMNUM(expected) || ARITY(actual) != ARITY(expected))
     return FALSE;
-  int i;
   for (i = 0; i < ARITY(actual); i++) {
     if (!collect_var_map(ARG(actual, i), ARG(expected, i), map))
       return FALSE;
@@ -1327,6 +1360,9 @@ Term build_expected_atom(Term into_atom, Ilist into_pos_in_lit,
 {
   Term expected = apply(into_atom, c2);
   Term replacement_applied = apply(replacement_term, c1);
+  Ilist p = into_pos_in_lit;
+  Term cur = expected;
+  int idx;
 
   if (into_pos_in_lit == NULL) {
     /* targeted the whole atom -- shouldn't happen for paramod (you'd
@@ -1336,8 +1372,6 @@ Term build_expected_atom(Term into_atom, Ilist into_pos_in_lit,
   }
 
   /* Walk down to the parent of the target subterm. */
-  Ilist p = into_pos_in_lit;
-  Term cur = expected;
   while (p && p->next) {
     int idx = p->i - 1;
     if (idx < 0 || idx >= ARITY(cur)) {
@@ -1348,7 +1382,7 @@ Term build_expected_atom(Term into_atom, Ilist into_pos_in_lit,
     p = p->next;
   }
   /* p now points at the final position step; replace at this index. */
-  int idx = p->i - 1;
+  idx = p->i - 1;
   if (idx < 0 || idx >= ARITY(cur)) {
     zap_term(replacement_applied);
     return expected;
@@ -1363,6 +1397,7 @@ Term build_expected_atom(Term into_atom, Ilist into_pos_in_lit,
 static
 int collect_term_vars(Term t, int *out, int already, int max_out)
 {
+  int i;
   if (VARIABLE(t)) {
     int n = VARNUM(t);
     int j;
@@ -1374,7 +1409,6 @@ int collect_term_vars(Term t, int *out, int already, int max_out)
     }
     return already;
   }
-  int i;
   for (i = 0; i < ARITY(t); i++)
     already = collect_term_vars(ARG(t, i), out, already, max_out);
   return already;
@@ -1436,9 +1470,10 @@ char *bracketize_clause_tags(const char *s)
       if ((c == 'x' || c == 'y' || c == 'z' || c == 'u' || c == 'w') &&
           i + 2 < len && s[i+1] == '_' && s[i+2] >= '0' && s[i+2] <= '9') {
         size_t end = i + 2;
+        size_t e_start = 0, e_end = 0;
+        size_t total_end;
         while (end < len && s[end] >= '0' && s[end] <= '9') end++;
         /* Optional electron suffix "_e<digits>" */
-        size_t e_start = 0, e_end = 0;
         if (end + 2 < len && s[end] == '_' && s[end+1] == 'e' &&
             s[end+2] >= '0' && s[end+2] <= '9') {
           e_start = end + 2;
@@ -1449,11 +1484,11 @@ char *bracketize_clause_tags(const char *s)
             e_start = e_end = 0;
           }
         }
-        size_t total_end = (e_end > 0 ? e_end : end);
+        total_end = (e_end > 0 ? e_end : end);
         if (total_end == len || !is_id_char(s[total_end])) {
+          size_t k;
           out[oi++] = c;
           out[oi++] = '[';
-          size_t k;
           for (k = i + 2; k < end; k++) out[oi++] = s[k];
           out[oi++] = ']';
           if (e_start > 0) {
@@ -1471,8 +1506,9 @@ char *bracketize_clause_tags(const char *s)
         if (k < len && s[k] == '_' && k + 1 < len &&
             s[k+1] >= '0' && s[k+1] <= '9') {
           size_t end = k + 1;
-          while (end < len && s[end] >= '0' && s[end] <= '9') end++;
           size_t e_start = 0, e_end = 0;
+          size_t total_end;
+          while (end < len && s[end] >= '0' && s[end] <= '9') end++;
           if (end + 2 < len && s[end] == '_' && s[end+1] == 'e' &&
               s[end+2] >= '0' && s[end+2] <= '9') {
             e_start = end + 2;
@@ -1482,7 +1518,7 @@ char *bracketize_clause_tags(const char *s)
               e_start = e_end = 0;
             }
           }
-          size_t total_end = (e_end > 0 ? e_end : end);
+          total_end = (e_end > 0 ? e_end : end);
           if (total_end == len || !is_id_char(s[total_end])) {
             size_t m;
             for (m = i; m < k; m++) out[oi++] = s[m];
@@ -1536,9 +1572,6 @@ void emit_subst_rider(String_buf sb,
                       int *aux_mults, int *aux_ids, int n_aux,
                       int *int_to_canon)
 {
-  if (n_ctx <= 0 || n_ctx > MAX_RIDER_INPUTS)
-    return;
-
   /* Combined arrays (input contexts + auxiliary tag-only entries) for
      RHS variable resolution.  LHS iteration only walks the n_ctx
      input clauses; the n_aux auxiliaries are appended to the resolution
@@ -1548,6 +1581,14 @@ void emit_subst_rider(String_buf sb,
   int electron_idx[MAX_RIDER_INPUTS];
   int n_total;
   int i;
+  struct subst_entry entries[MAX_RIDER_ENTRIES];
+  int n_entries = 0;
+  BOOL any = FALSE;
+  int ei;
+
+  if (n_ctx <= 0 || n_ctx > MAX_RIDER_INPUTS)
+    return;
+
   for (i = 0; i < n_ctx && i < MAX_RIDER_INPUTS; i++) {
     mults[i]   = ctxs[i]->multiplier;
     all_ids[i] = ids[i];
@@ -1581,41 +1622,45 @@ void emit_subst_rider(String_buf sb,
     electron_idx[i] = (dupes > 1 ? idx : 0);
   }
 
-  struct subst_entry entries[MAX_RIDER_ENTRIES];
-  int n_entries = 0;
-
   for (i = 0; i < n_ctx; i++) {
     Topform cl = cls[i];
     Context cx = ctxs[i];
     int src_id = ids[i];
+    int vars[MAX_VARS];
+    int nv;
+    int vi;
     if (cl == NULL || cx == NULL) continue;
 
-    int vars[MAX_VARS];
-    int nv = collect_clause_vars(cl, vars, MAX_VARS);
+    nv = collect_clause_vars(cl, vars, MAX_VARS);
 
-    int vi;
     for (vi = 0; vi < nv; vi++) {
       int local = vars[vi];
+      Term as_var;
+      Term resolved;
+      Term rhs_term;
+      String_buf rhs_sb;
+      BOOL wrap;
+      char *rhs_str;
+      char lhs_buf[32];
       if (local < 0 || local >= MAX_VARS) continue;
       if (n_entries >= MAX_RIDER_ENTRIES) break;
 
-      Term as_var = get_variable_term(local);
-      Term resolved = apply(as_var, cx);
+      as_var = get_variable_term(local);
+      resolved = apply(as_var, cx);
       zap_term(as_var);
 
-      Term rhs_term = copy_term_with_canonical(resolved,
-                                               mults, all_ids, electron_idx,
-                                               n_total, int_to_canon);
+      rhs_term = copy_term_with_canonical(resolved,
+                                          mults, all_ids, electron_idx,
+                                          n_total, int_to_canon);
 
-      String_buf rhs_sb = get_string_buf();
-      BOOL wrap = (ARITY(rhs_term) >= 2);
+      rhs_sb = get_string_buf();
+      wrap = (ARITY(rhs_term) >= 2);
       if (wrap) sb_append(rhs_sb, "(");
       sb_write_term(rhs_sb, rhs_term);
       if (wrap) sb_append(rhs_sb, ")");
-      char *rhs_str = sb_to_malloc_string(rhs_sb);
+      rhs_str = sb_to_malloc_string(rhs_sb);
       zap_string_buf(rhs_sb);
 
-      char lhs_buf[32];
       clause_var_name(local, src_id, electron_idx[i], lhs_buf, sizeof(lhs_buf));
 
       /* Identity-string suppression: when LHS and RHS render identically,
@@ -1645,17 +1690,17 @@ void emit_subst_rider(String_buf sb,
      the RHS canonical letter (local == rhs_canon).  Same-letter
      survival conveys no real change; the meaningful aliasing is
      communicated by the letter-mismatched entries that remain. */
-  BOOL any = FALSE;
-  int ei;
   for (ei = 0; ei < n_entries; ei++) {
     int rc = entries[ei].rhs_canon;
     BOOL drop = (rc >= 0 && rc < MAX_VARS && rc == entries[ei].local);
 
     if (!drop) {
+      char *lhs_b;
+      char *rhs_b;
       if (!any) { sb_append(sb, " {"); any = TRUE; }
       else      { sb_append(sb, ", "); }
-      char *lhs_b = bracketize_clause_tags(entries[ei].lhs);
-      char *rhs_b = bracketize_clause_tags(entries[ei].rhs);
+      lhs_b = bracketize_clause_tags(entries[ei].lhs);
+      rhs_b = bracketize_clause_tags(entries[ei].rhs);
       sb_append(sb, lhs_b);
       sb_append(sb, " <- ");
       sb_append(sb, rhs_b);
@@ -1668,46 +1713,71 @@ void emit_subst_rider(String_buf sb,
     sb_append(sb, "}");
 }  /* emit_subst_rider */
 
+/* Forward decl -- defined below (sb_emit_demod_chain's existing rider
+   guard); the riders here need the same out-of-range-varnum check. */
+static BOOL term_has_oob_var(Term t);
+
 static
 void sb_append_para_subst(String_buf sb, Parajust pj)
 {
+  Topform from_cl;
+  Topform into_cl;
+  Literals from_lit;
+  Literals into_lit;
+  Ilist from_pos_in_lit;
+  Ilist into_pos_in_lit;
+  Term source_term;
+  Term target_term;
+  Term replacement_term;
+  Context c1;
+  Context c2;
+  Trail tr;
+  int int_to_canon[INT_VARNUM_MAX];
+  int k;
+  Topform cls[2];
+  Context ctxs[2];
+  int     ids[2];
+
   if (Para_subst_proof == NULL || pj == NULL)
     return;
 
-  Topform from_cl = proof_id_to_clause(Para_subst_proof, pj->from_id);
-  Topform into_cl = proof_id_to_clause(Para_subst_proof, pj->into_id);
+  from_cl = proof_id_to_clause(Para_subst_proof, pj->from_id);
+  into_cl = proof_id_to_clause(Para_subst_proof, pj->into_id);
   if (from_cl == NULL || into_cl == NULL)
     return;
   if (pj->from_pos == NULL || pj->into_pos == NULL)
     return;
 
-  Literals from_lit = ith_literal(from_cl->literals, pj->from_pos->i);
-  Literals into_lit = ith_literal(into_cl->literals, pj->into_pos->i);
+  from_lit = ith_literal(from_cl->literals, pj->from_pos->i);
+  into_lit = ith_literal(into_cl->literals, pj->into_pos->i);
   if (from_lit == NULL || into_lit == NULL)
     return;
 
-  Ilist from_pos_in_lit = pj->from_pos->next;
-  Ilist into_pos_in_lit = pj->into_pos->next;
+  from_pos_in_lit = pj->from_pos->next;
+  into_pos_in_lit = pj->into_pos->next;
 
-  Term source_term = term_at_pos(from_lit->atom, from_pos_in_lit);
-  Term target_term = term_at_pos(into_lit->atom, into_pos_in_lit);
+  source_term = term_at_pos(from_lit->atom, from_pos_in_lit);
+  target_term = term_at_pos(into_lit->atom, into_pos_in_lit);
   if (source_term == NULL || target_term == NULL)
     return;
+  if (term_has_oob_var(source_term) || term_has_oob_var(target_term))
+    return;  /* unify()'s Context.terms[]/contexts[] are only sized
+                MAX_VARS; see term_has_oob_var's comment. */
 
   /* Determine the FROM equation's "other side" (the replacement).
      from_pos_in_lit->i is 1 (LHS source -> RHS replaces) or 2 (vice
      versa).  Without that we can't build the expected pre-renumber
      atom, so we silently degrade to clause-tag-only rendering. */
-  Term replacement_term = NULL;
+  replacement_term = NULL;
   if (from_pos_in_lit && ARITY(from_lit->atom) == 2) {
     int side = from_pos_in_lit->i;
     if (side == 1)      replacement_term = ARG(from_lit->atom, 1);
     else if (side == 2) replacement_term = ARG(from_lit->atom, 0);
   }
 
-  Context c1 = get_context();
-  Context c2 = get_context();
-  Trail tr = NULL;
+  c1 = get_context();
+  c2 = get_context();
+  tr = NULL;
   if (!unify(source_term, c1, target_term, c2, &tr)) {
     free_context(c1);
     free_context(c2);
@@ -1720,8 +1790,6 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
      rider can show "x_3 <- y" (input variable surviving as result's y).
      When it fails (e.g. demod reshaped the result), fall back to
      clause-tagged rendering. */
-  int int_to_canon[INT_VARNUM_MAX];
-  int k;
   for (k = 0; k < INT_VARNUM_MAX; k++) int_to_canon[k] = -1;
 
   if (Para_subst_clause != NULL && replacement_term != NULL) {
@@ -1737,8 +1805,9 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
          chain.  (Demodulation interleaved with paramod still falls
          through to clause-tag rendering; that's accepted degradation.) */
       if (!ok && ARITY(actual_lit->atom) == 2) {
+        Term swapped;
         for (k = 0; k < INT_VARNUM_MAX; k++) int_to_canon[k] = -1;
-        Term swapped = get_rigid_term_dangerously(SYMNUM(actual_lit->atom), 2);
+        swapped = get_rigid_term_dangerously(SYMNUM(actual_lit->atom), 2);
         ARG(swapped, 0) = copy_term(ARG(actual_lit->atom, 1));
         ARG(swapped, 1) = copy_term(ARG(actual_lit->atom, 0));
         collect_var_map(swapped, expected, int_to_canon);
@@ -1749,9 +1818,9 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
   }
 
   /* Build rider via shared helper. */
-  Topform cls[2]  = { from_cl, into_cl };
-  Context ctxs[2] = { c1, c2 };
-  int     ids[2]  = { pj->from_id, pj->into_id };
+  cls[0]  = from_cl;  cls[1]  = into_cl;
+  ctxs[0] = c1;        ctxs[1] = c2;
+  ids[0]  = pj->from_id; ids[1] = pj->into_id;
   emit_subst_rider(sb, cls, ctxs, ids, 2, NULL, NULL, 0, int_to_canon);
 
   undo_subst(tr);
@@ -1773,12 +1842,28 @@ void sb_append_para_subst(String_buf sb, Parajust pj)
 static
 void sb_append_copy_flip_subst(String_buf sb, int parent_id, int lit_pos)
 {
+  Topform parent_cl;
+  Literals flip_lit;
+  Term expected_atoms[64];
+  int n_expected;
+  Literals lit;
+  int li;
+  int int_to_canon[INT_VARNUM_MAX];
+  int k;
+  Literals actual;
+  int idx;
+  int parent_vars[MAX_VARS];
+  int n_parent_vars;
+  static const char letters[] = "xyzuw";
+  BOOL any;
+  int vi;
+
   if (Para_subst_proof == NULL || Para_subst_clause == NULL)
     return;
-  Topform parent_cl = proof_id_to_clause(Para_subst_proof, parent_id);
+  parent_cl = proof_id_to_clause(Para_subst_proof, parent_id);
   if (parent_cl == NULL)
     return;
-  Literals flip_lit = ith_literal(parent_cl->literals, lit_pos);
+  flip_lit = ith_literal(parent_cl->literals, lit_pos);
   if (flip_lit == NULL || flip_lit->atom == NULL)
     return;
   if (ARITY(flip_lit->atom) != 2)
@@ -1786,10 +1871,7 @@ void sb_append_copy_flip_subst(String_buf sb, int parent_id, int lit_pos)
 
   /* Build expected atoms: parent's literals in order, with the one
      at lit_pos's args swapped.  No subst (copy doesn't apply one). */
-  Term expected_atoms[64];
-  int n_expected = 0;
-  Literals lit;
-  int li;
+  n_expected = 0;
   for (lit = parent_cl->literals, li = 1;
        lit != NULL && n_expected < 64;
        lit = lit->next, li++) {
@@ -1805,12 +1887,10 @@ void sb_append_copy_flip_subst(String_buf sb, int parent_id, int lit_pos)
   }
 
   /* Lockstep canonical map. */
-  int int_to_canon[INT_VARNUM_MAX];
-  int k;
   for (k = 0; k < INT_VARNUM_MAX; k++) int_to_canon[k] = -1;
 
-  Literals actual = Para_subst_clause->literals;
-  int idx = 0;
+  actual = Para_subst_clause->literals;
+  idx = 0;
   while (actual != NULL && idx < n_expected) {
     if (actual->atom != NULL)
       collect_var_map(actual->atom, expected_atoms[idx], int_to_canon);
@@ -1828,21 +1908,20 @@ void sb_append_copy_flip_subst(String_buf sb, int parent_id, int lit_pos)
      keyed on unshifted varnums.  Same Larry filter applies (drop
      entries where parent var i maps to canonical i, since same letter
      conveys nothing). */
-  int parent_vars[MAX_VARS];
-  int n_parent_vars = collect_clause_vars(parent_cl, parent_vars, MAX_VARS);
-  static const char letters[] = "xyzuw";
-  BOOL any = FALSE;
-  int vi;
+  n_parent_vars = collect_clause_vars(parent_cl, parent_vars, MAX_VARS);
+  any = FALSE;
   for (vi = 0; vi < n_parent_vars; vi++) {
     int local = parent_vars[vi];
+    int canon;
+    char lhs_buf[32];
+    char *lhs_b;
+    char rhs_buf[8];
     if (local < 0 || local >= INT_VARNUM_MAX) continue;
-    int canon = int_to_canon[local];
+    canon = int_to_canon[local];
     if (canon < 0) continue;          /* no mapping recorded */
     if (canon == local) continue;     /* Larry filter: same letter */
-    char lhs_buf[32];
     clause_var_name(local, parent_id, 0, lhs_buf, sizeof(lhs_buf));
-    char *lhs_b = bracketize_clause_tags(lhs_buf);
-    char rhs_buf[8];
+    lhs_b = bracketize_clause_tags(lhs_buf);
     if (canon >= 0 && canon < (int)sizeof(letters) - 1)
       snprintf(rhs_buf, sizeof(rhs_buf), "%c", letters[canon]);
     else
@@ -1864,25 +1943,42 @@ void sb_append_copy_flip_subst(String_buf sb, int parent_id, int lit_pos)
 static
 void sb_append_factor_subst(String_buf sb, Just g)
 {
+  Ilist p;
+  int parent_id;
+  int lit1;
+  int lit2;
+  Topform parent_cl;
+  Literals l1;
+  Literals l2;
+  Context c;
+  Trail tr;
+  int int_to_canon[INT_VARNUM_MAX];
+  int k;
+  Topform cls[1];
+  Context ctxs[1];
+  int     ids[1];
+
   if (Para_subst_proof == NULL || g == NULL || g->u.lst == NULL)
     return;
-  Ilist p = g->u.lst;
+  p = g->u.lst;
   if (p->next == NULL || p->next->next == NULL)
     return;
-  int parent_id = p->i;
-  int lit1 = p->next->i;
-  int lit2 = p->next->next->i;
+  parent_id = p->i;
+  lit1 = p->next->i;
+  lit2 = p->next->next->i;
 
-  Topform parent_cl = proof_id_to_clause(Para_subst_proof, parent_id);
+  parent_cl = proof_id_to_clause(Para_subst_proof, parent_id);
   if (parent_cl == NULL)
     return;
-  Literals l1 = ith_literal(parent_cl->literals, lit1);
-  Literals l2 = ith_literal(parent_cl->literals, lit2);
+  l1 = ith_literal(parent_cl->literals, lit1);
+  l2 = ith_literal(parent_cl->literals, lit2);
   if (l1 == NULL || l2 == NULL || l1->atom == NULL || l2->atom == NULL)
     return;
+  if (term_has_oob_var(l1->atom) || term_has_oob_var(l2->atom))
+    return;
 
-  Context c = get_context();
-  Trail tr = NULL;
+  c = get_context();
+  tr = NULL;
   if (!unify(l1->atom, c, l2->atom, c, &tr)) {
     free_context(c);
     return;
@@ -1891,8 +1987,6 @@ void sb_append_factor_subst(String_buf sb, Just g)
   /* Canonical-rename map: walk surviving parent literals (all except
      lit2, in parent order) under context c against the actual result
      clause's literals.  Same lockstep pattern as resolution. */
-  int int_to_canon[INT_VARNUM_MAX];
-  int k;
   for (k = 0; k < INT_VARNUM_MAX; k++) int_to_canon[k] = -1;
 
   if (Para_subst_clause != NULL) {
@@ -1900,6 +1994,8 @@ void sb_append_factor_subst(String_buf sb, Just g)
     int n_expected = 0;
     Literals lit;
     int li;
+    Literals actual;
+    int idx;
     for (lit = parent_cl->literals, li = 1;
          lit != NULL && n_expected < 64;
          lit = lit->next, li++) {
@@ -1907,8 +2003,8 @@ void sb_append_factor_subst(String_buf sb, Just g)
       if (lit->atom)
         expected_atoms[n_expected++] = apply(lit->atom, c);
     }
-    Literals actual = Para_subst_clause->literals;
-    int idx = 0;
+    actual = Para_subst_clause->literals;
+    idx = 0;
     while (actual != NULL && idx < n_expected) {
       if (actual->atom != NULL)
         collect_var_map(actual->atom, expected_atoms[idx], int_to_canon);
@@ -1918,9 +2014,9 @@ void sb_append_factor_subst(String_buf sb, Just g)
     for (k = 0; k < n_expected; k++) zap_term(expected_atoms[k]);
   }
 
-  Topform cls[1]  = { parent_cl };
-  Context ctxs[1] = { c };
-  int     ids[1]  = { parent_id };
+  cls[0]  = parent_cl;
+  ctxs[0] = c;
+  ids[0]  = parent_id;
   emit_subst_rider(sb, cls, ctxs, ids, 1, NULL, NULL, 0, int_to_canon);
 
   if (tr) undo_subst(tr);
@@ -1938,50 +2034,68 @@ void sb_append_factor_subst(String_buf sb, Just g)
 static
 void sb_append_res_subst(String_buf sb, Just g)
 {
-  if (Para_subst_proof == NULL || g == NULL || g->u.lst == NULL)
-    return;
-
-  Ilist p = g->u.lst;
-  int nuc_id = p->i;
-  Topform nuc_cl = proof_id_to_clause(Para_subst_proof, nuc_id);
-  if (nuc_cl == NULL)
-    return;
-
-  Context c_nuc = get_context();
-  Trail tr = NULL;
-
+  Ilist p;
+  int nuc_id;
+  Topform nuc_cl;
+  Context c_nuc;
+  Trail tr;
   Topform sat_cls[MAX_RIDER_INPUTS - 1];
   Context sat_ctxs[MAX_RIDER_INPUTS - 1];
   int     sat_ids[MAX_RIDER_INPUTS - 1];
   int     sat_lits_consumed[MAX_RIDER_INPUTS - 1];
   int     nuc_lits_consumed[64];
-  int     n_nuc_consumed = 0;
-  int n_sats = 0;
-  BOOL bail = FALSE;
-
+  int     n_nuc_consumed;
+  int n_sats;
+  BOOL bail;
   Ilist q;
+  int i;
+
+  if (Para_subst_proof == NULL || g == NULL || g->u.lst == NULL)
+    return;
+
+  p = g->u.lst;
+  nuc_id = p->i;
+  nuc_cl = proof_id_to_clause(Para_subst_proof, nuc_id);
+  if (nuc_cl == NULL)
+    return;
+
+  c_nuc = get_context();
+  tr = NULL;
+
+  n_nuc_consumed = 0;
+  n_sats = 0;
+  bail = FALSE;
+
   for (q = p->next;
        q != NULL && q->next != NULL && q->next->next != NULL;
        q = q->next->next->next) {
     int nuc_lit = q->i;
     int sat_id  = q->next->i;
     int sat_lit = q->next->next->i;
+    Topform sat_cl;
+    Literals nuc_l;
+    Literals sat_l;
+    Context c_sat;
     if (sat_id == 0)
       continue;  /* xx-style step; skip */
     if (sat_lit < 0)
       sat_lit = -sat_lit;  /* drop flip flag; unify may fail and we'll bail */
     if (n_sats >= MAX_RIDER_INPUTS - 1) break;
 
-    Topform sat_cl = proof_id_to_clause(Para_subst_proof, sat_id);
+    sat_cl = proof_id_to_clause(Para_subst_proof, sat_id);
     if (sat_cl == NULL)
       continue;
-    Literals nuc_l = ith_literal(nuc_cl->literals, nuc_lit);
-    Literals sat_l = ith_literal(sat_cl->literals, sat_lit);
+    nuc_l = ith_literal(nuc_cl->literals, nuc_lit);
+    sat_l = ith_literal(sat_cl->literals, sat_lit);
     if (nuc_l == NULL || sat_l == NULL ||
         nuc_l->atom == NULL || sat_l->atom == NULL)
       continue;
+    if (term_has_oob_var(nuc_l->atom) || term_has_oob_var(sat_l->atom)) {
+      bail = TRUE;
+      break;
+    }
 
-    Context c_sat = get_context();
+    c_sat = get_context();
     if (!unify(nuc_l->atom, c_nuc, sat_l->atom, c_sat, &tr)) {
       free_context(c_sat);
       bail = TRUE;
@@ -2001,10 +2115,11 @@ void sb_append_res_subst(String_buf sb, Just g)
     Topform cls[MAX_RIDER_INPUTS];
     Context ctxs[MAX_RIDER_INPUTS];
     int     ids[MAX_RIDER_INPUTS];
+    int int_to_canon[INT_VARNUM_MAX];
+    int k;
     cls[0]  = nuc_cl;
     ctxs[0] = c_nuc;
     ids[0]  = nuc_id;
-    int i;
     for (i = 0; i < n_sats; i++) {
       cls[1 + i]  = sat_cls[i];
       ctxs[1 + i] = sat_ctxs[i];
@@ -2019,8 +2134,6 @@ void sb_append_res_subst(String_buf sb, Just g)
        align, emit_subst_rider can render surviving variables with the
        result's bare letter (x, y, z, ...) instead of the clause-tagged
        form. */
-    int int_to_canon[INT_VARNUM_MAX];
-    int k;
     for (k = 0; k < INT_VARNUM_MAX; k++) int_to_canon[k] = -1;
 
     if (Para_subst_clause != NULL) {
@@ -2028,6 +2141,8 @@ void sb_append_res_subst(String_buf sb, Just g)
       int n_expected = 0;
       Literals lit;
       int li;
+      Literals actual;
+      int idx;
 
       /* Surviving nucleus literals. */
       for (lit = nuc_cl->literals, li = 1;
@@ -2053,8 +2168,8 @@ void sb_append_res_subst(String_buf sb, Just g)
       }
 
       /* Walk expected list lockstep with actual result literals. */
-      Literals actual = Para_subst_clause->literals;
-      int idx = 0;
+      actual = Para_subst_clause->literals;
+      idx = 0;
       while (actual != NULL && idx < n_expected) {
         if (actual->atom != NULL)
           collect_var_map(actual->atom, expected_atoms[idx], int_to_canon);
@@ -2071,7 +2186,6 @@ void sb_append_res_subst(String_buf sb, Just g)
 
   if (tr) undo_subst(tr);
   free_context(c_nuc);
-  int i;
   for (i = 0; i < n_sats; i++) free_context(sat_ctxs[i]);
 }  /* sb_append_res_subst */
 
@@ -2088,9 +2202,9 @@ void sb_append_res_subst(String_buf sb, Just g)
 static
 BOOL term_has_oob_var(Term t)
 {
+  int i;
   if (t == NULL) return FALSE;
   if (VARIABLE(t)) return VARNUM(t) >= MAX_VARS;
-  int i;
   for (i = 0; i < ARITY(t); i++) {
     if (term_has_oob_var(ARG(t, i))) return TRUE;
   }
@@ -2116,6 +2230,7 @@ BOOL term_has_oob_var(Term t)
 static
 BOOL collect_vars_assign(Term t, int *map, int *next_slot)
 {
+  int i;
   if (t == NULL) return TRUE;
   if (VARIABLE(t)) {
     int vn = VARNUM(t);
@@ -2126,7 +2241,6 @@ BOOL collect_vars_assign(Term t, int *map, int *next_slot)
     }
     return TRUE;
   }
-  int i;
   for (i = 0; i < ARITY(t); i++) {
     if (!collect_vars_assign(ARG(t, i), map, next_slot)) return FALSE;
   }
@@ -2136,8 +2250,8 @@ BOOL collect_vars_assign(Term t, int *map, int *next_slot)
 static
 void rewrite_vars_in_term(Term t, const int *map)
 {
-  if (t == NULL || VARIABLE(t)) return;
   int i;
+  if (t == NULL || VARIABLE(t)) return;
   for (i = 0; i < ARITY(t); i++) {
     Term child = ARG(t, i);
     if (child == NULL) continue;
@@ -2158,8 +2272,8 @@ BOOL renumber_atoms_canonical(Term *atoms, int n_atoms)
 {
   int map[MAX_REMAP];
   int i;
-  for (i = 0; i < MAX_REMAP; i++) map[i] = -1;
   int next_slot = 0;
+  for (i = 0; i < MAX_REMAP; i++) map[i] = -1;
   for (i = 0; i < n_atoms; i++) {
     if (!collect_vars_assign(atoms[i], map, &next_slot))
       return FALSE;  /* var out of map range or too many distinct vars */
@@ -2177,8 +2291,8 @@ BOOL renumber_atoms_canonical(Term *atoms, int n_atoms)
 static
 Term find_nth_blr_nonvar(Term t, int target, int *counter)
 {
-  if (t == NULL || VARIABLE(t)) return NULL;
   int i;
+  if (t == NULL || VARIABLE(t)) return NULL;
   for (i = 0; i < ARITY(t); i++) {
     Term r = find_nth_blr_nonvar(ARG(t, i), target, counter);
     if (r) return r;
@@ -2199,8 +2313,9 @@ Term find_nth_in_atoms(Term *atoms, int n_atoms, int target,
   int i;
   *out_lit_idx = -1;
   for (i = 0; i < n_atoms; i++) {
+    Term r;
     if (atoms[i] == NULL) continue;
-    Term r = find_nth_blr_nonvar(atoms[i], target, counter);
+    r = find_nth_blr_nonvar(atoms[i], target, counter);
     if (r) {
       *out_lit_idx = i;
       return r;
@@ -2226,8 +2341,8 @@ static
 Term replace_nth_blr_nonvar(Term t, int target, int *counter,
                             Term replacement)
 {
-  if (t == NULL || VARIABLE(t)) return t;
   int i;
+  if (t == NULL || VARIABLE(t)) return t;
   for (i = 0; i < ARITY(t); i++) {
     Term old_child = ARG(t, i);
     Term new_child = replace_nth_blr_nonvar(old_child, target, counter,
@@ -2249,11 +2364,13 @@ void replace_nth_in_atoms(Term *atoms, int n_atoms, int target,
 {
   int i;
   for (i = 0; i < n_atoms; i++) {
+    Term old;
+    Term updated;
     if (atoms[i] == NULL) continue;
     if (*counter >= target) return;
-    Term old = atoms[i];
-    Term updated = replace_nth_blr_nonvar(atoms[i], target, counter,
-                                          replacement);
+    old = atoms[i];
+    updated = replace_nth_blr_nonvar(atoms[i], target, counter,
+                                     replacement);
     if (updated != old) {
       /* target hit at the atom root; replacement now occupies the slot */
       atoms[i] = updated;
@@ -2309,13 +2426,15 @@ int compute_post_primary_atoms(Just primary, Term *out_atoms,
                                int *out_n_aux,
                                struct primary_state *ps)
 {
+  Just_type rule;
+
   *out_n_aux = 0;
   ps->n_aux_ctxs = 0;
   ps->trail = NULL;
 
   if (primary == NULL || Para_subst_proof == NULL)
     return 0;
-  Just_type rule = primary->type;
+  rule = primary->type;
 
   if (rule == COPY_JUST || rule == BACK_DEMOD_JUST ||
       rule == BACK_UNIT_DEL_JUST || rule == DENY_JUST ||
@@ -2325,9 +2444,9 @@ int compute_post_primary_atoms(Just primary, Term *out_atoms,
        of the parent clause's literal atoms, in order. */
     int parent_id = primary->u.id;
     Topform parent = proof_id_to_clause(Para_subst_proof, parent_id);
-    if (parent == NULL) return 0;
     int n = 0;
     Literals lit;
+    if (parent == NULL) return 0;
     for (lit = parent->literals;
          lit != NULL && n < max_atoms;
          lit = lit->next) {
@@ -2341,34 +2460,54 @@ int compute_post_primary_atoms(Just primary, Term *out_atoms,
     /* Paramod primary: build_expected_atom for the targeted literal,
        apply unifier through c2 for any other surviving literals.  The
        from_clause's other literals don't appear in the result. */
-    Parajust pj = primary->u.para;
+    Parajust pj;
+    Topform from_cl;
+    Topform into_cl;
+    Literals from_lit;
+    Literals into_lit;
+    Ilist from_pos_in_lit;
+    Ilist into_pos_in_lit;
+    Term source_term;
+    Term target_term;
+    int side;
+    Term replacement_term;
+    Context c1;
+    Context c2;
+    Trail tr;
+    int n;
+    Literals lit;
+    int li;
+
+    pj = primary->u.para;
     if (pj == NULL || pj->from_pos == NULL || pj->into_pos == NULL)
       return 0;
-    Topform from_cl = proof_id_to_clause(Para_subst_proof, pj->from_id);
-    Topform into_cl = proof_id_to_clause(Para_subst_proof, pj->into_id);
+    from_cl = proof_id_to_clause(Para_subst_proof, pj->from_id);
+    into_cl = proof_id_to_clause(Para_subst_proof, pj->into_id);
     if (from_cl == NULL || into_cl == NULL) return 0;
-    Literals from_lit = ith_literal(from_cl->literals, pj->from_pos->i);
-    Literals into_lit = ith_literal(into_cl->literals, pj->into_pos->i);
+    from_lit = ith_literal(from_cl->literals, pj->from_pos->i);
+    into_lit = ith_literal(into_cl->literals, pj->into_pos->i);
     if (from_lit == NULL || into_lit == NULL) return 0;
     if (from_lit->atom == NULL || into_lit->atom == NULL) return 0;
 
-    Ilist from_pos_in_lit = pj->from_pos->next;
-    Ilist into_pos_in_lit = pj->into_pos->next;
-    Term source_term = term_at_pos(from_lit->atom, from_pos_in_lit);
-    Term target_term = term_at_pos(into_lit->atom, into_pos_in_lit);
+    from_pos_in_lit = pj->from_pos->next;
+    into_pos_in_lit = pj->into_pos->next;
+    source_term = term_at_pos(from_lit->atom, from_pos_in_lit);
+    target_term = term_at_pos(into_lit->atom, into_pos_in_lit);
     if (source_term == NULL || target_term == NULL) return 0;
+    if (term_has_oob_var(source_term) || term_has_oob_var(target_term))
+      return 0;
 
     if (ARITY(from_lit->atom) != 2) return 0;
     if (from_pos_in_lit == NULL) return 0;
-    int side = from_pos_in_lit->i;
-    Term replacement_term = NULL;
+    side = from_pos_in_lit->i;
+    replacement_term = NULL;
     if (side == 1)      replacement_term = ARG(from_lit->atom, 1);
     else if (side == 2) replacement_term = ARG(from_lit->atom, 0);
     if (replacement_term == NULL) return 0;
 
-    Context c1 = get_context();
-    Context c2 = get_context();
-    Trail tr = NULL;
+    c1 = get_context();
+    c2 = get_context();
+    tr = NULL;
     if (!unify(source_term, c1, target_term, c2, &tr)) {
       free_context(c1);
       free_context(c2);
@@ -2378,9 +2517,8 @@ int compute_post_primary_atoms(Just primary, Term *out_atoms,
     /* Walk INTO clause's literals, building the post-paramod atoms.
        The targeted literal gets the substitution-and-replace; others
        just get the unifier applied. */
-    int n = 0;
-    Literals lit;
-    int li = 1;
+    n = 0;
+    li = 1;
     for (lit = into_cl->literals;
          lit != NULL && n < max_atoms;
          lit = lit->next, li++) {
@@ -2426,6 +2564,7 @@ static
 BOOL match_demod_pattern(Term pattern, Term target,
                          Term *bindings, int n_bindings)
 {
+  int i;
   if (VARIABLE(pattern)) {
     int v = VARNUM(pattern);
     if (v < 0 || v >= n_bindings) return FALSE;
@@ -2437,7 +2576,6 @@ BOOL match_demod_pattern(Term pattern, Term target,
   if (VARIABLE(target)) return FALSE;
   if (SYMNUM(pattern) != SYMNUM(target)) return FALSE;
   if (ARITY(pattern) != ARITY(target)) return FALSE;
-  int i;
   for (i = 0; i < ARITY(pattern); i++)
     if (!match_demod_pattern(ARG(pattern, i), ARG(target, i),
                              bindings, n_bindings)) return FALSE;
@@ -2456,21 +2594,29 @@ void sb_append_demod_step_subst(String_buf sb,
                                 Term matched_subterm,
                                 int *aux_mults, int *aux_ids, int n_aux)
 {
+  Term atom;
+  Term lhs;
+  Term rhs;
+  Term bindings[MAX_VARS];
+  int i;
+  int demod_vars[MAX_VARS];
+  int n_demod_vars;
+  int electron_idx[MAX_PRIMARY_AUX];
+  BOOL any;
+
   if (demodulator == NULL || matched_subterm == NULL)
     return;
   if (demodulator->literals == NULL || demodulator->literals->atom == NULL)
     return;
-  Term atom = demodulator->literals->atom;
+  atom = demodulator->literals->atom;
   if (ARITY(atom) != 2) return;  /* not an equation */
-  Term lhs = ARG(atom, 0);
-  Term rhs = ARG(atom, 1);
+  lhs = ARG(atom, 0);
+  rhs = ARG(atom, 1);
 
   /* Try matching LHS first, then RHS (chain doesn't tell us direction
      reliably).  Use simple structural match so the matched subterm's
      variables (with primary's multiplier shifts) stay intact and can
      be tagged via aux_mults. */
-  Term bindings[MAX_VARS];
-  int i;
   for (i = 0; i < MAX_VARS; i++) bindings[i] = NULL;
 
   if (!match_demod_pattern(lhs, matched_subterm, bindings, MAX_VARS)) {
@@ -2484,12 +2630,10 @@ void sb_append_demod_step_subst(String_buf sb,
      via context multipliers).  Iterate the demodulator's distinct
      variables, render each binding via the canonical rendering helper
      using only aux_mults/aux_ids (no demod context to combine). */
-  int demod_vars[MAX_VARS];
-  int n_demod_vars = collect_clause_vars(demodulator, demod_vars, MAX_VARS);
+  n_demod_vars = collect_clause_vars(demodulator, demod_vars, MAX_VARS);
   if (n_demod_vars == 0) return;  /* ground demod, empty rider */
 
   /* Compute electron index for aux entries. */
-  int electron_idx[MAX_PRIMARY_AUX];
   for (i = 0; i < n_aux; i++) {
     int dupes = 0, idx = 1;
     int j;
@@ -2502,25 +2646,31 @@ void sb_append_demod_step_subst(String_buf sb,
     electron_idx[i] = (dupes > 1 ? idx : 0);
   }
 
-  BOOL any = FALSE;
+  any = FALSE;
   for (i = 0; i < n_demod_vars; i++) {
     int local = demod_vars[i];
+    Term rhs_term;
+    String_buf rhs_sb;
+    BOOL wrap;
+    char *rhs_str;
+    char lhs_buf[32];
+    char *lhs_b;
+    char *rhs_b;
     if (local < 0 || local >= MAX_VARS) continue;
     if (bindings[local] == NULL) continue;  /* not bound */
 
     /* Render the bound term using aux_mults/aux_ids for tagging. */
-    Term rhs_term = copy_term_with_canonical(bindings[local],
-                                             aux_mults, aux_ids,
-                                             electron_idx, n_aux, NULL);
-    String_buf rhs_sb = get_string_buf();
-    BOOL wrap = (ARITY(rhs_term) >= 2);
+    rhs_term = copy_term_with_canonical(bindings[local],
+                                        aux_mults, aux_ids,
+                                        electron_idx, n_aux, NULL);
+    rhs_sb = get_string_buf();
+    wrap = (ARITY(rhs_term) >= 2);
     if (wrap) sb_append(rhs_sb, "(");
     sb_write_term(rhs_sb, rhs_term);
     if (wrap) sb_append(rhs_sb, ")");
-    char *rhs_str = sb_to_malloc_string(rhs_sb);
+    rhs_str = sb_to_malloc_string(rhs_sb);
     zap_string_buf(rhs_sb);
 
-    char lhs_buf[32];
     clause_var_name(local, demodulator->id, 0, lhs_buf, sizeof(lhs_buf));
 
     /* Skip identity entries (only happens if ground RHS happens to
@@ -2531,8 +2681,8 @@ void sb_append_demod_step_subst(String_buf sb,
 
     if (!any) { sb_append(sb, " {"); any = TRUE; }
     else      { sb_append(sb, ", "); }
-    char *lhs_b = bracketize_clause_tags(lhs_buf);
-    char *rhs_b = bracketize_clause_tags(rhs_str);
+    lhs_b = bracketize_clause_tags(lhs_buf);
+    rhs_b = bracketize_clause_tags(rhs_str);
     sb_append(sb, lhs_b);
     sb_append(sb, " <- ");
     sb_append(sb, rhs_b);
@@ -2616,6 +2766,8 @@ void sb_emit_demod_chain(String_buf sb, I3list chain,
             Trail tr = NULL;
             Term pattern = lhs;
             Term other = rhs;
+            Term applied_other;
+            int ctr2;
             if (!unify(pattern, c1, matched, c2, &tr)) {
               pattern = rhs; other = lhs;
               if (!unify(pattern, c1, matched, c2, &tr)) {
@@ -2625,8 +2777,8 @@ void sb_emit_demod_chain(String_buf sb, I3list chain,
                 goto next_step;
               }
             }
-            Term applied_other = apply(other, c1);
-            int ctr2 = 0;
+            applied_other = apply(other, c1);
+            ctr2 = 0;
             replace_nth_in_atoms(atoms, n_atoms, p->j, &ctr2, applied_other);
             /* Renumber atoms back to canonical 0..N-1 vars so the next
                step's matched subterm stays within MAX_VARS range; apply
@@ -2685,6 +2837,12 @@ void sb_write_just(String_buf sb_out, Just just, I3list map)
       sb_append_res_subst(prefix_sb, g);
     }
     else if (rule == DEMOD_JUST) {
+      Term atoms[MAX_DEMOD_ATOMS];
+      int  aux_mults[MAX_PRIMARY_AUX];
+      int  aux_ids[MAX_PRIMARY_AUX];
+      int  n_aux = 0;
+      int n_atoms = 0;
+      struct primary_state ps = { {0}, 0, NULL };
       sb_append(sb, jstring(g));
       sb_append(sb, "([");
       /* When print_substitutions is on, replay the chain to emit each
@@ -2694,12 +2852,6 @@ void sb_write_just(String_buf sb_out, Just just, I3list map)
          all literals' atoms with a single shared sequence counter.
          For unsupported primary types, compute_post_primary_atoms
          returns 0 and rider emission is skipped. */
-      Term atoms[MAX_DEMOD_ATOMS];
-      int  aux_mults[MAX_PRIMARY_AUX];
-      int  aux_ids[MAX_PRIMARY_AUX];
-      int  n_aux = 0;
-      int n_atoms = 0;
-      struct primary_state ps = { {0}, 0, NULL };
       if (Para_subst_proof != NULL)
         n_atoms = compute_post_primary_atoms(just, atoms, MAX_DEMOD_ATOMS,
                                              aux_mults, aux_ids, &n_aux,
@@ -2757,7 +2909,8 @@ void sb_write_just(String_buf sb_out, Just just, I3list map)
       sb_append_id(sb, p->next->i, map);
       sb_append(sb, ")");
     }
-    else if (rule == BACK_DEMOD_JUST ||
+    else if (rule == AC_EXT_JUST ||
+	     rule == BACK_DEMOD_JUST ||
 	     rule == BACK_UNIT_DEL_JUST ||
 	     rule == NEW_SYMBOL_JUST ||
 	     rule == COPY_JUST ||
@@ -2794,6 +2947,8 @@ void sb_write_just(String_buf sb_out, Just just, I3list map)
     else if (rule == PARA_JUST || rule == PARA_FX_JUST ||
 	     rule == PARA_IX_JUST || rule == PARA_FX_IX_JUST) {
       Parajust p = g->u.para;
+      int rider_size_before;
+      BOOL had_rider;
 
       sb_append(sb, jstring(g));
       sb_append(sb, "(");
@@ -2811,9 +2966,9 @@ void sb_write_just(String_buf sb_out, Just just, I3list map)
          into_id (a clause paramodulating into itself), the rider
          already disambiguates via x[N]#2 notation; reflect that in
          the direction by writing "[N] into [N]#2". */
-      int rider_size_before = sb_size(prefix_sb);
+      rider_size_before = sb_size(prefix_sb);
       sb_append_para_subst(prefix_sb, p);
-      BOOL had_rider = (sb_size(prefix_sb) > rider_size_before);
+      had_rider = (sb_size(prefix_sb) > rider_size_before);
       if (Para_subst_proof != NULL) {
         /* Separator: " : " only if a rider was emitted; else leading
            space alone so the direction reads cleanly. */
@@ -3007,6 +3162,7 @@ void zap_just(Just just)
     case PROPOSITIONAL_JUST:
     case NEW_SYMBOL_JUST:
     case BACK_DEMOD_JUST:
+    case AC_EXT_JUST:
     case BACK_UNIT_DEL_JUST:
     case FLIP_JUST:
     case XX_JUST:
@@ -3095,7 +3251,8 @@ Ilist get_parents(Just just, BOOL all)
       int parent_id = g->u.lst->next->i;
       parents = ilist_prepend(parents, parent_id);
     }
-    else if (rule == BACK_DEMOD_JUST ||
+    else if (rule == AC_EXT_JUST ||
+	     rule == BACK_DEMOD_JUST ||
 	     rule == COPY_JUST ||
 	     rule == DENY_JUST ||
 	     rule == CLAUSIFY_JUST ||
@@ -3221,6 +3378,10 @@ If any of the ancestors are compressed, they are uncompressed
 /* PUBLIC */
 Plist get_clause_ancestors(Topform c)
 {
+  Plist anc;
+  Ilist parents;
+  Ilist p;
+
   if (c == NULL) return NULL;
   if (c->id != 0)
     return get_clanc(c->id, NULL);
@@ -3233,9 +3394,8 @@ Plist get_clause_ancestors(Topform c)
      anc_subsume (every existing subsumer's proof_length >= 1, so
      cost_c <= cost_d evaluates FALSE and forward subsumption is
      blocked unconditionally under set(ancestor_subsume). */
-  Plist anc = insert_clause_into_plist(NULL, c, TRUE);
-  Ilist parents = get_parents(c->justification, TRUE);
-  Ilist p;
+  anc = insert_clause_into_plist(NULL, c, TRUE);
+  parents = get_parents(c->justification, TRUE);
   for (p = parents; p; p = p->next) {
     Plist sub, q;
     if (p->i == 0) continue;
@@ -3435,7 +3595,8 @@ void map_just(Just just, I2list map)
       Ilist p = j->u.lst;
       p->next->i = map_id(map, p->next->i);
     }
-    else if (rule == BACK_DEMOD_JUST ||
+    else if (rule == AC_EXT_JUST ||
+	     rule == BACK_DEMOD_JUST ||
 	     rule == COPY_JUST ||
 	     rule == DENY_JUST ||
 	     rule == CLAUSIFY_JUST ||
@@ -3647,6 +3808,7 @@ Just term_to_just(Term lst)
     case PROPOSITIONAL_JUST:
     case NEW_SYMBOL_JUST:
     case BACK_DEMOD_JUST:
+    case AC_EXT_JUST:
     case BACK_UNIT_DEL_JUST:
       {
 	int id;
@@ -3991,7 +4153,8 @@ void sb_tagged_write_just(String_buf sb, Just just, I3list map)
       sb_append_id(sb, p->next->i, map);
       sb_append(sb, ")");
     }
-    else if (rule == BACK_DEMOD_JUST ||
+    else if (rule == AC_EXT_JUST ||
+	     rule == BACK_DEMOD_JUST ||
 	     rule == BACK_UNIT_DEL_JUST ||
 	     rule == NEW_SYMBOL_JUST ||
 	     rule == COPY_JUST ||
@@ -4086,6 +4249,7 @@ const char *tptp_rule_name(Just_type type)
   case PARA_IX_JUST:
   case PARA_FX_IX_JUST:    return "paramod";
   case BACK_DEMOD_JUST:    return "back_demod";
+  case AC_EXT_JUST:        return "ac_extension";
   case BACK_UNIT_DEL_JUST: return "back_unit_del";
   case NEW_SYMBOL_JUST:    return "new_symbol";
   case EXPAND_DEF_JUST:    return "expand_def";

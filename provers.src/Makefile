@@ -71,14 +71,36 @@ else
   endif
 endif
 MMD_TEST := $(shell rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d; echo 'int x;' | $(CC) $(PLATFORM_FLAGS) -MMD -MP -x c -c - -o /tmp/_mmd_test.o 2>/dev/null && echo "-MMD -MP"; rm -f /tmp/_mmd_test.o /tmp/_mmd_test.d)
-# Test for open_memstream (POSIX.1-2008; missing on macOS < 10.13)
+# Test for open_memstream (POSIX.1-2008; missing on macOS < 10.13).
 # Omit PLATFORM_FLAGS: universal-binary -arch flags cause link failure
 # even when open_memstream is available natively.
-HAS_OMS := $(shell echo 'int main(){char*b;long l;void*open_memstream();open_memstream(&b,&l);return 0;}' | $(CC) -x c - -o /tmp/_oms 2>/dev/null && echo yes; rm -f /tmp/_oms)
+# Declare the real (non-empty-parens) prototype directly rather than
+# #include <stdio.h>: a bare "open_memstream()" forward declaration
+# (empty parens) compiled fine as "unspecified arguments" on older
+# compilers, but newer GCC (C23-leaning defaults, e.g. GCC 15) treats
+# empty parens as "takes no arguments" -- the real 2-argument call then
+# fails to compile, this test spuriously reports "not available", and
+# the entire -cores forking mechanism silently compiles out with no
+# runtime error at all (root cause of a real -cores-does-nothing report).
+# Avoiding #include/#define here also sidesteps "#" being a Makefile
+# comment character that needs escaping inside a $(shell ...) call.
+HAS_OMS := $(shell echo 'void *open_memstream(char **, unsigned long *); int main(){char *b; unsigned long l; return open_memstream(&b,&l)==0;}' | $(CC) -x c - -o /tmp/_oms 2>/dev/null && echo yes; rm -f /tmp/_oms)
 ifneq ($(HAS_OMS),yes)
   NO_OMS = -DNO_OPEN_MEMSTREAM
 endif
-CFLAGS = $(OPTFLAGS) -Wall $(MMD_TEST) $(NO_OMS) $(PLATFORM_FLAGS) $(XFLAGS)
+# Test for libproc.h/proc_pidinfo (added in Mac OS X 10.5 Leopard; not
+# present on older Darwin/PowerPC toolchains -- __APPLE__ alone is not
+# a safe proxy for "this specific machine/SDK has it", found live
+# 2026-08-12 when a PowerBook G4 build failed outright on the #include
+# added the same week for -cores's per-child RSS check). \# needs
+# escaping here (unlike HAS_OMS above) because this test genuinely
+# needs a real #include, not just a hand-written prototype -- an
+# unescaped # would be read as a Makefile comment starting mid-line.
+HAS_LIBPROC := $(shell printf '\#include <libproc.h>\nint main(){struct proc_taskinfo info; return proc_pidinfo(1, PROC_PIDTASKINFO, 0, &info, sizeof(info));}\n' | $(CC) -x c - -o /tmp/_libproc 2>/dev/null && echo yes; rm -f /tmp/_libproc)
+ifneq ($(HAS_LIBPROC),yes)
+  NO_LIBPROC = -DNO_LIBPROC
+endif
+CFLAGS = $(OPTFLAGS) -Wall $(MMD_TEST) $(NO_OMS) $(NO_LIBPROC) $(PLATFORM_FLAGS) $(XFLAGS)
 ifdef STATIC
   ifneq ($(UNAME_S),Darwin)
     LDFLAGS = -static
@@ -116,8 +138,13 @@ PROGRAMS = prover9 fof-prover9 autosketches4 newauto newsax\
 
 ##############################################################################
 
-all: libs $(PROGRAMS) install
+all: $(PROGRAMS) install
 
+# libs is kept as a named manual entry point (`make libs`) but deliberately
+# NOT listed as a sibling of $(PROGRAMS) in `all` above -- under -j it raced
+# ladr's recursive submake against $(PROGRAMS)' own, separate resolution of
+# the raw ../ladr/libladr.a file prerequisite (two paths building the same
+# output). The file-level rule below serializes both through one path.
 libs: ladr libmace4
 
 ladr libladr:
@@ -126,7 +153,17 @@ ladr libladr:
 libmace libmace4:
 	cd ../mace4.src && $(MAKE) libmace4
 
-install:
+# Any target below listing ../ladr/libladr.a as a prerequisite (all of
+# $(PROGRAMS)) correctly triggers ladr's recipe first via this rule --
+# without it, -j could run ladr and a program's link step as unrelated
+# siblings, letting the link start before libladr.a is ready.
+../ladr/libladr.a: ladr
+
+# Same reasoning for mprover/iterate4 below, which aren't in $(PROGRAMS)
+# (not built by `all`) but share the identical shape.
+../mace4.src/libmace4.a: libmace4
+
+install: $(PROGRAMS)
 	@for f in $(PROGRAMS); do \
 	  codesign -s - -f "$$f" 2>/dev/null || true; \
 	  /bin/cp -p "$$f" ../bin; \

@@ -17,6 +17,9 @@
 */
 
 #include "literals.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
 
 /* Private definitions and types */
 
@@ -218,8 +221,16 @@ Literals term_to_literals(Term t, Literals lits)
 {
   /* Use an explicit stack to flatten the OR-tree left-to-right.
      We push terms onto the stack and pop them, processing leaves
-     by prepending to lits. Since we prepend, we process right-to-left. */
-  Term stack[1000];
+     by prepending to lits. Since we prepend, we process right-to-left.
+     Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t;
 
@@ -231,7 +242,25 @@ Literals term_to_literals(Term t, Literals lits)
     else if (is_term(s, or_sym(), 2)) {
       /* Push left first, then right; right will be popped first,
          processed (prepended) first, preserving order. */
+      if (top >= cap) {
+        int new_cap = cap * 2;
+        Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+        memcpy(new_stack, stack, cap * sizeof(Term));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       stack[top++] = ARG(s,0);
+      if (top >= cap) {
+        int new_cap = cap * 2;
+        Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+        memcpy(new_stack, stack, cap * sizeof(Term));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       stack[top++] = ARG(s,1);
     }
     else {
@@ -245,6 +274,8 @@ Literals term_to_literals(Term t, Literals lits)
       lits = l;
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return lits;
 }  /* term_to_literals */
 
@@ -286,21 +317,33 @@ Term literals_to_term(Literals l)
      First, walk to the last literal and build from right to left. */
   int n = 0;
   Literals p;
+  Literals sbo_buf[64];
+  Literals *lits_array;
+  int i = 0;
+  Term result;
   for (p = l; p; p = p->next) n++;
 
-  /* Use a stack of literal-terms, then fold right. */
-  Literals lits_array[1000];
-  int i = 0;
+  /* Use a stack of literal-terms, then fold right.
+     Small-buffer optimization: a small on-stack buffer handles the
+     common case (n already known here) at zero allocation cost;
+     only clauses with more than 64 literals spill to the heap. A
+     fixed-size array here silently corrupts memory for clauses with
+     more than 1000 literals; an unconditional heap allocation on
+     every call is measurably slower at this function's call
+     volume. */
+  lits_array = (n <= 64) ? sbo_buf : safe_malloc(n * sizeof(Literals));
   for (p = l; p; p = p->next)
     lits_array[i++] = p;
 
-  Term result = literal_to_term(lits_array[n-1]);
+  result = literal_to_term(lits_array[n-1]);
   for (i = n-2; i >= 0; i--) {
     Term d = get_rigid_term(or_sym(), 2);
     ARG(d,0) = literal_to_term(lits_array[i]);
     ARG(d,1) = result;
     result = d;
   }
+  if (lits_array != sbo_buf)
+    safe_free(lits_array);
   return result;
 }  /* literals_to_term */
 
@@ -323,16 +366,26 @@ Term lits_to_term(Literals l)
   /* Build right-associative OR tree iteratively, right to left. */
   int n = 0;
   Literals p;
+  Literals sbo_buf[64];
+  Literals *lits_array;
+  int i = 0;
+  Literals last;
+  Term result;
   for (p = l; p; p = p->next) n++;
 
-  Literals lits_array[1000];
-  int i = 0;
+  /* Small-buffer optimization: a small on-stack buffer handles the
+     common case (n already known here) at zero allocation cost;
+     only clauses with more than 64 literals spill to the heap. A
+     fixed-size array here silently corrupts memory for clauses with
+     more than 1000 literals; an unconditional heap allocation on
+     every call is measurably slower at this function's call
+     volume. */
+  lits_array = (n <= 64) ? sbo_buf : safe_malloc(n * sizeof(Literals));
   for (p = l; p; p = p->next)
     lits_array[i++] = p;
 
   /* Start with the last literal */
-  Literals last = lits_array[n-1];
-  Term result;
+  last = lits_array[n-1];
   if (last->sign)
     result = last->atom;
   else {
@@ -342,17 +395,20 @@ Term lits_to_term(Literals l)
 
   for (i = n-2; i >= 0; i--) {
     Term t;
+    Term d;
     if (lits_array[i]->sign)
       t = lits_array[i]->atom;
     else {
       t = get_rigid_term_dangerously(not_symnum(), 1);
       ARG(t,0) = lits_array[i]->atom;
     }
-    Term d = get_rigid_term_dangerously(or_symnum(), 2);
+    d = get_rigid_term_dangerously(or_symnum(), 2);
     ARG(d,0) = t;
     ARG(d,1) = result;
     result = d;
   }
+  if (lits_array != sbo_buf)
+    safe_free(lits_array);
   return result;
 }  /* lits_to_term */
 
@@ -880,6 +936,94 @@ BOOL tautology(Literals lits)
   }
   return FALSE;
 }  /* tautology */
+
+/*************
+ *
+ *   parse_ladr_integer()
+ *
+ *************/
+
+/* DOCUMENTATION
+Parse s (a TPTP <integer> token's text, e.g. "2", "-1") into *out.  Returns
+FALSE, leaving *out unchanged, if s doesn't fully parse as a long -- in
+particular on overflow, per the same "warn and decline, never wrap or
+crash" discipline as tptp_parse.c's token-truncation warning (peek(),
+~line 604 there): a numeral too large for exact comparison is treated as
+not a recognized value, not silently wrapped and not fatal.
+*/
+
+static BOOL parse_ladr_integer(const char *s, long *out)
+{
+  char *end;
+  long v;
+  errno = 0;
+  v = strtol(s, &end, 10);
+  if (end == s || *end != '\0')
+    return FALSE;  /* not a plain, fully-consumed integer -- shouldn't
+                       happen for genuine TOK_INTEGER text, but a symbol
+                       string is never trusted blindly */
+  if (errno == ERANGE) {
+    fprintf(stderr, "WARNING: numeral '%s' too large for exact comparison, "
+            "treating as not a recognized value\n", s);
+    return FALSE;
+  }
+  *out = v;
+  return TRUE;
+}  /* parse_ladr_integer */
+
+/*************
+ *
+ *   provably_distinct()
+ *
+ *************/
+
+/* DOCUMENTATION
+Query predicate for TPTP's implicit self-interpretation rules (SyntaxBNF:
+distinct objects and numbers are "always interpreted as themselves").
+Returns TRUE only when those rules ALONE force a and b to denote different
+domain elements -- no clause is built or cached anywhere, this is a pure
+on-demand check (docs/distinctness-unification-spec.md).
+
+Three cases:
+  - Either is a distinct object: TRUE iff BOTH are, and their symbols
+    differ.  SyntaxBNF: distinct objects "are different from (but may be
+    equal to) other tokens" -- a mixed distinct-object/other pair is never
+    forced distinct by this rule.
+  - Both are genuine numerals (is_numeral() is set ONLY by tptp_parse.c's
+    TOK_INTEGER branch, so this is FALSE for anything native-LADR-parsed
+    or quoted, by construction -- see docs/distinctness-unification-
+    spec.md): TRUE iff their parsed VALUES differ, never their spellings
+    ("02" and "2" are one value; see parse_ladr_integer, above).
+  - Anything else (an ordinary constant, a numeral paired with a
+    non-numeral, a numeral too large to parse exactly): FALSE --
+    unconstrained by this rule, not "equal", just not provably distinct.
+*/
+
+/* PUBLIC */
+BOOL provably_distinct(Term a, Term b)
+{
+  int sn_a, sn_b;
+  BOOL do_a, do_b;
+
+  if (VARIABLE(a) || VARIABLE(b) || ARITY(a) != 0 || ARITY(b) != 0)
+    return FALSE;
+
+  sn_a = SYMNUM(a);
+  sn_b = SYMNUM(b);
+
+  do_a = is_distinct_object(sn_a);
+  do_b = is_distinct_object(sn_b);
+  if (do_a || do_b)
+    return do_a && do_b && sn_a != sn_b;
+
+  if (is_numeral(sn_a) && is_numeral(sn_b)) {
+    long va, vb;
+    if (parse_ladr_integer(sn_to_str(sn_a), &va) &&
+        parse_ladr_integer(sn_to_str(sn_b), &vb))
+      return va != vb;
+  }
+  return FALSE;
+}  /* provably_distinct */
 
 /*************
  *

@@ -47,6 +47,12 @@ struct flag {  /* Flags are boolean valued options */
   char *name;
   BOOL val;
   BOOL default_val;
+  BOOL user_set;  /* TRUE once set_flag/clear_flag has run on this option
+                     (from any source: input file, TPTP magic comment,
+                     stdin, or command line) -- lets a caller like the
+                     -cores portfolio scheduler tell "the user configured
+                     this" from "still at its compiled-in default", so it
+                     can vary defaults without stomping explicit choices. */
   Optdep dependencies;
 };
 
@@ -55,6 +61,7 @@ struct parm {  /* Parms are integer valued options */
   int val;
   int default_val;
   int min, max;  /* minimum and maximum permissible values */
+  BOOL user_set;  /* see struct flag's user_set comment */
   Optdep dependencies;
 };
 
@@ -63,6 +70,7 @@ struct floatparm {  /* FloatParms are double-valued options */
   double val;
   double default_val;
   double min, max;  /* minimum and maximum permissible values */
+  BOOL user_set;  /* see struct flag's user_set comment */
   Optdep dependencies;
 };
 
@@ -72,6 +80,7 @@ struct stringparm {  /* Stringparms are string valued options */
   char *default_val;  /* current valuse: index into array of strings */
   int n;          /* number of possible values */
   char **range;   /* array of possible values */
+  BOOL user_set;  /* see struct flag's user_set comment */
   /* Optdep dependencies; */
 };
 
@@ -249,6 +258,7 @@ int init_flag(char *name,
     Flags[id].name = name;
     Flags[id].val = default_value;
     Flags[id].default_val = default_value;
+    Flags[id].user_set = FALSE;
     Flags[id].dependencies = NULL;
   }
   return id;
@@ -285,6 +295,7 @@ int init_parm(char *name,
     Parms[id].default_val = default_value;
     Parms[id].min = min_value;
     Parms[id].max = max_value;
+    Parms[id].user_set = FALSE;
   }
   return id;
 }  /* init_parm */
@@ -320,6 +331,7 @@ int init_floatparm(char *name,
     Floatparms[id].default_val = default_value;
     Floatparms[id].min = min_value;
     Floatparms[id].max = max_value;
+    Floatparms[id].user_set = FALSE;
   }
   return id;
 }  /* init_floatparm */
@@ -365,6 +377,7 @@ int init_stringparm(char *name,
     Stringparms[id].n = n;       /* number of values */
     Stringparms[id].val = Stringparms[id].range[0];  /* first is default */
     Stringparms[id].default_val = Stringparms[id].range[0];  /* first is default */
+    Stringparms[id].user_set = FALSE;
   }
   return id;
 }  /* init_stringparm */
@@ -501,6 +514,26 @@ int flag(int flag_id)
 
 /*************
  *
+ *   flag_is_user_set()
+ *
+ *************/
+
+/* DOCUMENTATION
+Returns TRUE if this flag has ever been set/cleared by anything other
+than its compiled-in default (input file, TPTP magic comment, stdin, or
+command line) -- see struct flag's user_set comment.  Lets a caller vary
+its own defaults for options the user hasn't touched, without stomping
+an explicit user choice.
+*/
+
+/* PUBLIC */
+BOOL flag_is_user_set(int flag_id)
+{
+  return Flags[flag_id].user_set;
+}  /* flag_is_user_set */
+
+/*************
+ *
  *   parm()
  *
  *************/
@@ -515,6 +548,22 @@ int parm(int parm_id)
 {
   return Parms[parm_id].val;
 }  /* parm */
+
+/*************
+ *
+ *   parm_is_user_set()
+ *
+ *************/
+
+/* DOCUMENTATION
+See flag_is_user_set(); same idea for parms.
+*/
+
+/* PUBLIC */
+BOOL parm_is_user_set(int parm_id)
+{
+  return Parms[parm_id].user_set;
+}  /* parm_is_user_set */
 
 /*************
  *
@@ -575,6 +624,22 @@ double floatparm(int floatparm_id)
 
 /*************
  *
+ *   floatparm_is_user_set()
+ *
+ *************/
+
+/* DOCUMENTATION
+See flag_is_user_set(); same idea for floatparms.
+*/
+
+/* PUBLIC */
+BOOL floatparm_is_user_set(int floatparm_id)
+{
+  return Floatparms[floatparm_id].user_set;
+}  /* floatparm_is_user_set */
+
+/*************
+ *
  *   stringparm()
  *
  *************/
@@ -609,6 +674,22 @@ char *stringparm1(int id)
 
 /*************
  *
+ *   stringparm_is_user_set()
+ *
+ *************/
+
+/* DOCUMENTATION
+See flag_is_user_set(); same idea for stringparms.
+*/
+
+/* PUBLIC */
+BOOL stringparm_is_user_set(int id)
+{
+  return Stringparms[id].user_set;
+}  /* stringparm_is_user_set */
+
+/*************
+ *
  *   update_flag()
  *
  *************/
@@ -629,6 +710,7 @@ void update_flag(FILE *fout, int id, BOOL val, BOOL echo)
   else {
     Optdep p;
     Flags[id].val = val;
+    Flags[id].user_set = TRUE;
     Option_updates++;
     /* special case */
     if (str_ident(Flags[id].name, "ignore_option_dependencies"))
@@ -751,6 +833,7 @@ void assign_parm(int id, int val, BOOL echo)
   else {
     Optdep p;
     Parms[id].val = val;
+    Parms[id].user_set = TRUE;
     Option_updates++;
     /* Push max_megs to memory system immediately so it takes effect
        during input parsing, not just after input is fully read. */
@@ -820,6 +903,7 @@ void assign_floatparm(int id, double val, BOOL echo)
   }
   else {
     Floatparms[id].val = val;
+    Floatparms[id].user_set = TRUE;
     Option_updates++;
     /* Currently, nothing depends on floatparms. */
   }
@@ -855,6 +939,7 @@ void assign_stringparm(int id, char *val, BOOL echo)
 
     if (i < sp->n) {
       sp->val = sp->range[i];
+      sp->user_set = TRUE;
       Option_updates++;
     }
     else {

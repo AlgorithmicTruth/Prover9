@@ -26,6 +26,9 @@ static int Prolog_style_variables = -1;       /* delayed effect */
 static int Ignore_option_dependencies = -1;   /* immediate effect */
 static int Clocks = -1;                       /* delayed effect */
 static int Otter_style_demod = -1;            /* delayed effect */
+static int Ac_demod = -1;
+static int Ac_kbo_tie;                     /* AC-oriented demodulators (experimental) */
+static int Ac_demod_weight = -1;           /* parm: max weight of an adopted AC demodulator (-1 = unbounded) */
 
 /*************
  *
@@ -44,6 +47,9 @@ void init_standard_options(void)
   Ignore_option_dependencies = init_flag("ignore_option_dependencies", FALSE);
   Clocks                     = init_flag("clocks",                     FALSE);
   Otter_style_demod          = init_flag("otter_style_demod",          FALSE);
+  Ac_demod                   = init_flag("ac_demod",                   FALSE);
+  Ac_kbo_tie                 = init_flag("ac_kbo_tie",                 FALSE);
+  Ac_demod_weight            = init_parm("ac_demod_weight", -1, -1, INT_MAX);
 
 }  /* init_standard_options */
 
@@ -116,3 +122,50 @@ int otter_style_demod_id(void)
 {
   return Otter_style_demod;
 }  /* otter_style_demod_id */
+
+/*************
+ *
+ *   ac_demod_id()
+ *
+ *************/
+
+/* PUBLIC */
+int ac_demod_id(void)
+{
+  return Ac_demod;
+}  /* ac_demod_id */
+
+/*************
+ *
+ *   ac_demod_weight_id()
+ *
+ *************/
+
+/* DOCUMENTATION
+Parm id for ac_demod_weight: an AC equation is adopted as a demodulator
+only if its atom weight is <= this value.  -1 (default) = unbounded
+(every oriented AC equation is a demodulator).  Lower values make AC
+demodulation less aggressive (fewer, smaller demodulators, less
+back-demodulation churn).
+*/
+
+/* PUBLIC */
+int ac_demod_weight_id(void)
+{
+  return Ac_demod_weight;
+}  /* ac_demod_weight_id */
+
+/*************
+ *
+ *   ac_kbo_tie_id()
+ *
+ *************/
+
+/* DOCUMENTATION
+*/
+
+/* PUBLIC */
+int ac_kbo_tie_id(void)
+{
+  return Ac_kbo_tie;
+}  /* ac_kbo_tie_id */

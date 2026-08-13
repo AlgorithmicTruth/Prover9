@@ -50,8 +50,8 @@ struct mclause {
 #define OR_TERM(t)        (SYMNUM((Term) t) == Or_sn)   /* ok if variable */
 #define NOT_TERM(t)       (SYMNUM((Term) t) == Not_sn)  /* ok if variable */
 #define EQ_TERM(t)        (SYMNUM((Term) t) == Eq_sn)   /* ok if variable */
-#define FALSE_TERM(t)     ((t) == Domain[0])  /* ok if not variable */
-#define TRUE_TERM(t)      ((t) == Domain[1])  /* ok if not variable */
+#define FALSE_TERM(t)     ((t) == Bool_domain[0])  /* ok if not variable */
+#define TRUE_TERM(t)      ((t) == Bool_domain[1])  /* ok if not variable */
 
 /* End of public definitions */
 

@@ -326,14 +326,18 @@ int main(int argc, char **argv)
   BOOL resume_from_tptp = FALSE; /* original run was TPTP mode */
   char *saved_command;
   int prescan_timeout = -1;   /* -t value from pre-scan, for early SIGALRM */
-  (void) prescan_timeout;     /* used only in signal setup (non-WASM) */
   int cores_arg = -1;         /* -cores N (or 8 via -casc); -1 = not set */
+  /* Following says whether to ignore unregognized set/clear/assigns. */
+  BOOL prover_compatability_mode = member_args(argc, argv, "-c");
+  (void) prescan_timeout;     /* used only in signal setup (non-WASM) */
+
+  /* Raise the stack limit before any parsing: the TPTP recursive-descent
+     parser has no iterative fallback, and a legitimately very deeply
+     nested input can otherwise overflow the OS default stack. */
+  raise_stack_limit();
 
   /* Save original command line before any argv mutation. */
   saved_command = build_command_string(argc, argv);
-
-  /* Following says whether to ignore unregognized set/clear/assigns. */
-  BOOL prover_compatability_mode = member_args(argc, argv, "-c");
 
   /* Pre-scan for -r resume directory */
   {
@@ -366,6 +370,14 @@ int main(int argc, char **argv)
       }
       if (strcmp(argv[i], "-quiet") == 0) {
         Mace4_quiet = TRUE;
+        argv[i] = "-c";  /* consumed; -c is a harmless no-op in getopt */
+      }
+      if (strcmp(argv[i], "-modern_parse") == 0 ||
+          strcmp(argv[i], "-modern-parse") == 0) {
+        /* Opt-in precedence-climbing LADR-native parser instead of the
+           classic backtracking one -- see the "modern LADR parser"
+           comment in ladr/parse.c for what this trades away. */
+        use_modern_ladr_parser(TRUE);
         argv[i] = "-c";  /* consumed; -c is a harmless no-op in getopt */
       }
       if (strcmp(argv[i], "-casc") == 0) {
@@ -545,7 +557,13 @@ int main(int argc, char **argv)
     /* Phase 2: Parse all formulas (no SInE for mace4) */
     tptp = parse_scanned_formulas(scan, NULL);
 
-    /* Inject distinct object inequality axioms */
+    /* Inject distinct object inequality axioms.  Mace4's model search has
+       no simplify_literals2-style lazy mechanism (confirmed: nothing in
+       mace4.src calls it, nothing else in mace4.src consults
+       is_distinct_object), so unlike Prover9 it still needs the eager
+       axioms to make distinctness real -- see docs/distinctness-
+       unification-spec.md addendum, pending a decision on whether to
+       extend this the same way for numerals. */
     {
       Plist dobj = tptp_distinct_object_axioms(tptp->distinct_objects);
       if (dobj)

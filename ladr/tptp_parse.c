@@ -59,6 +59,75 @@ int get_tptp_name_attr(void) {
   return Tptp_name_attr;
 }
 
+/* Attribute ID for the actual file a formula was read from (the top-level
+   problem file, or whichever include()'d axiom file, e.g. a shared .ax
+   file under an Axioms directory) -- as opposed to tptp_problem_file()
+   (search.c), which is the single top-level problem name and is wrong for
+   any leaf pulled in via include().  Registered lazily; propagates
+   Formula -> Topform -> clausified clauses exactly like Tptp_name_attr
+   (generic attribute-list copy, see ioutil.c/clause_misc.c). */
+static int Tptp_source_file_attr = -1;
+
+static void ensure_tptp_source_file_attr(void) {
+  if (Tptp_source_file_attr < 0)
+    Tptp_source_file_attr = register_attribute("tptp_source_file", STRING_ATTRIBUTE);
+}
+
+int get_tptp_source_file_attr(void) {
+  ensure_tptp_source_file_attr();
+  return Tptp_source_file_attr;
+}
+
+/* Strip any directory component, matching the short "name.p" form
+   tptp_problem_file() (search.c) already uses for the top-level file. */
+static const char *tptp_path_basename(const char *path)
+{
+  const char *slash;
+  if (path == NULL)
+    return "unknown.p";
+  slash = strrchr(path, '/');
+  return slash ? slash + 1 : path;
+}
+
+/* Attribute ID marking a formula that came from a cnf() input record.
+   The TSTP fof-leaf + clausify(thm) restatement exists to document the
+   trivial clausification of an already-clausal fof() axiom; a cnf()
+   axiom underwent no translation at all, so it must instead be echoed
+   as a bare cnf leaf citing the file -- the shape derivation verifiers
+   accept as a literal copy.  Consumed by the clausal_fof marking in
+   top_input.c (process_input_formulas). */
+static int Tptp_cnf_attr = -1;
+
+static void ensure_tptp_cnf_attr(void) {
+  if (Tptp_cnf_attr < 0)
+    Tptp_cnf_attr = register_attribute("tptp_cnf", INT_ATTRIBUTE);
+}
+
+int get_tptp_cnf_attr(void) {
+  ensure_tptp_cnf_attr();
+  return Tptp_cnf_attr;
+}
+
+/* Attribute ID marking a cnf() input record with role negated_conjecture.
+   Such a clause is already the denial and goes to assumptions as-is, so
+   at print time nothing else distinguishes it from an axiom -- but the
+   TSTP leaf must say negated_conjecture or GDV's copy check will not
+   match it against the problem's negated_conjecture formula (and its
+   thm-of-the-problem fallback must fail on a denial).  fof()
+   negated_conjecture is re-negated into a goal and never needs this.
+   Consumed by the bare-cnf-leaf role selection in provers.src/search.c. */
+static int Tptp_neg_conj_attr = -1;
+
+static void ensure_tptp_neg_conj_attr(void) {
+  if (Tptp_neg_conj_attr < 0)
+    Tptp_neg_conj_attr = register_attribute("tptp_neg_conj", INT_ATTRIBUTE);
+}
+
+int get_tptp_neg_conj_attr(void) {
+  ensure_tptp_neg_conj_attr();
+  return Tptp_neg_conj_attr;
+}
+
 /* =========================================================================
  * Lexer
  * ========================================================================= */
@@ -121,6 +190,13 @@ typedef struct lexer_state {
   const char *str_input;
   int   str_pos;
   int   str_len;
+
+  /* Set per top-level fof()/cnf() declaration (main read loop), so
+     parse_atom() can reject $distinct in a cnf() formula -- SyntaxBNF:
+     "$distinct is part of all the TPTP language dialects except CNF."
+     Zero-initialized (FALSE) by lexer_init()/lexer_init_string()'s
+     memset. */
+  BOOL  in_cnf;
 } Lexer;
 
 /*
@@ -646,12 +722,13 @@ static void init_symbol_cache(void)
 }
 
 /*
- * Distinct object collection.
- * File-static list collects names during direct-parse path.
- * Scan path uses an explicit Plist* parameter instead.
+ * Distinct object collection, used by scan_tptp_input() (the path the
+ * prover9/mace4 binaries actually use) via an explicit Plist* parameter,
+ * to build the list tptp_tag_distinct_objects() later tags in the symbol
+ * table.  (A former file-static list collected names here too, for a
+ * direct-parse path (read_tptp_file/read_tptp_stream) used only by
+ * test.src/tptp_test.c -- confirmed dead, nothing ever read it; removed.)
  */
-
-static Plist Distinct_objects = NULL;
 
 static Plist add_distinct_name(Plist list, const char *name)
 {
@@ -665,6 +742,21 @@ static Plist add_distinct_name(Plist list, const char *name)
     strcpy(copy, name);
     return plist_prepend(list, copy);
   }
+}
+
+/* True iff s exactly matches TPTP's <integer> lexical shape: an optional
+   leading +/- followed by one or more digits, nothing else -- the same
+   shape the "Integer:" lexer rule accepts (above, read_token()).  Used
+   ONLY to detect a single-quoted numeral LOOKALIKE ('2') so parse_term()
+   can keep it apart from the genuine numeral (2); this is NOT how genuine
+   numerals are recognized -- that's TOK_INTEGER itself, flagged via
+   set_numeral(). */
+static BOOL looks_like_tptp_integer(const char *s)
+{
+  if (*s == '+' || *s == '-') s++;
+  if (!isdigit((unsigned char) *s)) return FALSE;
+  while (isdigit((unsigned char) *s)) s++;
+  return *s == '\0';
 }
 
 /*
@@ -704,22 +796,38 @@ static Term parse_term(Lexer *lex)
 
   if (t->type == TOK_IDENT || t->type == TOK_QUOTED || t->type == TOK_DISTINCT) {
     char name[MAX_TOKEN_LEN];
-    BOOL is_distinct = (t->type == TOK_DISTINCT);
     BOOL is_quoted_tok = (t->type == TOK_QUOTED || t->type == TOK_DISTINCT);
-    strcpy(name, t->text);
+    /* A single-quoted token whose content looks like a TPTP integer (e.g.
+       '2') would otherwise silently intern to the SAME symbol as the bare
+       numeral 2 -- get_rigid_term() interns purely by name text, and
+       set_quoted() below is only a flag applied after interning, so
+       nothing stops the collision.  Double-quoted distinct objects avoid
+       this because scan_tptp_input() already gives them a distinguishing
+       "do_" prefix before they ever reach here; single-quoted tokens get
+       no equivalent prefix.  SyntaxBNF is explicit that a single-quoted
+       numeral spelling and the bare numeral "are different" (<number>s
+       are not <lower_word>s), so give ONLY this narrow case -- numeral-
+       shaped content, not every non-lower_word spelling (that's a
+       separate, broader question -- see docs/distinctness-unification-
+       spec.md section 7) -- a distinguishing prefix before interning.  A
+       genuine lower_word spelling ('cat') is unaffected: quoting a
+       legal lower_word is a spec-mandated no-op, and 'cat' must keep
+       colliding with cat. */
+    if (t->type == TOK_QUOTED && looks_like_tptp_integer(t->text))
+      snprintf(name, sizeof(name), "sq_%s", t->text);
+    else
+      strcpy(name, t->text);
     consume(lex);
-
-    /* Collect distinct object names for inequality axiom generation */
-    if (is_distinct)
-      Distinct_objects = add_distinct_name(Distinct_objects, name);
 
     t = peek(lex);
     if (t->type == TOK_LPAREN) {
       /* functor(args) */
-      consume(lex);
       int arity = 0;
       int args_cap = 256;
       Term *args = safe_malloc(args_cap * sizeof(Term));
+      Term term;
+      int i;
+      consume(lex);
 
       args[arity++] = parse_term(lex);
       while (peek(lex)->type == TOK_COMMA) {
@@ -734,9 +842,8 @@ static Term parse_term(Lexer *lex)
       }
       expect(lex, TOK_RPAREN, "')'");
 
-      Term term = get_rigid_term(name, arity);
+      term = get_rigid_term(name, arity);
       if (is_quoted_tok) set_quoted(SYMNUM(term));
-      int i;
       for (i = 0; i < arity; i++)
         ARG(term, i) = args[i];
       safe_free(args);
@@ -754,18 +861,97 @@ static Term parse_term(Lexer *lex)
     char name[MAX_TOKEN_LEN];
     strcpy(name, t->text);
     consume(lex);
-    return get_rigid_term(name, 0);
+    {
+      Term term = get_rigid_term(name, 0);
+      /* Genuine TPTP <number>: self-interpreting per SyntaxBNF ("Numbers
+         are always interpreted as themselves... implicitly distinct if
+         they have different values").  set_numeral() is called ONLY from
+         here, so it can never be TRUE for a native-LADR-parsed symbol or
+         a quoted lookalike (see looks_like_tptp_integer above) --
+         provably_distinct() (ladr/distinct.c) relies on that. */
+      set_numeral(SYMNUM(term));
+      return term;
+    }
   }
 
   if (t->type == TOK_DOLLAR_IDENT) {
     char full[MAX_TOKEN_LEN + 1];
     snprintf(full, sizeof(full), "$%s", t->text);
     consume(lex);
+    /* TPTP's defined predicates/functors ($less, $sum, $distinct, etc. --
+       see SyntaxBNF <defined_predicate>/<defined_functor>) are not
+       implemented here: only $true/$false have real semantics (handled
+       in parse_atom before this is reached).  Silently dropping an
+       argument list would change the formula's meaning without any
+       diagnostic -- e.g. $less(5,1) would parse as a bare 0-ary "$less"
+       atom, indistinguishable from $less(0,1), so an arithmetically
+       false premise could "prove" an arithmetically false goal.  Reject
+       outright rather than mangle: unimplemented is honest, wrong is
+       not. */
+    if (peek(lex)->type == TOK_LPAREN)
+      tptp_parse_error(lex, "defined symbol '%s' with arguments is not "
+                        "supported (TPTP arithmetic/defined predicates "
+                        "and functors are not implemented)", full);
     return get_rigid_term(full, 0);
   }
 
   tptp_parse_error(lex, "expected term, got '%s'", t->text);
   return NULL;  /* not reached */
+}
+
+/* Parse "$distinct(t1,...,tn)" as an atom.  Builds a marker atom whose
+   symbol is "$distinct" and whose args are the parsed terms; legality
+   (dialect, role, position) is checked later by expand_distinct_atoms(),
+   once the whole formula and its role are known -- not decidable here.
+   Each argument must be a constant (arity 0, and not upper/underscore-
+   initial -- TPTP's own variable convention, see is_upper above): "$distinct
+   takes one or more constants ... as arguments" (SyntaxBNF). */
+static Formula parse_distinct_atom(Lexer *lex)
+{
+  int arity = 0;
+  int args_cap = 8;
+  Term *args = safe_malloc(args_cap * sizeof(Term));
+  Term term;
+  Formula f;
+  int i;
+
+  consume(lex);  /* "distinct" */
+  if (lex->in_cnf)
+    tptp_parse_error(lex, "$distinct is not supported in cnf() formulas "
+                      "(SyntaxBNF: $distinct is part of all the TPTP "
+                      "language dialects except CNF)");
+  expect(lex, TOK_LPAREN, "'('");
+
+  for (;;) {
+    Term arg = parse_term(lex);
+    char *name;
+    if (ARITY(arg) != 0)
+      tptp_parse_error(lex, "$distinct argument %d is not a constant "
+                        "(SyntaxBNF: $distinct takes constants only)",
+                        arity + 1);
+    name = sn_to_str(SYMNUM(arg));
+    if (isupper((unsigned char) name[0]) || name[0] == '_')
+      tptp_parse_error(lex, "$distinct argument %d is a variable, not "
+                        "a constant (SyntaxBNF: $distinct takes "
+                        "constants only)", arity + 1);
+    if (arity >= args_cap) {
+      args_cap *= 2;
+      args = safe_realloc(args, args_cap * sizeof(Term));
+    }
+    args[arity++] = arg;
+    if (peek(lex)->type != TOK_COMMA) break;
+    consume(lex);
+  }
+  expect(lex, TOK_RPAREN, "')'");
+
+  term = get_rigid_term("$distinct", arity);
+  for (i = 0; i < arity; i++)
+    ARG(term, i) = args[i];
+  safe_free(args);
+
+  f = formula_get(0, ATOM_FORM);
+  f->atom = term;
+  return f;
 }
 
 /*
@@ -775,6 +961,8 @@ static Term parse_term(Lexer *lex)
 static Formula parse_atom(Lexer *lex)
 {
   Token *t = peek(lex);
+  Term lhs;
+  Formula f;
 
   /* $true and $false */
   if (t->type == TOK_DOLLAR_IDENT) {
@@ -786,38 +974,44 @@ static Formula parse_atom(Lexer *lex)
       consume(lex);
       return formula_get(0, OR_FORM);   /* FALSE_FORMULA */
     }
+    if (strcmp(t->text, "distinct") == 0)
+      return parse_distinct_atom(lex);
     /* other $-ident: treat as a regular term/predicate */
   }
 
-  Term lhs = parse_term(lex);
+  lhs = parse_term(lex);
 
   t = peek(lex);
   if (t->type == TOK_EQUALS) {
+    Term rhs;
+    Term eq;
     consume(lex);
-    Term rhs = parse_term(lex);
+    rhs = parse_term(lex);
     init_symbol_cache();
-    Term eq = get_rigid_term_dangerously(Eq_sn, 2);
+    eq = get_rigid_term_dangerously(Eq_sn, 2);
     ARG(eq, 0) = lhs;
     ARG(eq, 1) = rhs;
-    Formula f = formula_get(0, ATOM_FORM);
+    f = formula_get(0, ATOM_FORM);
     f->atom = eq;
     return f;
   }
 
   if (t->type == TOK_NEQ) {
+    Term rhs;
+    Term eq;
     consume(lex);
-    Term rhs = parse_term(lex);
+    rhs = parse_term(lex);
     init_symbol_cache();
-    Term eq = get_rigid_term_dangerously(Eq_sn, 2);
+    eq = get_rigid_term_dangerously(Eq_sn, 2);
     ARG(eq, 0) = lhs;
     ARG(eq, 1) = rhs;
-    Formula f = formula_get(0, ATOM_FORM);
+    f = formula_get(0, ATOM_FORM);
     f->atom = eq;
     return negate(f);
   }
 
   /* Plain predicate atom */
-  Formula f = formula_get(0, ATOM_FORM);
+  f = formula_get(0, ATOM_FORM);
   f->atom = lhs;
   return f;
 }
@@ -838,16 +1032,18 @@ static Formula parse_fof_unitary(Lexer *lex, int depth)
 
   /* Parenthesized formula */
   if (t->type == TOK_LPAREN) {
+    Formula f;
     consume(lex);
-    Formula f = parse_fof_formula(lex, depth + 1);
+    f = parse_fof_formula(lex, depth + 1);
     expect(lex, TOK_RPAREN, "')'");
     return f;
   }
 
   /* Negation */
   if (t->type == TOK_TILDE) {
+    Formula sub;
     consume(lex);
-    Formula sub = parse_fof_unitary(lex, depth + 1);
+    sub = parse_fof_unitary(lex, depth + 1);
     return negate(sub);
   }
 
@@ -963,8 +1159,9 @@ static Formula parse_fof_and(Lexer *lex, int depth)
   Formula f = parse_fof_unitary(lex, depth);
 
   while (peek(lex)->type == TOK_AMP) {
+    Formula rhs;
     consume(lex);
-    Formula rhs = parse_fof_unitary(lex, depth);
+    rhs = parse_fof_unitary(lex, depth);
     f = and(f, rhs);
   }
   return f;
@@ -975,8 +1172,9 @@ static Formula parse_fof_or(Lexer *lex, int depth)
   Formula f = parse_fof_and(lex, depth);
 
   while (peek(lex)->type == TOK_PIPE) {
+    Formula rhs;
     consume(lex);
-    Formula rhs = parse_fof_and(lex, depth);
+    rhs = parse_fof_and(lex, depth);
     f = or(f, rhs);
   }
   return f;
@@ -1049,8 +1247,9 @@ static Formula parse_cnf_literal(Lexer *lex)
 {
   Token *t = peek(lex);
   if (t->type == TOK_TILDE) {
+    Formula a;
     consume(lex);
-    Formula a = parse_atom(lex);
+    a = parse_atom(lex);
     return negate(a);
   }
   return parse_atom(lex);
@@ -1064,17 +1263,20 @@ static Formula parse_cnf_formula(Lexer *lex)
   if (t->type == TOK_PIPE) {
     /* Build disjunction */
     Plist disjuncts = NULL;
+    Formula result;
+    Plist p;
+    int i;
+    int n;
     disjuncts = plist_prepend(disjuncts, f);
     while (peek(lex)->type == TOK_PIPE) {
+      Formula lit;
       consume(lex);
-      Formula lit = parse_cnf_literal(lex);
+      lit = parse_cnf_literal(lex);
       disjuncts = plist_prepend(disjuncts, lit);
     }
     disjuncts = reverse_plist(disjuncts);
-    int n = plist_count(disjuncts);
-    Formula result = formula_get(n, OR_FORM);
-    Plist p;
-    int i;
+    n = plist_count(disjuncts);
+    result = formula_get(n, OR_FORM);
     for (p = disjuncts, i = 0; p; p = p->next, i++)
       result->kids[i] = (Formula) p->v;
     zap_plist(disjuncts);
@@ -1100,8 +1302,9 @@ static Formula parse_cnf_top(Lexer *lex)
 
   /* Handle parenthesized CNF clause */
   if (t->type == TOK_LPAREN) {
+    Formula f;
     consume(lex);
-    Formula f = parse_cnf_formula(lex);
+    f = parse_cnf_formula(lex);
     expect(lex, TOK_RPAREN, "')'");
     return f;
   }
@@ -1137,6 +1340,85 @@ static char *resolve_include_path(const char *include_name,
   return strdup(include_name);
 }
 
+/* Build the conjunction of pairwise marker->args[i] != marker->args[j]
+   (i<j) for a $distinct(...) marker atom (see parse_distinct_atom).
+   arity==1 is vacuously true (no pairs to compare); parse_distinct_atom
+   never produces arity 0. */
+static Formula build_distinct_expansion(Term marker)
+{
+  int n = ARITY(marker);
+  Formula result = NULL;
+  int i, j;
+
+  if (n <= 1)
+    return formula_get(0, AND_FORM);  /* TRUE_FORMULA */
+
+  init_symbol_cache();
+  for (i = 0; i < n; i++) {
+    for (j = i + 1; j < n; j++) {
+      Term eq = get_rigid_term_dangerously(Eq_sn, 2);
+      Formula ne;
+      ARG(eq, 0) = copy_term(ARG(marker, i));
+      ARG(eq, 1) = copy_term(ARG(marker, j));
+      ne = formula_get(0, ATOM_FORM);
+      ne->atom = eq;
+      ne = negate(ne);
+      result = (result == NULL) ? ne : and(result, ne);
+    }
+  }
+  return result;
+}
+
+/* Walk a parsed fof() formula looking for $distinct marker atoms (see
+   parse_distinct_atom) and either expand them (legal position) or
+   reject the whole formula (illegal position).  SyntaxBNF: "$distinct
+   can be used on only axiom-like formulae, and with only positive
+   polarity, e.g., as a top-level fact or under a top-level conjunction.
+   $distinct may not be used in a conjecture."
+
+   legal_pos starts TRUE at the root of a non-conjecture-like formula
+   and survives only through AND_FORM and quantifier kids; every other
+   connective (NOT/OR/IMP/IMPBY/IFF) makes ALL its descendants illegal,
+   permanently, for the rest of that subtree.  This is a literal,
+   syntactic "top-level fact or top-level conjunction" test, not a
+   general polarity computation -- e.g. a double negation does NOT
+   re-legalize a nested $distinct, matching the spec's plain wording. */
+static Formula expand_distinct_atoms(Lexer *lex, Formula f, BOOL legal_pos,
+                                      const char *formula_name)
+{
+  int i;
+  if (f->type == ATOM_FORM) {
+    if (strcmp(sn_to_str(SYMNUM(f->atom)), "$distinct") == 0) {
+      if (!legal_pos)
+        tptp_parse_error(lex, "formula '%s': $distinct may only be used "
+                          "as a top-level fact or under a top-level "
+                          "conjunction in an axiom-like formula "
+                          "(SyntaxBNF)", formula_name);
+      return build_distinct_expansion(f->atom);
+    }
+    return f;
+  }
+  if (f->type == AND_FORM) {
+    for (i = 0; i < f->arity; i++)
+      f->kids[i] = expand_distinct_atoms(lex, f->kids[i], legal_pos,
+                                          formula_name);
+    return f;
+  }
+  if (f->type == ALL_FORM || f->type == EXISTS_FORM) {
+    f->kids[0] = expand_distinct_atoms(lex, f->kids[0], legal_pos,
+                                        formula_name);
+    return f;
+  }
+  /* NOT_FORM, OR_FORM, IMP_FORM, IMPBY_FORM, IFF_FORM: none of their
+     descendants are a legal position, no matter what legal_pos was
+     coming in -- still recurse (rather than skip) so a $distinct buried
+     under one of these is REJECTED with a clear diagnostic instead of
+     silently reaching clausification as an un-evaluable raw atom. */
+  for (i = 0; i < f->arity; i++)
+    f->kids[i] = expand_distinct_atoms(lex, f->kids[i], FALSE, formula_name);
+  return f;
+}
+
 /*
  * Main parsing entry point (recursive for includes)
  */
@@ -1153,6 +1435,10 @@ static void parse_tptp_input(Lexer *lex,
 
   while (peek(lex)->type != TOK_EOF) {
     Token *t = peek(lex);
+    BOOL is_fof = FALSE;
+    char formula_name[MAX_TOKEN_LEN];
+    char role[MAX_TOKEN_LEN];
+    Formula f;
 
     if (t->type != TOK_IDENT) {
       tptp_parse_error(lex, "expected 'fof', 'cnf', or 'include', got '%s'",
@@ -1161,23 +1447,29 @@ static void parse_tptp_input(Lexer *lex,
 
     /* include */
     if (strcmp(t->text, "include") == 0) {
+      Token *qt;
+      char *include_name;
+      Plist name_filter = NULL;
+      char *path;
+      FILE *inc_file;
+      Lexer inc_lex;
       consume(lex);
       expect(lex, TOK_LPAREN, "'('");
 
-      Token *qt = peek(lex);
+      qt = peek(lex);
       if (qt->type != TOK_QUOTED && qt->type != TOK_DISTINCT)
         tptp_parse_error(lex, "expected quoted filename in include");
-      char *include_name = strdup(qt->text);
+      include_name = strdup(qt->text);
       consume(lex);
 
       /* Optional name filter: include('file', [name1, name2]) */
-      Plist name_filter = NULL;
       if (peek(lex)->type == TOK_COMMA) {
+        char nbuf[MAX_TOKEN_LEN];
+        char *n;
         consume(lex);
         expect(lex, TOK_LBRACKET, "'['");
-        char nbuf[MAX_TOKEN_LEN];
         parse_name(lex, nbuf, sizeof(nbuf));
-        char *n = safe_malloc(strlen(nbuf) + 1);
+        n = safe_malloc(strlen(nbuf) + 1);
         strcpy(n, nbuf);
         name_filter = plist_prepend(name_filter, n);
         while (peek(lex)->type == TOK_COMMA) {
@@ -1193,8 +1485,8 @@ static void parse_tptp_input(Lexer *lex,
       expect(lex, TOK_RPAREN, "')'");
       expect(lex, TOK_DOT, "'.'");
 
-      char *path = resolve_include_path(include_name, lex->source_name);
-      FILE *inc_file = fopen(path, "r");
+      path = resolve_include_path(include_name, lex->source_name);
+      inc_file = fopen(path, "r");
       if (inc_file == NULL) {
         /* Try with TPTP environment variable */
         char *tptp_dir = getenv("TPTP");
@@ -1254,7 +1546,6 @@ static void parse_tptp_input(Lexer *lex,
       fprintf(stderr, "%% Including TPTP file %s\n", path);
 #endif
 
-      Lexer inc_lex;
       lexer_init(&inc_lex, inc_file, path);
 
       if (name_filter == NULL) {
@@ -1301,7 +1592,6 @@ static void parse_tptp_input(Lexer *lex,
     }
 
     /* fof or cnf */
-    BOOL is_fof = FALSE;
     if (strcmp(t->text, "fof") == 0)
       is_fof = TRUE;
     else if (strcmp(t->text, "cnf") == 0)
@@ -1314,21 +1604,23 @@ static void parse_tptp_input(Lexer *lex,
     expect(lex, TOK_LPAREN, "'('");
 
     /* Name */
-    char formula_name[MAX_TOKEN_LEN];
     parse_name(lex, formula_name, sizeof(formula_name));
 
     expect(lex, TOK_COMMA, "','");
 
     /* Role */
-    char role[MAX_TOKEN_LEN];
     parse_name(lex, role, sizeof(role));
 
     expect(lex, TOK_COMMA, "','");
 
     /* Formula */
-    Formula f;
+    lex->in_cnf = !is_fof;
     if (is_fof) {
       f = parse_fof_formula(lex, 0);
+      f = expand_distinct_atoms(lex, f,
+              strcmp(role, "conjecture") != 0 &&
+              strcmp(role, "negated_conjecture") != 0,
+              formula_name);
     }
     else {
       f = parse_cnf_top(lex);
@@ -1336,9 +1628,9 @@ static void parse_tptp_input(Lexer *lex,
 
     /* Optional annotations (skip) */
     if (peek(lex)->type == TOK_COMMA) {
+      int depth = 0;
       consume(lex);
       /* Skip the annotation by counting parentheses depth */
-      int depth = 0;
       while (TRUE) {
         Token *at = peek(lex);
         if (at->type == TOK_EOF)
@@ -1371,6 +1663,17 @@ static void parse_tptp_input(Lexer *lex,
     ensure_tptp_name_attr();
     f->attributes = set_string_attribute(f->attributes, Tptp_name_attr,
                                          formula_name);
+    /* Also record the actual file this formula was read from -- lex is a
+       fresh recursive Lexer per include(), so its source_name is the true
+       origin (a shared axiom file), not just the top-level problem file
+       tptp_problem_file() (search.c) would otherwise cite for every leaf. */
+    ensure_tptp_source_file_attr();
+    f->attributes = set_string_attribute(f->attributes, Tptp_source_file_attr,
+                                         (char *) tptp_path_basename(lex->source_name));
+    if (!is_fof) {
+      ensure_tptp_cnf_attr();
+      f->attributes = set_int_attribute(f->attributes, Tptp_cnf_attr, 1);
+    }
 
     /* Classify by role */
     if (strcmp(role, "conjecture") == 0) {
@@ -1385,7 +1688,11 @@ static void parse_tptp_input(Lexer *lex,
       }
       else {
         /* CNF negated_conjecture: already a denial clause in clausal form.
-           Goes directly to assumptions (SOS) as-is. */
+           Goes directly to assumptions (SOS) as-is.  Remember the role so
+           the TSTP leaf can say negated_conjecture (see the attribute). */
+        ensure_tptp_neg_conj_attr();
+        f->attributes = set_int_attribute(f->attributes,
+                                          Tptp_neg_conj_attr, 1);
         *assumps = plist_prepend(*assumps, f);
         *has_neg_conj = TRUE;
       }
@@ -1427,13 +1734,14 @@ static void parse_tptp_input(Lexer *lex,
 Tptp_input read_tptp_file(const char *filename)
 {
   FILE *fin = fopen(filename, "r");
+  Tptp_input result;
   if (fin == NULL) {
     char msg[512];
     snprintf(msg, sizeof(msg), "TPTP parse: cannot open file '%s'", filename);
     fatal_error(msg);
   }
 
-  Tptp_input result = read_tptp_stream(fin, filename);
+  result = read_tptp_stream(fin, filename);
   fclose(fin);
   return result;
 }
@@ -1448,16 +1756,17 @@ Tptp_input read_tptp_file(const char *filename)
 Tptp_input read_tptp_stream(FILE *fin, const char *source_name)
 {
   Lexer lex;
-  lexer_init(&lex, fin, source_name);
-
   Plist assumps = NULL;
   Plist goals = NULL;
   BOOL  neg_conj = FALSE;
+  Tptp_input result;
+
+  lexer_init(&lex, fin, source_name);
 
   init_symbol_cache();
   parse_tptp_input(&lex, &assumps, &goals, &neg_conj, 0);
 
-  Tptp_input result = safe_malloc(sizeof(struct tptp_input));
+  result = safe_malloc(sizeof(struct tptp_input));
   result->assumptions = reverse_plist(assumps);
   result->goals = reverse_plist(goals);
   result->magic_commands = reverse_plist(lex.magic_commands);
@@ -1876,16 +2185,17 @@ static void scan_tptp_input(Lexer *lex,
              backslash (these have special meaning in the lexer). */
           const char *prefix = (t->type == TOK_DISTINCT) ? "do_" : "";
           int pfxlen = strlen(prefix);
+          const char *s;
+          int extra = 0;
+          int qlen;
+          char *qbuf, *d;
           /* Collect distinct object names (with prefix) */
           if (t->type == TOK_DISTINCT) {
             char prefixed[MAX_TOKEN_LEN];
             snprintf(prefixed, sizeof(prefixed), "%s%s", prefix, t->text);
             *distinct_objects = add_distinct_name(*distinct_objects, prefixed);
           }
-          const char *s;
-          int extra = 0;
-          int qlen = strlen(t->text);
-          char *qbuf, *d;
+          qlen = strlen(t->text);
           for (s = t->text; *s; s++) {
             if (*s == '\'') extra++;
             else if (*s == '\\' || *s == '"') extra++;
@@ -1911,6 +2221,7 @@ static void scan_tptp_input(Lexer *lex,
           {
             char prefixed_name[MAX_TOKEN_LEN];
             const char *lookup_name;
+            int sid;
             if (t->type == TOK_DISTINCT) {
               snprintf(prefixed_name, sizeof(prefixed_name), "%s%s",
                        prefix, t->text);
@@ -1918,7 +2229,7 @@ static void scan_tptp_input(Lexer *lex,
             } else {
               lookup_name = t->text;
             }
-            int sid = scan_lookup(ht, lookup_name);
+            sid = scan_lookup(ht, lookup_name);
             sym_acc_add(sa, sid);
           }
           safe_free(qbuf);
@@ -2014,6 +2325,9 @@ static void scan_tptp_input(Lexer *lex,
       entry->is_fof = is_fof;
       strncpy(entry->name, formula_name, sizeof(entry->name) - 1);
       entry->name[sizeof(entry->name) - 1] = '\0';
+      strncpy(entry->source_file, tptp_path_basename(lex->source_name),
+              sizeof(entry->source_file) - 1);
+      entry->source_file[sizeof(entry->source_file) - 1] = '\0';
       entry->eq_count = eq_cnt;
       entry->pipe_count = pipe_cnt;
       entry->tilde_count = tilde_cnt;
@@ -2121,9 +2435,12 @@ Tptp_input parse_scanned_formulas(Scan_result scan, BOOL *keep)
       continue;
 
     lexer_init_string(&lex, e->body_text, e->body_len, e->name);
+    lex.in_cnf = !e->is_fof;
 
-    if (e->is_fof)
+    if (e->is_fof) {
       f = parse_fof_formula(&lex, 0);
+      f = expand_distinct_atoms(&lex, f, e->role != SCAN_ROLE_GOAL, e->name);
+    }
     else
       f = parse_cnf_top(&lex);
 
@@ -2131,6 +2448,23 @@ Tptp_input parse_scanned_formulas(Scan_result scan, BOOL *keep)
     ensure_tptp_name_attr();
     f->attributes = set_string_attribute(f->attributes, Tptp_name_attr,
                                          e->name);
+    /* And the file it actually came from -- see scan_tptp_input() where
+       entry->source_file is recorded per-include, and the non-SInE
+       parse_tptp_input() path above which sets this attribute the same
+       way; a SInE-selected axiom from a shared include()'d file must not
+       be mislabeled as coming from the top-level problem file. */
+    ensure_tptp_source_file_attr();
+    f->attributes = set_string_attribute(f->attributes, Tptp_source_file_attr,
+                                         e->source_file);
+    if (!e->is_fof) {
+      ensure_tptp_cnf_attr();
+      f->attributes = set_int_attribute(f->attributes, Tptp_cnf_attr, 1);
+      if (e->role == SCAN_ROLE_NEG_CONJ) {
+        ensure_tptp_neg_conj_attr();
+        f->attributes = set_int_attribute(f->attributes,
+                                          Tptp_neg_conj_attr, 1);
+      }
+    }
 
     /* Classify by role */
     if (e->role == SCAN_ROLE_GOAL) {
@@ -2186,13 +2520,49 @@ void free_scan_result(Scan_result scan)
 
 /*************
  *
+ *   tptp_tag_distinct_objects()
+ *
+ *************/
+
+/* DOCUMENTATION
+Tag each name in the list as a TPTP distinct object in the symbol table
+(set_distinct_object()), so provably_distinct() (ladr/distinct.c) can make
+implicit distinctness real to the prover on demand -- see
+docs/distinctness-unification-spec.md.  Replaces the former
+tptp_distinct_object_axioms(), which additionally built an eager O(n^2)
+list of pairwise "name_i != name_j" axiom formulas for every distinct
+object in the problem, regardless of whether a proof ever needed them.
+That list is gone; only the tagging remains, here, unconditionally cheap.
+*/
+
+/* PUBLIC */
+void tptp_tag_distinct_objects(Plist distinct_names)
+{
+  Plist p;
+  for (p = distinct_names; p; p = p->next) {
+    char *name = (char *) p->v;
+    int sn = str_to_sn(name, 0);
+    set_distinct_object(sn);
+  }
+}
+
+/*************
+ *
  *   tptp_distinct_object_axioms()
  *
  *************/
 
 /* DOCUMENTATION
-Generate pairwise inequality formulas for TPTP distinct objects.
-For each pair of names in the list, produce a Formula: name_i != name_j.
+Tag distinct objects (tptp_tag_distinct_objects(), above) AND additionally
+build the eager O(n^2) list of pairwise "name_i != name_j" axiom formulas.
+Prover9 no longer needs this -- simplify_literals2() (ladr/subsume.c) makes
+distinctness real on demand via provably_distinct() instead, so its call
+sites use tptp_tag_distinct_objects() directly.  Mace4's model search has
+no equivalent lazy mechanism (nothing in mace4.src calls simplify_literals2
+or consults is_distinct_object independently), so it still needs the
+injected axioms; this function stays, scoped to that one caller, until
+Mace4 has its own lazy mechanism (open item, see
+docs/distinctness-unification-spec.md addendum).
 Returns a Plist of Formula (caller owns).
 */
 
@@ -2202,12 +2572,7 @@ Plist tptp_distinct_object_axioms(Plist distinct_names)
   Plist result = NULL;
   Plist p, q;
 
-  /* Tag all distinct object symbols in the symbol table. */
-  for (p = distinct_names; p; p = p->next) {
-    char *name = (char *) p->v;
-    int sn = str_to_sn(name, 0);
-    set_distinct_object(sn);
-  }
+  tptp_tag_distinct_objects(distinct_names);
 
   if (distinct_names == NULL || distinct_names->next == NULL)
     return NULL;  /* 0 or 1 distinct object: nothing to generate */

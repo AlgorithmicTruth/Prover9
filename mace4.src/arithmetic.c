@@ -22,6 +22,7 @@
 
 extern int Negation_flag;  /* for dealing with mclause */
 extern Term *Domain;
+extern Term Bool_domain[2];
 extern int Domain_size;
 
 /* Private definitions and types */

@@ -21,6 +21,10 @@
 #include "fatal.h"
 #include <unistd.h>
 #include <string.h>
+#include <stdint.h>  /* SIZE_MAX, used by safe_calloc's overflow guard --
+                        pulled in transitively on macOS via other headers,
+                        but not guaranteed on Linux/glibc (found live,
+                        2026-08-07, DEBUG=1 build on the Threadripper). */
 
 #define MALLOC_MEGS        20  /* size of blocks malloced by palloc */
 #define DEFAULT_MAX_MEGS  49152  /* 48 GB; change with set_max_megs(n) */
@@ -92,6 +96,65 @@ void *palloc(size_t n)
 
 /*************
  *
+ *   Avail lists for large chunks (n >= MAX_MEM_LISTS)
+ *
+ *   Large requests otherwise go to raw safe_malloc/safe_calloc and
+ *   safe_free on EVERY get/free.  The AC machinery allocates
+ *   multi-hundred-KB state structs (ac_position ~390KB, the btm
+ *   ac_match structs) at unification/matching rates; on macOS each
+ *   raw large calloc is an mmap + zero-fill and each free an
+ *   madvise, measured at ~60% of total CPU (as system time) on
+ *   AC-heavy runs.  Distinct large sizes in practice number only a
+ *   handful, so a small table of size-keyed avail lists suffices.
+ *   Reused memory is never returned to the OS, matching the M[]
+ *   small-list policy.  get_cmem's zero-fill contract is preserved
+ *   by memset on reuse.
+ *
+ *************/
+
+#define MAX_BIG_LISTS 32
+
+static struct { unsigned n; void **avail; } Big[MAX_BIG_LISTS];
+static int Big_lists = 0;
+
+static
+void **big_get(unsigned n)
+{
+  int i;
+  for (i = 0; i < Big_lists; i++) {
+    if (Big[i].n == n) {
+      void **p = Big[i].avail;
+      if (p != NULL)
+	Big[i].avail = (void **) *p;
+      return p;
+    }
+  }
+  return NULL;
+}  /* big_get */
+
+static
+BOOL big_put(void **p, unsigned n)
+{
+  int i;
+  for (i = 0; i < Big_lists; i++) {
+    if (Big[i].n == n) {
+      *p = Big[i].avail;
+      Big[i].avail = p;
+      return TRUE;
+    }
+  }
+  if (Big_lists < MAX_BIG_LISTS) {
+    Big[Big_lists].n = n;
+    *p = NULL;
+    Big[Big_lists].avail = p;
+    Big_lists++;
+    return TRUE;
+  }
+  return FALSE;  /* table full; caller should free normally */
+}  /* big_put */
+
+/*************
+ *
  *   get_cmem()
  *
  *************/
@@ -109,8 +172,13 @@ void *get_cmem(unsigned n)
   else {
     void **p = NULL;
     BUMP_MEM_CALLS;
-    if (n >= MAX_MEM_LISTS)
-      return safe_calloc(n, BYTES_POINTER);
+    if (n >= MAX_MEM_LISTS) {
+      p = big_get(n);
+      if (p == NULL)
+	return safe_calloc(n, BYTES_POINTER);
+      memset(p, 0, n * BYTES_POINTER);
+      return p;
+    }
     else if (M[n] == NULL)
       p = palloc(n * BYTES_POINTER);
     else {
@@ -147,8 +215,11 @@ void *get_mem(unsigned n)
   else {
     void **p = NULL;
     BUMP_MEM_CALLS;
-    if (n >= MAX_MEM_LISTS)
-      p = safe_malloc(n * BYTES_POINTER);
+    if (n >= MAX_MEM_LISTS) {
+      p = big_get(n);
+      if (p == NULL)
+	p = safe_malloc(n * BYTES_POINTER);
+    }
     else if (M[n] == NULL)
       p = palloc(n * BYTES_POINTER);
     else {
@@ -179,8 +250,10 @@ void free_mem(void *q, unsigned n)
   else {
     /* put it on the appropriate avail list */
     void **p = q;
-    if (n >= MAX_MEM_LISTS)
-      safe_free(p);  /* large allocations used safe_malloc/safe_calloc */
+    if (n >= MAX_MEM_LISTS) {
+      if (!big_put(p, n))
+	safe_free(p);  /* Big table full; raw free as before */
+    }
     else {
       /* the first pointer is used for the avail list */
       *p = M[n];

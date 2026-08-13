@@ -240,6 +240,9 @@ static char Help_string[] =
 "  -f files   Take input from files instead of from standard input.\n"
 "  -tptp      Force TPTP input mode (read from stdin).\n"
 "  -tptp_out  TPTP/TSTP output mode (SZS status + TSTP proofs).\n"
+"  -tstp      TSTP output format only (SZS status + TSTP proofs), on a\n"
+"             normal native-syntax input/search -- unlike -tptp_out, does\n"
+"             NOT switch to the TPTP scan/SInE/ML-strategy input pipeline.\n"
 "  -ladr_out  Native Prover9 output on TPTP input (override TSTP).\n"
 "  -fastPE   5-second timeout on predicate elimination.\n"
 "  -expand    Unroll compound proof steps (each rewrite as its own step).\n"
@@ -267,6 +270,9 @@ struct arg_options {
   int  cores;              /* sliding-window cores (-1 = use parm default) */
   BOOL read_stdin;         /* read LADR overrides from stdin (-stdin flag) */
   BOOL expand_proof;       /* -expand: unroll compound proof steps */
+  BOOL tstp_out;           /* -tstp: TSTP OUTPUT FORMAT ONLY, no TPTP-mode
+                              scan/SInE/ML-strategy input pipeline -- see
+                              process_command_line_args_1 */
 };
 
 /*************
@@ -301,9 +307,47 @@ int physical_cores(void)
       n = 4;
   }
 #elif defined(_SC_NPROCESSORS_ONLN)
-  /* Linux: logical / 2 as approximation (most CPUs have 2-way SMT) */
-  n = (int) sysconf(_SC_NPROCESSORS_ONLN);
-  if (n > 1) n = n / 2;
+  /* Linux: count distinct (physical_package_id, core_id) pairs via sysfs
+     topology.  Handles any SMT width (not just 2-way) and, more
+     importantly, environments where flatly halving is wrong: WSL2 and
+     other VMs/containers commonly present N vCPUs with no SMT siblings
+     at all (a WSL2 user who configured "8 processors" got 8 usable
+     schedulable units, not 4) -- the old "/2, most CPUs have 2-way SMT"
+     guess silently clamped -cores requests below what was actually
+     available.  Falls back to the raw (unhalved) logical count if the
+     topology files are unavailable: undercounting wrongly clamps an
+     explicit user request, while overcounting by up to 2x on genuine
+     SMT hardware just risks siblings sharing execution resources, a far
+     smaller harm for a user-requested worker count. */
+  {
+    int logical = (int) sysconf(_SC_NPROCESSORS_ONLN);
+    int seen[256][2];  /* (package_id, core_id) pairs seen so far */
+    int nseen = 0;
+    int cpu;
+    BOOL topo_ok = (logical > 0 && logical <= 256);
+    for (cpu = 0; cpu < logical && topo_ok; cpu++) {
+      char path[128];
+      FILE *fp;
+      int pkg = -1, core = -1;
+      sprintf(path, "/sys/devices/system/cpu/cpu%d/topology/physical_package_id", cpu);
+      fp = fopen(path, "r");
+      if (fp) { if (fscanf(fp, "%d", &pkg) != 1) pkg = -1; fclose(fp); }
+      else topo_ok = FALSE;
+      sprintf(path, "/sys/devices/system/cpu/cpu%d/topology/core_id", cpu);
+      fp = fopen(path, "r");
+      if (fp) { if (fscanf(fp, "%d", &core) != 1) core = -1; fclose(fp); }
+      else topo_ok = FALSE;
+      if (pkg < 0 || core < 0)
+        topo_ok = FALSE;
+      else {
+        int i, dup = FALSE;
+        for (i = 0; i < nseen; i++)
+          if (seen[i][0] == pkg && seen[i][1] == core) { dup = TRUE; break; }
+        if (!dup) { seen[nseen][0] = pkg; seen[nseen][1] = core; nseen++; }
+      }
+    }
+    n = (topo_ok && nseen > 0) ? nseen : logical;
+  }
 #else
   n = 4;
 #endif
@@ -352,6 +396,10 @@ struct arg_options get_command_line_args(int argc, char **argv)
       opts.tptp_out = TRUE;
       argv[i] = "-_";  /* neutralize so getopt skips it */
     }
+    else if (strcmp(argv[i], "-tstp") == 0) {
+      opts.tstp_out = TRUE;
+      argv[i] = "-_";  /* neutralize so getopt skips it */
+    }
     else if (strcmp(argv[i], "-ladr_out") == 0 ||
              strcmp(argv[i], "-ladr-out") == 0) {
       opts.ladr_out = TRUE;
@@ -381,11 +429,28 @@ struct arg_options get_command_line_args(int argc, char **argv)
           exit(1);
         }
         opts.cores = atoi(argv[i + 1]);
-        if (opts.cores < 2) {
-          fprintf(stderr, "%% WARNING: -cores %d too small, using 2.\n", opts.cores);
-          opts.cores = 2;
+        if (opts.cores <= 0) {
+          /* 0, negative, or unparseable (atoi returns 0 on a non-numeric
+             argument too) is never a valid core count -- unlike -cores 1
+             below, this isn't a silly-but-well-formed request that has an
+             obvious sane fallback, it's a malformed one.  Fail loudly
+             rather than silently absorb it. */
+          fprintf(stderr, "Error: -cores %s is not a valid core count "
+                          "(must be a positive integer).\n", argv[i + 1]);
+          exit(1);
         }
-        if (opts.cores > max_cores) {
+        else if (opts.cores == 1) {
+          /* Racing one strategy against itself is pointless overhead, not
+             a request that needs a sensible minimum applied for it --
+             -cores 1 is a no-op: fall through to plain single-strategy
+             auto search, exactly as if -cores had been omitted entirely.
+             (Previously silently upgraded to -cores 2, which surprised a
+             caller expecting "1" to mean "don't race" -- confirmed live
+             2026-08-06: -cores 1 forked 2 concurrent search processes
+             instead of running as a single one.) */
+          opts.cores = -1;
+        }
+        else if (opts.cores > max_cores) {
           fprintf(stderr, "%% WARNING: -cores %d exceeds %d physical cores, using %d.\n",
                   opts.cores, max_cores, max_cores);
           opts.cores = max_cores;
@@ -497,6 +562,33 @@ struct arg_options get_command_line_args(int argc, char **argv)
     }
   }
 
+#ifdef NO_OPEN_MEMSTREAM
+  /* -cores (directly, or via -comp/-casc) needs open_memstream to
+     capture racing children's output; this build was compiled without
+     it (see the HAS_OMS check in the Makefile). Silently falling back
+     to a single, non-raced search here would look identical to a
+     genuinely hard problem timing out -- exactly what happened in a
+     real bug report (GitHub issue #4) before the actual cause (a
+     Makefile feature-test false negative on newer GCC) was found.
+     Fail loudly instead: a user who explicitly asked to race N
+     strategies deserves to know that request was silently impossible,
+     not to burn their whole time budget on a single strategy without
+     any indication why. */
+  if (opts.cores > 0) {
+    fprintf(stderr,
+      "Error: -cores (or -comp/-casc, which imply it) requires "
+      "open_memstream, which this build does not have.\n"
+      "This is normally auto-detected at build time (see HAS_OMS in "
+      "provers.src/Makefile) -- if your compiler does support "
+      "open_memstream (POSIX.1-2008, standard on any current Linux/"
+      "macOS 10.13+), rebuild from a clean tree with a current "
+      "compiler.\n"
+      "Without -cores/-comp/-casc, prover9 runs a single strategy "
+      "normally.\n");
+    exit(1);
+  }
+#endif
+
   return opts;
 }  /* get_command_line_args */
 
@@ -539,6 +631,20 @@ void process_command_line_args_1(struct arg_options command_opt,
   }
 
   if (command_opt.tptp_out) {
+    set_flag(prover_opt->tptp_output, FALSE);  // FALSE = no echo
+    set_tptp_mode_for_sig();
+  }
+
+  if (command_opt.tstp_out) {
+    /* -tstp: TSTP/SZS OUTPUT FORMAT ONLY.  Reuses tptp_output's existing
+       print-suppression/SZS-status/fprint_proof_tptp machinery, but
+       deliberately does NOT set opts.tptp_mode -- input is read via the
+       normal native-syntax path (this function's own caller), not the
+       TPTP-scan/SInE/ML-strategy-portfolio pipeline that real -tptp/
+       -tptp_out input goes through. That pipeline is for genuine TPTP
+       problem files; pointing it at native syntax silently produced an
+       empty search (SOS_EMPTY_EXIT) instead of either working or
+       failing loudly, discovered 2026-08-03. */
     set_flag(prover_opt->tptp_output, FALSE);  // FALSE = no echo
     set_tptp_mode_for_sig();
   }
@@ -945,8 +1051,29 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
             int id = str_to_parm_id(name);
             if (id != -1)
               assign_parm(id, val, echo);
-            else
-              fprintf(stderr, "%% Warning: unknown parm '%s' in TPTP comment\n", name);
+            else {
+              int fid = str_to_floatparm_id(name);
+              if (fid != -1)
+                assign_floatparm(fid, (double) val, echo);
+              else
+                fprintf(stderr, "%% Warning: unknown parm '%s' in TPTP comment\n", name);
+            }
+          }
+        }
+        else if (strncmp(cmd, "assoc_comm(", 11) == 0) {
+          /* Declaration, not a flag/parm: TPTP mode has no native AC syntax,
+             so declare the binary symbol AC here (before clause building at
+             Phase 2), matching the LADR-mode assoc_comm() directive. */
+          char name[256];
+          int ni = 0;
+          const char *cp = cmd + 11;
+          while (*cp && *cp != ')' && ni < 255)
+            name[ni++] = *cp++;
+          name[ni] = '\0';
+          if (ni > 0) {
+            set_assoc_comm(name, TRUE);
+            if (echo)
+              printf("%% assoc_comm(%s) from TPTP comment\n", name);
           }
         }
         else {
@@ -1027,12 +1154,9 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
         /* Phase 3: Parse only selected formulas from saved text */
         tptp = parse_scanned_formulas(scan, keep);
 
-        /* Inject distinct object inequality axioms */
-        {
-          Plist dobj = tptp_distinct_object_axioms(tptp->distinct_objects);
-          if (dobj)
-            tptp->assumptions = plist_cat(tptp->assumptions, dobj);
-        }
+        /* Tag distinct objects (provably_distinct() makes them real to
+           the prover on demand -- docs/distinctness-unification-spec.md) */
+        tptp_tag_distinct_objects(tptp->distinct_objects);
 
         /* Set sine_depth attributes on parsed assumptions.
            Parse order matches scan order for kept entries, so we walk
@@ -1123,12 +1247,9 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
                  scan->n_entries);
         tptp = parse_scanned_formulas(scan, NULL);  /* keep=NULL: parse all */
 
-        /* Inject distinct object inequality axioms */
-        {
-          Plist dobj = tptp_distinct_object_axioms(tptp->distinct_objects);
-          if (dobj)
-            tptp->assumptions = plist_cat(tptp->assumptions, dobj);
-        }
+        /* Tag distinct objects (provably_distinct() makes them real to
+           the prover on demand -- docs/distinctness-unification-spec.md) */
+        tptp_tag_distinct_objects(tptp->distinct_objects);
 
         pi->sos = tptp->assumptions;
         pi->goals = tptp->goals;
@@ -1227,6 +1348,7 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
   accept_list("given_selection", TERMS, FALSE, &(pi->given_selection));
   accept_list("keep",            TERMS, FALSE, &(pi->keep_rules));
   accept_list("delete",          TERMS, FALSE, &(pi->delete_rules));
+  accept_list("discard",         TERMS, FALSE, &(pi->discard));
 
   process_command_line_args_1(opts, pi->options);  // high-level, e.g., auto2
 
@@ -1435,8 +1557,9 @@ Prover_input std_prover_init_and_input(int argc, char **argv,
       }
       if (path != NULL) {
 	const char *base = strrchr(path, '/');
+	int len;
 	base = (base != NULL) ? base + 1 : path;
-	int len = strlen(base);
+	len = strlen(base);
 	/* Strip .p extension */
 	if (len >= 2 && strcmp(base + len - 2, ".p") == 0)
 	  len -= 2;
@@ -1893,8 +2016,29 @@ Prover_scan_result std_prover_init_and_scan(int argc, char **argv)
           int id = str_to_parm_id(name);
           if (id != -1)
             assign_parm(id, val, echo);
-          else
-            fprintf(stderr, "%% Warning: unknown parm '%s' in TPTP comment\n", name);
+          else {
+            int fid = str_to_floatparm_id(name);
+            if (fid != -1)
+              assign_floatparm(fid, (double) val, echo);
+            else
+              fprintf(stderr, "%% Warning: unknown parm '%s' in TPTP comment\n", name);
+          }
+        }
+      }
+      else if (strncmp(cmd, "assoc_comm(", 11) == 0) {
+        /* Declaration, not a flag/parm: TPTP mode has no native AC syntax,
+           so declare the binary symbol AC here (before clause building),
+           matching the LADR-mode assoc_comm() directive. */
+        char name[256];
+        int ni = 0;
+        const char *cp = cmd + 11;
+        while (*cp && *cp != ')' && ni < 255)
+          name[ni++] = *cp++;
+        name[ni] = '\0';
+        if (ni > 0) {
+          set_assoc_comm(name, TRUE);
+          if (echo)
+            printf("%% assoc_comm(%s) from TPTP comment\n", name);
         }
       }
       else {
@@ -2019,12 +2163,9 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
 
       tptp = parse_scanned_formulas(scan, keep);
 
-      /* Inject distinct object inequality axioms */
-      {
-        Plist dobj = tptp_distinct_object_axioms(tptp->distinct_objects);
-        if (dobj)
-          tptp->assumptions = plist_cat(tptp->assumptions, dobj);
-      }
+      /* Tag distinct objects (provably_distinct() makes them real to
+         the prover on demand -- docs/distinctness-unification-spec.md) */
+      tptp_tag_distinct_objects(tptp->distinct_objects);
 
       /* Set sine_depth attributes on parsed assumptions */
       {
@@ -2112,12 +2253,9 @@ Prover_input std_prover_from_scan(Prover_scan_result psr,
                scan->n_entries);
       tptp = parse_scanned_formulas(scan, NULL);
 
-      /* Inject distinct object inequality axioms */
-      {
-        Plist dobj = tptp_distinct_object_axioms(tptp->distinct_objects);
-        if (dobj)
-          tptp->assumptions = plist_cat(tptp->assumptions, dobj);
-      }
+      /* Tag distinct objects (provably_distinct() makes them real to
+         the prover on demand -- docs/distinctness-unification-spec.md) */
+      tptp_tag_distinct_objects(tptp->distinct_objects);
 
       pi->sos = tptp->assumptions;
       pi->goals = tptp->goals;

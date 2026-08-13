@@ -283,10 +283,13 @@ Term topform_to_term(Topform tf)
 
   if (tf->attributes == NULL)
     return t;
-  else
-    return build_binary_term(str_to_sn(attrib_sym(), 2),
-			     t,
-			     attributes_to_term(tf->attributes, attrib_sym()));
+  else {
+    Term atts = attributes_to_term(tf->attributes, attrib_sym());
+    if (atts == NULL)
+      return t;  /* all attributes filtered out (e.g. tptp_name only) */
+    else
+      return build_binary_term(str_to_sn(attrib_sym(), 2), t, atts);
+  }
 }  /* topform_to_term */
 
 /*************

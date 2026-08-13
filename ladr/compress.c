@@ -32,8 +32,17 @@
 /* PUBLIC */
 Term uncompress_term(char *s, int *ip)
 {
-  /* Iterative term construction using explicit stack. */
-  struct { Term node; int child; } stack[1000];
+  /* Iterative term construction using explicit stack.
+     Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume. */
+  typedef struct { Term node; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = -1;
   Term result = NULL;
 
@@ -47,6 +56,15 @@ Term uncompress_term(char *s, int *ip)
       int arity = sn_to_arity(c);
       t = get_rigid_term_dangerously(c, arity);
       if (arity > 0) {
+        if (top + 1 >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         top++;
         stack[top].node = t;
         stack[top].child = 0;
@@ -76,6 +94,8 @@ Term uncompress_term(char *s, int *ip)
     }
   }
 done:
+  if (stack != sbo_buf)
+    safe_free(stack);
   return result;
 }  /* uncompress_term */
 
@@ -88,8 +108,16 @@ done:
 static
 void compress_term_recurse(String_buf sb, Term t)
 {
-  /* Iterative pre-order traversal using explicit stack. */
-  Term stack[1000];
+  /* Iterative pre-order traversal using explicit stack.
+     Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume. */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[0] = t;
 
@@ -105,11 +133,22 @@ void compress_term_recurse(String_buf sb, Term t)
       sb_append_char(sb, SYMNUM(cur));
       /* Push children in reverse order so leftmost is processed first. */
       for (i = ARITY(cur) - 1; i >= 0; i--) {
+        if (top + 1 >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         top++;
         stack[top] = ARG(cur, i);
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
 }  /* compress_term_recurse */
 
 /*************

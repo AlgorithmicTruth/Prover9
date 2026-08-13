@@ -39,10 +39,21 @@ struct trail {
     tr->next = *trp; *trp = tr; }
 
 #define MAX_MULTIPLIERS 500
+#define MULT_BITS_PER_WORD (8 * (int) sizeof(unsigned long long))
+#define MULT_WORDS ((MAX_MULTIPLIERS + MULT_BITS_PER_WORD - 1) / MULT_BITS_PER_WORD)
 
 /* Private variables */
 
-static BOOL Multipliers[MAX_MULTIPLIERS]; /* (m[i]==FALSE) => i is available */
+/* Bitset over multiplier ids: bit i set => multiplier i is in use.
+   Same "lowest free id first" allocation policy as the old linear scan
+   over Multipliers[MAX_MULTIPLIERS] (multiplier values feed into
+   variable renumbering elsewhere, so the assignment policy -- not just
+   determinism of the sequence -- must match exactly), but O(1) instead
+   of O(MAX_MULTIPLIERS): __builtin_ctzll finds the lowest zero bit in
+   the first word that has one. Bits >= MAX_MULTIPLIERS in the last word
+   are pre-set (see init below) so they are never handed out. */
+static unsigned long long Multiplier_words[MULT_WORDS];
+static BOOL Multiplier_words_init = FALSE;
 
 /*************
  *
@@ -53,15 +64,46 @@ static BOOL Multipliers[MAX_MULTIPLIERS]; /* (m[i]==FALSE) => i is available */
 static
 int next_available_multiplier()
 {
-  int i;
-  for (i = 0; i < MAX_MULTIPLIERS; i++)
-    if (!Multipliers[i]) {
-      Multipliers[i] = TRUE;
-      return i;
+  int w;
+
+  if (!Multiplier_words_init) {
+    int total_bits = MULT_WORDS * MULT_BITS_PER_WORD;
+    int extra = total_bits - MAX_MULTIPLIERS;  /* unused high bits, last word */
+    Multiplier_words_init = TRUE;
+    if (extra > 0)
+      Multiplier_words[MULT_WORDS-1] = ~0ULL << (MULT_BITS_PER_WORD - extra);
+  }
+
+  for (w = 0; w < MULT_WORDS; w++) {
+    unsigned long long avail = ~Multiplier_words[w];
+    if (avail != 0) {
+      int bit = __builtin_ctzll(avail);
+      Multiplier_words[w] |= (1ULL << bit);
+      return w * MULT_BITS_PER_WORD + bit;
     }
+  }
   fatal_error("next_available_multiplier, none available (infinite loop?).");
   return -1;  /* to quiet compiler */
 }  /* next_available_multiplier */
+
+/*************
+ *
+ *   multiplier_in_use() / clear_multiplier()
+ *
+ *************/
+
+static
+BOOL multiplier_in_use(int i)
+{
+  return (Multiplier_words[i / MULT_BITS_PER_WORD] &
+	  (1ULL << (i % MULT_BITS_PER_WORD))) != 0;
+}  /* multiplier_in_use */
+
+static
+void clear_multiplier(int i)
+{
+  Multiplier_words[i / MULT_BITS_PER_WORD] &= ~(1ULL << (i % MULT_BITS_PER_WORD));
+}  /* clear_multiplier */
 
 /*
  * memory management
@@ -119,9 +161,9 @@ Context get_context(void)
 /* PUBLIC */
 void free_context(Context p)
 {
-  if (Multipliers[p->multiplier] == FALSE)
+  if (!multiplier_in_use(p->multiplier))
     fatal_error("free_context, bad multiplier");
-  Multipliers[p->multiplier] = FALSE;
+  clear_multiplier(p->multiplier);
   /* Push onto private free list instead of returning to palloc.
      The Context is already clean (terms[]/contexts[] all NULL)
      because callers undo all bindings before freeing. */
@@ -264,8 +306,19 @@ BOOL unify(Term t1, Context c1,
 {
   /* Iterative unification using explicit stack.
      On failure, restore trail to entry state and return FALSE. */
-  struct { Term t1; Term t2; Context c1; Context c2;
-           int child; int arity; } stack[1000];
+  /* Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume (confirmed
+     ~40% wall-clock regression on Scharle24_2D3_D3_to_Nicod_16h,
+     136M+ clause generations). */
+  typedef struct { Term t1; Term t2; Context c1; Context c2;
+                   int child; int arity; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   Trail entry_trail = *trp;
   Term s1 = t1, s2 = t2;
@@ -277,7 +330,17 @@ BOOL unify(Term t1, Context c1,
 
     if (VARIABLE(s1)) {
       int vn1 = VARNUM(s1);
+      /* BIND_TR/DEREFERENCE index Context.terms[]/contexts[], sized
+         MAX_VARS; an out-of-range varnum (callers that unify terms
+         carrying apply()'s multiplier*MAX_VARS+VARNUM encoding
+         without renumbering first -- see term_has_oob_var's callers
+         in just.c) would read/write past the Context struct into
+         whatever heap memory follows it instead of a clean failure. */
+      if (vn1 >= MAX_VARS)
+        goto fail;
       if (VARIABLE(s2)) {
+        if (VARNUM(s2) >= MAX_VARS)
+          goto fail;
         if (!(vn1 == VARNUM(s2) && sc1 == sc2)) {
           BIND_TR(vn1, sc1, s2, sc2, trp)
         }
@@ -290,6 +353,8 @@ BOOL unify(Term t1, Context c1,
     }
     else if (VARIABLE(s2)) {
       int vn2 = VARNUM(s2);
+      if (vn2 >= MAX_VARS)
+        goto fail;
       if (!occur_check(vn2, sc2, s1, sc1))
         goto fail;
       BIND_TR(vn2, sc2, s1, sc1, trp)
@@ -297,8 +362,25 @@ BOOL unify(Term t1, Context c1,
     else if (SYMNUM(s1) != SYMNUM(s2)) {
       goto fail;
     }
+    else if (ARITY(s1) != ARITY(s2)) {
+      /* Same symbol, different arity -- only reachable via a flattened
+         AC representation reaching plain unify() (search itself uses
+         unify_ac for AC symbols).  Without this check the stack-frame
+         push below sizes on ARITY(s1) alone and the pop loop indexes
+         ARG(t2, c) past t2's actual arg array. */
+      goto fail;
+    }
     else if (ARITY(s1) > 0) {
       /* Push frame for complex term pair */
+      if (top >= cap) {
+        int new_cap = cap * 2;
+        Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+        memcpy(new_stack, stack, cap * sizeof(Sframe));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       stack[top].t1 = s1; stack[top].c1 = sc1;
       stack[top].t2 = s2; stack[top].c2 = sc2;
       stack[top].child = 1; stack[top].arity = ARITY(s1);
@@ -320,6 +402,8 @@ BOOL unify(Term t1, Context c1,
       }
       top--;
     }
+    if (stack != sbo_buf)
+      safe_free(stack);
     return TRUE;
     next_pair: continue;
   }
@@ -329,14 +413,16 @@ fail:
     /* Restore trail to entry state. */
     Trail tp = *trp;
     while (tp != entry_trail) {
+      Trail t3 = tp;
       tp->context->terms[tp->varnum] = NULL;
       tp->context->contexts[tp->varnum] = NULL;
-      Trail t3 = tp;
       tp = tp->next;
       free_trail(t3);
     }
     *trp = entry_trail;
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return FALSE;
 }  /* unify */
 
@@ -394,7 +480,18 @@ is the variable in question.
 /* PUBLIC */
 BOOL occur_check(int vn, Context vc, Term t, Context c)
 {
-  struct { Term t; Context c; int child; } stack[1000];
+  /* Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume (confirmed
+     ~40% wall-clock regression on Scharle24_2D3_D3_to_Nicod_16h,
+     136M+ clause generations). */
+  typedef struct { Term t; Context c; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   Term s = t;
   Context sc = c;
@@ -405,8 +502,11 @@ BOOL occur_check(int vn, Context vc, Term t, Context c)
     }
     else if (VARIABLE(s)) {
       int tvn = VARNUM(s);
-      if (tvn == vn && sc == vc)
+      if (tvn == vn && sc == vc) {
+        if (stack != sbo_buf)
+          safe_free(stack);
         return FALSE;
+      }
       else if (sc->terms[tvn] != NULL) {
         /* Follow the binding (tail call in original) */
         Term nt = sc->terms[tvn];
@@ -417,6 +517,15 @@ BOOL occur_check(int vn, Context vc, Term t, Context c)
       /* else uninstantiated variable, ok */
     }
     else if (ARITY(s) > 0) {
+      if (top >= cap) {
+        int new_cap = cap * 2;
+        Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+        memcpy(new_stack, stack, cap * sizeof(Sframe));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       stack[top].t = s; stack[top].c = sc; stack[top].child = 1; top++;
       s = ARG(s,0);
       continue;
@@ -434,6 +543,8 @@ BOOL occur_check(int vn, Context vc, Term t, Context c)
       }
       top--;
     }
+    if (stack != sbo_buf)
+      safe_free(stack);
     return TRUE;
     next: continue;
   }
@@ -522,7 +633,18 @@ static BOOL match_anyconst(Term t1, Term t2, int *anyctx, Ilist *anytrp)
 BOOL match_hints(Term t1, Context c1, Term t2, Trail *trp,
                  int *anyctx, Ilist *anytrp)
 {
-  struct { Term t1; Term t2; int child; int arity; } stack[1000];
+  /* Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume (confirmed
+     ~40% wall-clock regression on Scharle24_2D3_D3_to_Nicod_16h,
+     136M+ clause generations). */
+  typedef struct { Term t1; Term t2; int child; int arity; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   Trail entry_trail = *trp;
   Ilist entry_anytrp = (anytrp != NULL) ? *anytrp : NULL;
@@ -556,6 +678,15 @@ BOOL match_hints(Term t1, Context c1, Term t2, Trail *trp,
       goto fail;
     }
     else if (ARITY(s1) > 0) {
+      if (top >= cap) {
+        int new_cap = cap * 2;
+        Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+        memcpy(new_stack, stack, cap * sizeof(Sframe));
+        if (stack != sbo_buf)
+          safe_free(stack);
+        stack = new_stack;
+        cap = new_cap;
+      }
       stack[top].t1 = s1; stack[top].t2 = s2;
       stack[top].child = 1; stack[top].arity = ARITY(s1);
       top++;
@@ -575,6 +706,8 @@ BOOL match_hints(Term t1, Context c1, Term t2, Trail *trp,
       }
       top--;
     }
+    if (stack != sbo_buf)
+      safe_free(stack);
     return TRUE;
     next_pair: continue;
   }
@@ -583,8 +716,8 @@ fail:
   {
     Trail tp = *trp;
     while (tp != entry_trail) {
-      tp->context->terms[tp->varnum] = NULL;
       Trail t3 = tp;
+      tp->context->terms[tp->varnum] = NULL;
       tp = tp->next;
       free_trail(t3);
     }
@@ -597,6 +730,8 @@ fail:
       *anytrp = ilist_pop(*anytrp);
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return FALSE;
 }  /* match_hints */
 
@@ -640,6 +775,22 @@ See the explanation of unify() for an example of the use of apply().
 /* PUBLIC */
 Term apply(Term t, Context c)
 {
+  /* Iterative apply using explicit stack (Pattern C). */
+  /* Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume (confirmed
+     ~40% wall-clock regression on Scharle24_2D3_D3_to_Nicod_16h,
+     136M+ clause generations). */
+  typedef struct { Term src; Context ctx; Term dst; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
+  int top = 0;
+  Term root;
+
   DEREFERENCE(t, c)
 
   if (VARIABLE(t)) {
@@ -649,11 +800,7 @@ Term apply(Term t, Context c)
       return get_variable_term(c->multiplier * MAX_VARS + VARNUM(t));
   }
 
-  /* Iterative apply using explicit stack (Pattern C). */
-  struct { Term src; Context ctx; Term dst; int child; } stack[1000];
-  int top = 0;
-
-  Term root = get_rigid_term_like(t);
+  root = get_rigid_term_like(t);
   stack[top].src = t; stack[top].ctx = c; stack[top].dst = root;
   stack[top].child = 0; top++;
 
@@ -668,9 +815,9 @@ Term apply(Term t, Context c)
       top--;
     }
     else {
-      stack[idx].child = ch + 1;
       Term child = ARG(src, ch);
       Context cc = ctx;
+      stack[idx].child = ch + 1;
       DEREFERENCE(child, cc)
 
       if (VARIABLE(child)) {
@@ -683,6 +830,15 @@ Term apply(Term t, Context c)
         Term child_dst = get_rigid_term_like(child);
         ARG(dst, ch) = child_dst;
         if (ARITY(child) > 0) {
+          if (top >= cap) {
+            int new_cap = cap * 2;
+            Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+            memcpy(new_stack, stack, cap * sizeof(Sframe));
+            if (stack != sbo_buf)
+              safe_free(stack);
+            stack = new_stack;
+            cap = new_cap;
+          }
           stack[top].src = child; stack[top].ctx = cc;
           stack[top].dst = child_dst; stack[top].child = 0;
           top++;
@@ -690,6 +846,8 @@ Term apply(Term t, Context c)
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return root;
 }  /* apply */
 
@@ -713,15 +871,27 @@ the appropriate instance of p[beta] in one step by using this routine.
 Term apply_substitute(Term t, Term beta, Context c_from,
 		      Term into_term, Context c_into)
 {
+  /* Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume (confirmed
+     ~40% wall-clock regression on Scharle24_2D3_D3_to_Nicod_16h,
+     136M+ clause generations). */
+  typedef struct { Term src; Term dst; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
+  int top = 0;
+  Term root;
+
   if (t == into_term)
     return apply(beta, c_from);
   if (VARIABLE(t))
     return apply(t, c_into);
 
-  struct { Term src; Term dst; int child; } stack[1000];
-  int top = 0;
-
-  Term root = get_rigid_term_like(t);
+  root = get_rigid_term_like(t);
   stack[top].src = t; stack[top].dst = root; stack[top].child = 0; top++;
 
   while (top > 0) {
@@ -734,8 +904,8 @@ Term apply_substitute(Term t, Term beta, Context c_from,
       top--;
     }
     else {
-      stack[idx].child = ch + 1;
       Term child = ARG(src, ch);
+      stack[idx].child = ch + 1;
       if (child == into_term) {
         ARG(dst, ch) = apply(beta, c_from);
       }
@@ -746,12 +916,23 @@ Term apply_substitute(Term t, Term beta, Context c_from,
         Term child_dst = get_rigid_term_like(child);
         ARG(dst, ch) = child_dst;
         if (ARITY(child) > 0) {
+          if (top >= cap) {
+            int new_cap = cap * 2;
+            Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+            memcpy(new_stack, stack, cap * sizeof(Sframe));
+            if (stack != sbo_buf)
+              safe_free(stack);
+            stack = new_stack;
+            cap = new_cap;
+          }
           stack[top].src = child; stack[top].dst = child_dst;
           stack[top].child = 0; top++;
         }
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return root;
 }  /* apply_substitute */
 
@@ -772,26 +953,48 @@ probably shared, and we have to specify an *occurrence*.)
 Term apply_substitute2(Term t, Term beta, Context c_from,
 		       Ilist into_pos, Context c_into)
 {
+  /* Follow the position path iteratively, building terms along the way.
+     Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume (confirmed
+     ~40% wall-clock regression on Scharle24_2D3_D3_to_Nicod_16h,
+     136M+ clause generations). */
+  typedef struct { Term src; Term dst; int arg_pos; } Pframe;
+  Pframe sbo_buf[64];
+  Pframe *path = sbo_buf;
+  int cap = 64;
+  int depth = 0;
+  Term src = t;
+  Ilist pos = into_pos;
+  Term result;
+  int j;
+
   if (into_pos == NULL)
     return apply(beta, c_from);
   if (VARIABLE(t))
     return apply(t, c_into);
 
-  /* Follow the position path iteratively, building terms along the way. */
-  struct { Term src; Term dst; int arg_pos; } path[1000];
-  int depth = 0;
-  Term src = t;
-  Ilist pos = into_pos;
-
   /* Build the spine along the position path */
   while (pos != NULL && !VARIABLE(src)) {
     Term dst = get_rigid_term_like(src);
     int arg_pos = pos->i - 1;
+    int i;
+    if (depth >= cap) {
+      int new_cap = cap * 2;
+      Pframe *new_path = safe_malloc(new_cap * sizeof(Pframe));
+      memcpy(new_path, path, cap * sizeof(Pframe));
+      if (path != sbo_buf)
+        safe_free(path);
+      path = new_path;
+      cap = new_cap;
+    }
     path[depth].src = src; path[depth].dst = dst;
     path[depth].arg_pos = arg_pos;
     depth++;
     /* Apply all non-path children */
-    int i;
     for (i = 0; i < ARITY(src); i++) {
       if (i != arg_pos)
         ARG(dst, i) = apply(ARG(src, i), c_into);
@@ -801,19 +1004,19 @@ Term apply_substitute2(Term t, Term beta, Context c_from,
   }
 
   /* At the end of the path */
-  Term result;
   if (pos == NULL)
     result = apply(beta, c_from);
   else
     result = apply(src, c_into);
 
   /* Link back up the spine */
-  int j;
   for (j = depth - 1; j >= 0; j--) {
     ARG(path[j].dst, path[j].arg_pos) = result;
     result = path[j].dst;
   }
 
+  if (path != sbo_buf)
+    safe_free(path);
   return result;
 }  /* apply_substitute2 */
 
@@ -836,16 +1039,31 @@ Term apply_substitute2(Term t, Term beta, Context c_from,
 /* PUBLIC */
 Term apply_demod(Term t, Context c, int flag)
 {
+  /* Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume (confirmed
+     ~40% wall-clock regression on Scharle24_2D3_D3_to_Nicod_16h,
+     136M+ clause generations). */
+  typedef struct { Term src; Term dst; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
+  int top = 0;
+  Term root;
+
+  /* A NULL context means copy the term verbatim (variables stay
+     variables).  contract_bt uses this for the unmatched remainder
+     of an AC term (EQP's apply_demod had the same convention). */
   if (VARIABLE(t)) {
-    Term b = copy_term(c->terms[VARNUM(t)]);
+    Term b = copy_term(c == NULL ? t : c->terms[VARNUM(t)]);
     term_flag_set(b, flag);
     return b;
   }
 
-  struct { Term src; Term dst; int child; } stack[1000];
-  int top = 0;
-
-  Term root = get_rigid_term_like(t);
+  root = get_rigid_term_like(t);
   stack[top].src = t; stack[top].dst = root; stack[top].child = 0; top++;
 
   while (top > 0) {
@@ -858,10 +1076,10 @@ Term apply_demod(Term t, Context c, int flag)
       top--;
     }
     else {
-      stack[idx].child = ch + 1;
       Term child = ARG(src, ch);
+      stack[idx].child = ch + 1;
       if (VARIABLE(child)) {
-        Term b = copy_term(c->terms[VARNUM(child)]);
+        Term b = copy_term(c == NULL ? child : c->terms[VARNUM(child)]);
         term_flag_set(b, flag);
         ARG(dst, ch) = b;
       }
@@ -869,12 +1087,23 @@ Term apply_demod(Term t, Context c, int flag)
         Term child_dst = get_rigid_term_like(child);
         ARG(dst, ch) = child_dst;
         if (ARITY(child) > 0) {
+          if (top >= cap) {
+            int new_cap = cap * 2;
+            Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+            memcpy(new_stack, stack, cap * sizeof(Sframe));
+            if (stack != sbo_buf)
+              safe_free(stack);
+            stack = new_stack;
+            cap = new_cap;
+          }
           stack[top].src = child; stack[top].dst = child_dst;
           stack[top].child = 0; top++;
         }
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return root;
 }  /* apply_demod */
 
@@ -1111,7 +1340,18 @@ The anyvar_ctx array (size MAX_ANYVARS) tracks _/_1.._9 bindings.
 /* PUBLIC */
 BOOL match_weight(Term t1, Context c1, Term t2, Trail *trp, int *anyvar_ctx)
 {
-  struct { Term t1; Term t2; int child; int arity; } stack[1000];
+  /* Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume (confirmed
+     ~40% wall-clock regression on Scharle24_2D3_D3_to_Nicod_16h,
+     136M+ clause generations). */
+  typedef struct { Term t1; Term t2; int child; int arity; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   Trail entry_trail = *trp;
   Term s1 = t1, s2 = t2;
@@ -1142,6 +1382,15 @@ BOOL match_weight(Term t1, Context c1, Term t2, Trail *trp, int *anyvar_ctx)
         goto fail;
       }
       else if (ARITY(s1) > 0) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top].t1 = s1; stack[top].t2 = s2;
         stack[top].child = 1; stack[top].arity = ARITY(s1);
         top++;
@@ -1161,6 +1410,8 @@ BOOL match_weight(Term t1, Context c1, Term t2, Trail *trp, int *anyvar_ctx)
       }
       top--;
     }
+    if (stack != sbo_buf)
+      safe_free(stack);
     return TRUE;
     next_pair: continue;
   }
@@ -1169,13 +1420,15 @@ fail:
   {
     Trail tp = *trp;
     while (tp != entry_trail) {
-      tp->context->terms[tp->varnum] = NULL;
       Trail t3 = tp;
+      tp->context->terms[tp->varnum] = NULL;
       tp = tp->next;
       free_trail(t3);
     }
     *trp = entry_trail;
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return FALSE;
 }  /* match_weight */
 
@@ -1351,20 +1604,46 @@ This routine checks if a subsitution would change a term, if applied.
 /* PUBLIC */
 BOOL subst_changes_term(Term t, Context c)
 {
-  Term stack[1000];
+  /* Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume (confirmed
+     ~40% wall-clock regression on Scharle24_2D3_D3_to_Nicod_16h,
+     136M+ clause generations). */
+  Term sbo_buf[64];
+  Term *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   stack[top++] = t;
   while (top > 0) {
     Term s = stack[--top];
     if (VARIABLE(s)) {
-      if (c->terms[VARNUM(s)] != NULL) return TRUE;
+      if (c->terms[VARNUM(s)] != NULL) {
+        if (stack != sbo_buf)
+          safe_free(stack);
+        return TRUE;
+      }
     }
     else {
       int i;
-      for (i = ARITY(s) - 1; i >= 0; i--)
+      for (i = ARITY(s) - 1; i >= 0; i--) {
+        if (top >= cap) {
+          int new_cap = cap * 2;
+          Term *new_stack = safe_malloc(new_cap * sizeof(Term));
+          memcpy(new_stack, stack, cap * sizeof(Term));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stack[top++] = ARG(s,i);
+      }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return FALSE;
 }  /* subst_changes_term */
 

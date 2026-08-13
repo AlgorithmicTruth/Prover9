@@ -163,6 +163,7 @@ void put_just_to_ibuf(Ibuffer ibuf, Just j)
     case DENY_JUST:
     case COPY_JUST:
     case BACK_DEMOD_JUST:
+    case AC_EXT_JUST:
     case BACK_UNIT_DEL_JUST:
     case FLIP_JUST:
     case XX_JUST:
@@ -224,6 +225,7 @@ Just get_just_from_ibuf(Ibuffer ibuf)
     case DENY_JUST:
     case COPY_JUST:
     case BACK_DEMOD_JUST:
+    case AC_EXT_JUST:
     case BACK_UNIT_DEL_JUST:
     case FLIP_JUST:
     case XX_JUST:

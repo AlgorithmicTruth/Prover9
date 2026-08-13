@@ -116,7 +116,17 @@ static unsigned Btm_state_gets, Btm_state_frees;
 static
 Ac_match_pos get_ac_match_pos(void)
 {
-  Ac_match_pos p = get_cmem(PTRS_AC_MATCH_POS);
+  /* Large fixed arrays (MAX_ACM_ARGS=2500).  match_ac rewrites the arrays
+     it uses; only the free-var list pointers must start NULL so a failed
+     match's cleanup (while free_first) is safe without a full memset. */
+  Ac_match_pos p = get_mem(PTRS_AC_MATCH_POS);
+  p->free_first = NULL;
+  p->free_last = NULL;
+  p->partial_term_size = 0;
+  p->next = NULL;
+  p->bound_count = 0;
+  p->last_a1_symbol = -1;
+  p->n1 = p->n2 = 0;
   Ac_match_pos_gets++;
   return(p);
 }  /* get_ac_match_pos */
@@ -143,7 +153,12 @@ void free_ac_match_pos(Ac_match_pos p)
 static
 Ac_match_free_vars_pos get_ac_match_free_vars_pos(void)
 {
-  Ac_match_free_vars_pos p = get_cmem(PTRS_AC_MATCH_FREE_VARS_POS);
+  Ac_match_free_vars_pos p = get_mem(PTRS_AC_MATCH_FREE_VARS_POS);
+  p->prev = NULL;
+  p->next = NULL;
+  p->n = 0;
+  p->coef = 0;
+  p->varnum = 0;
   Ac_match_free_vars_pos_gets++;
   return(p);
 }  /* get_ac_match_free_vars_pos */
@@ -170,9 +185,18 @@ void free_ac_match_free_vars_pos(Ac_match_free_vars_pos p)
 static
 Btm_state get_btm_state(void)
 {
-  Btm_state p = get_cmem(PTRS_BTM_STATE);
+  /* Hot on AC matching; skip full get_cmem memset. */
+  Btm_state p = get_mem(PTRS_BTM_STATE);
+  p->parent = p->next = p->prev = p->first_child = p->last_child = NULL;
+  p->t1 = p->t2 = NULL;
+  p->c1 = NULL;
   p->varnum = -1;
+  p->cb = NULL;
   p->alternative = NO_ALT;
+  p->flipped = 0;
+  p->position_bt = NULL;
+  p->acm = NULL;
+  p->partial = 0;
   Btm_state_gets++;
   return(p);
 }  /* get_btm_state */
@@ -261,33 +285,76 @@ void p_btm_mem()
  *
  *************/
 
+/* Append one non-AC leaf into the multiset arrays. */
 static
-void flatten_mult(Term t, Term *a, int *m, int *ip, int *totp,
-		  int (*comp_proc) (void *, void *))
+int flatten_mult_add(Term t1, Term *a, int *m, int *ip, int *totp,
+		     int (*comp_proc) (void *, void *), int use_ident)
+{
+  (*totp)++;
+  if (*ip > 0 &&
+      (use_ident
+       ? term_ident(t1, a[(*ip)-1])
+       : ((*comp_proc)(t1, a[(*ip)-1]) == SAME_AS)))
+    m[(*ip)-1]++;
+  else {
+    if (*ip >= MAX_ACM_ARGS)
+      return 0;
+    a[*ip] = t1;
+    m[*ip] = 1;
+    (*ip)++;
+  }
+  return 1;
+}
+
+static
+int flatten_mult(Term t, Term *a, int *m, int *ip, int *totp,
+		 int (*comp_proc) (void *, void *))
 {
   Term t1;
   int sn, i;
 
   sn = SYMNUM(t);
+
+  /* Fast path: binary right-associated + already sorted (ac_canonical
+     subject).  Walk the spine iteratively and collapse multiples with
+     term_ident instead of full term_compare_ncv.  Returns -1 to ask the
+     caller to retry with the general path (left-nested input). */
+  if (ARITY(t) == 2) {
+    int start_ip = *ip, start_tot = *totp;
+    Term u = t;
+    int ok = 1;
+    while (ok && COMPLEX(u) && SYMNUM(u) == sn && ARITY(u) == 2) {
+      Term left = ARG(u, 0);
+      if (COMPLEX(left) && SYMNUM(left) == sn) {
+	ok = 0;
+	break;
+      }
+      if (!flatten_mult_add(left, a, m, ip, totp, comp_proc, 1))
+	return 0;
+      u = ARG(u, 1);
+    }
+    if (ok) {
+      if (!flatten_mult_add(u, a, m, ip, totp, comp_proc, 1))
+	return 0;
+      return 1;
+    }
+    /* Rewind and fall through to general recursive path. */
+    *ip = start_ip;
+    *totp = start_tot;
+  }
+
   for (i = 0; i < ARITY(t); i++) {
     t1 = ARG(t,i);
-    if (SYMNUM(t1) == sn)
-      flatten_mult(t1, a, m, ip, totp, comp_proc);
+    if (SYMNUM(t1) == sn) {
+      if (!flatten_mult(t1, a, m, ip, totp, comp_proc))
+	return 0;
+    }
     else {
-      (*totp)++;
-      if (*ip > 0 && (*comp_proc)(t1, a[(*ip)-1]) == SAME_AS)
-	m[(*ip)-1]++;
-      else {
-	if (*ip >= MAX_ACM_ARGS) {
-	  fprint_term(stdout, t);
-	  fatal_error("flatten_mult, too many arguments.");
-	}
-	a[*ip] = t1;
-	m[*ip] = 1;
-	(*ip)++;
-      }
+      if (!flatten_mult_add(t1, a, m, ip, totp, comp_proc, 0))
+	return 0;
     }
   }
+  return 1;
 }  /* flatten_mult */
 
 /*************
@@ -677,9 +744,55 @@ int match_ac(Term t1, Context c1, Term t2, Btm_state bt)
     ac->free_first = NULL; ac->partial_term_size = 0;
     n1 = 0; n2 = 0; total2 = 0; 
     flatten(t1, ac->args1, &n1);
-    flatten_mult(t2, ac->args2, ac->mults2, &n2, &total2,
-		 (int (*)(void*,void*)) term_compare_ncv);
-    if (n1 > total2)  /* fail if t1 has more arguments */
+    /* match_ac requires functors to precede variables in args1 (its
+       "ac_canonical" precondition, used below to set last_a1_symbol).  A
+       pattern term can reach here NOT ac_canonical -- e.g. an input axiom
+       demodulator whose AC subterm is in var-before-functor input order.
+       That made last_a1_symbol mis-count and a functor got treated as an
+       absorbing free variable, yielding an unsound match.  Partition
+       explicitly so the invariant always holds.
+
+       Avoid Term part[MAX_ACM_ARGS] (~20KB stack / chkstk every call):
+       skip when already partitioned; otherwise use a small local buffer
+       (typical n1 is tiny) or a heap block for the rare huge case. */
+    {
+      int j, need = 0;
+      for (j = 0; j < n1; j++) {
+	if (VARIABLE(ac->args1[j])) {
+	  int k;
+	  for (k = j + 1; k < n1; k++)
+	    if (!VARIABLE(ac->args1[k])) { need = 1; break; }
+	  break;
+	}
+      }
+      if (need) {
+#define MATCH_AC_PART_LOCAL 64
+	Term local[MATCH_AC_PART_LOCAL];
+	Term *part;
+	int k = 0;
+	if (n1 <= MATCH_AC_PART_LOCAL)
+	  part = local;
+	else {
+	  part = malloc((size_t) n1 * sizeof(Term));
+	  if (part == NULL)
+	    fatal_error("match_ac: malloc partition buffer");
+	}
+	for (j = 0; j < n1; j++)
+	  if (!VARIABLE(ac->args1[j])) part[k++] = ac->args1[j];
+	for (j = 0; j < n1; j++)
+	  if (VARIABLE(ac->args1[j])) part[k++] = ac->args1[j];
+	for (j = 0; j < n1; j++)
+	  ac->args1[j] = part[j];
+	if (part != local)
+	  free(part);
+#undef MATCH_AC_PART_LOCAL
+      }
+    }
+    if (!flatten_mult(t2, ac->args2, ac->mults2, &n2, &total2,
+		      (int (*)(void*,void*)) term_compare_ncv))
+      status = FAILURE;  /* > MAX_ACM_ARGS flattened args: fail the
+			    match attempt instead of dying */
+    else if (n1 > total2)  /* fail if t1 has more arguments */
       status = FAILURE;
     else {
       /* Assume inputs are ac_canonical, so don't sort.       */
@@ -699,7 +812,7 @@ int match_ac(Term t1, Context c1, Term t2, Btm_state bt)
   else {  /* continuation, get next matcher */
     ac = bt->acm;
     if (bt->partial) {
-      printf("WARNING: partial match_ac on continuation.\n");
+      fprintf(stderr, "WARNING: partial match_ac on continuation.\n");
       if (c1->partial_term)
 	clear_partial_term(ac);
     }

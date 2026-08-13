@@ -35,6 +35,7 @@ typedef enum {
   COPY_JUST,          /* Primary    int       (ID)            */
   BACK_DEMOD_JUST,    /* Primary    int       (ID)            */
   BACK_UNIT_DEL_JUST, /* Primary    int       (ID)            */
+  AC_EXT_JUST,        /* Primary    int       (ID)            */
   NEW_SYMBOL_JUST,    /* Primary    int       (ID)            */
   EXPAND_DEF_JUST,    /* Primary    Ilist     (ID,def-ID)     */
   BINARY_RES_JUST,    /* Primary    Ilist                     */
@@ -146,6 +147,8 @@ Just propositional_just(Topform c);
 Just new_symbol_just(Topform c);
 
 Just back_demod_just(Topform c);
+
+Just ac_ext_just(Topform c);
 
 Just back_unit_deletion_just(Topform c);
 

@@ -1,3 +1,8 @@
+# Cross-project note drop zone (see inbox/README.md) -- local only, never
+# committed, mirrors the same convention used in other collaborating
+# projects' repos.
+/inbox/
+
 # Build artifacts -- object files, static libraries, compiled binaries
 *.o
 *.d
@@ -87,5 +92,21 @@ verification/agmv_submit.py
 verification/agmv_local.py
 verification/gdv_local.py
 
-# Internal docs (not for public release)
+# Internal docs (not for public release) -- session/investigation
+# narratives never meant for public consumption; kept locally only.
+# Whole directory ignored by default (not just a per-file list) so a new
+# spec/investigation doc is never committed by accident -- opt a specific,
+# reviewed file in with `git add -f` if it's genuinely meant to ship.
 README.fitelson-otter
+/docs/
+/doc/
+
+# AC-unification scratch/investigation test area -- ad hoc .in/.out/.tstp
+# snapshots from debugging sessions accumulate here (e.g. filenames with
+# personal names baked in, like *.jeff.tstp) and were never meant to be
+# public. Wholesale-ignored like docs/ above; does not retroactively
+# untrack the files already committed here (real algebra test-suite
+# content) -- only stops new ones from being tracked by accident. A
+# specific new file meant to actually join the test suite still needs
+# an explicit, deliberate `git add -f`.
+/tests.ac/

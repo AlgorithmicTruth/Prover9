@@ -17,6 +17,7 @@
 */
 
 #include "demod.h"
+#include "std_options.h"
 #include "dollar.h"
 
 /* Private definitions and types */
@@ -47,7 +48,41 @@ int demodulator_type(Topform c, int lex_dep_demod_lim, BOOL sane)
     Term beta  = ARG(atom, 1);
     int n_alpha = symbol_count(alpha);
     int n_beta = symbol_count(beta);
-      
+
+    /* AC mode (assoc_comm symbols declared): only equations oriented
+       by the AC-compatible weight ordering (ac_term_order, applied in
+       orient_equalities) are adopted, and only as ORIENTED: every
+       rewrite then strictly decreases an AC-invariant measure, so
+       demodulation terminates.  The lex-dependent paths below are not
+       AC-compatible (the stock ordering cycles through AC-canonical
+       forms; measured 437,900 demod-limit hits on a 4-clause problem)
+       and are skipped.  With no AC symbols declared this test never
+       fires. */
+    if (assoc_comm_symbols()) {
+      /* set(ac_demod), default clear: without clause-size bounding
+         (item F), AC-oriented demodulators + btm AC matching drown the
+         search in giant-but-weight-decreasing rewrite chains (EQP ran
+         this combination WITH max_weight 70).  Default: AC equations
+         paramodulate only. */
+      if (!flag(ac_demod_id()))
+        return NOT_DEMODULATOR;
+      if (!oriented_eq(atom))
+        return NOT_DEMODULATOR;
+      /* ac_demod_weight: adopt as a demodulator only if the equation is
+         light enough.  -1 = unbounded (every oriented AC equation is a
+         demodulator, the prior behavior).  A finite bound makes AC
+         demodulation gentler -- fewer/smaller demodulators, less
+         back-demodulation churn -- so the collapsed regime doesn't
+         disable its own useful intermediates.  A non-adopted equation
+         still paramodulates; it just isn't used to rewrite. */
+      {
+        int adw = parm(ac_demod_weight_id());
+        if (adw >= 0 && symbol_count(atom) > adw)
+          return NOT_DEMODULATOR;
+      }
+      return ORIENTED;
+    }
+
     if (oriented_eq(atom))
       return ORIENTED;
     else if (sane && n_alpha != n_beta)
@@ -150,8 +185,15 @@ Term demod(Term t, Mindex demods, int flag, Ilist *just_head,
   /* Iterative demodulation: traverse subterms bottom-up, rewrite at each
      node with re-traversal on rewrite.  Use explicit stack for the
      subterm traversal.  When a rewrite occurs, replace the current term
-     and restart from its children. */
-  struct { Term node; int child; } stack[1000];
+     and restart from its children.
+     Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). */
+  typedef struct { Term node; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top;
 
   if (term_flag(t, flag) || VARIABLE(t))
@@ -175,6 +217,15 @@ Term demod(Term t, Mindex demods, int flag, Ilist *just_head,
       Term ch = ARG(cur, ci);
       stack[top].child++;
       if (!term_flag(ch, flag) && !VARIABLE(ch)) {
+        if (top + 1 >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         top++;
         stack[top].node = ch;
         stack[top].child = 0;
@@ -242,6 +293,8 @@ Term demod(Term t, Mindex demods, int flag, Ilist *just_head,
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return t;
 }  /* demod */
 
@@ -273,6 +326,31 @@ Term contract_bt(Term t, Mindex demods, int flag, Topform *demodulator_ptr)
       Term partial = apply_demod(c->partial_term, NULL, flag);
       contractum = build_binary_term(SYMNUM(t), contractum, partial);
     }
+    /* SOUNDNESS GUARD: every AC-demod match must be genuine.
+       Instantiated demodulator lhs (+ partial remainder) equals subject t
+       modulo AC.  match_ac must never return a match that fails this; if
+       it does, an unsound rewrite is about to happen, so abort loudly.
+       Runs on every rewrite, in every build.
+
+       demod_bt already ac_canonical'd t, so only the constructed lhs
+       needs canonicalization (no copy of t). */
+    {
+      Term chk = apply(ARG(atom,0), c);   /* instantiated demodulator LHS */
+      int good;
+      if (c->partial_term)
+        chk = build_binary_term(SYMNUM(t), chk, copy_term(c->partial_term));
+      ac_canonical(chk, -1);
+      good = term_ident(chk, t);
+      zap_term(chk);
+      if (!good) {
+        fprintf(stderr, "\n%% UNSOUND AC DEMOD MATCH: demodulator id %llu, "
+                "subject: ", (unsigned long long) demodulator->id);
+        fprint_term(stderr, t);
+        fprintf(stderr, "\n");
+        fatal_error("AC demod match verification failed "
+                    "(instantiated lhs != subject mod AC)");
+      }
+    }
     mindex_retrieve_cancel(pos);
   }
   free_context(c);
@@ -288,10 +366,23 @@ Term contract_bt(Term t, Mindex demods, int flag, Topform *demodulator_ptr)
 
 static
 Term demod_bt(Term t, Mindex demods, int psn, int flag,
-	      Ilist *just_head)
+	      I3list *steps, int *sequence)
 {
-  /* Iterative backtrack demodulation with AC canonicalization. */
-  struct { Term node; int child; int parent_sn; } stack[1000];
+  /* Iterative backtrack demodulation with AC canonicalization.
+     Rewrite steps are recorded as <demodulator-id, sequence, direction>
+     triples (the demod_just format).  Under AC canonicalization the
+     sequence numbers are advisory (the term is reshaped between steps,
+     so exact replay is not possible); direction is always 1 because
+     AC-mode demodulators are ORIENTED only.
+     Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling).  (Stack-capacity/storage-strategy handling only; the
+     step-recording logic below is untouched.) */
+  typedef struct { Term node; int child; int parent_sn; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top;
 
   if (term_flag(t, flag) || VARIABLE(t)) {
@@ -319,6 +410,15 @@ Term demod_bt(Term t, Mindex demods, int psn, int flag,
       Term ch = ARG(cur, ci);
       stack[top].child++;
       if (!term_flag(ch, flag) && !VARIABLE(ch)) {
+        if (top + 1 >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         top++;
         stack[top].node = ch;
         stack[top].child = 0;
@@ -340,14 +440,33 @@ Term demod_bt(Term t, Mindex demods, int psn, int flag,
       else {
         Term contractum;
         Topform demodulator;
-        ac_canonical(cur, flag);
+        /* Children are already demodulated (and marked).  For non-AC
+           tops that means cur is already AC-canonical by induction --
+           skip ac_canonical.  AC tops still need it (sort/RA), but
+           ac_canonical early-outs when already sorted+RA. */
+        if (is_assoc_comm(cur_sn))
+          ac_canonical(cur, flag);
+        else {
+          int i, need = 0;
+          for (i = 0; i < ARITY(cur); i++) {
+            Term ch = ARG(cur, i);
+            if (!VARIABLE(ch) && !term_flag(ch, flag)) {
+              need = 1;
+              break;
+            }
+          }
+          if (need)
+            ac_canonical(cur, flag);
+        }
         Demod_attempts++;
+        (*sequence)++;
         contractum = contract_bt(cur, demods, flag, &demodulator);
         if (contractum) {
           Demod_rewrites++;
           zap_term(cur);
+          /* Fresh contractum from apply -- must canonicalize. */
           ac_canonical(contractum, flag);
-          *just_head = ilist_prepend(*just_head, demodulator->id);
+          *steps = i3list_prepend(*steps, demodulator->id, *sequence, 1);
           /* Replace cur with contractum and restart. */
           if (top == 0) {
             t = contractum;
@@ -367,6 +486,8 @@ Term demod_bt(Term t, Mindex demods, int psn, int flag,
       }
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return t;
 }  /* demod_bt */
 
@@ -390,12 +511,45 @@ Term demodulate(Term t, Mindex demods, Ilist *just_head, BOOL lex_order_vars)
 
   if (demods->unif_type == ORDINARY_UNIF)
     result = demod(t, demods, flag, just_head, lex_order_vars);
-  else
-    result = demod_bt(t, demods, -1, flag, just_head);
+  else {
+    /* Legacy callers (rewriter, idfilter) take a plain id list. */
+    I3list steps = NULL;
+    I3list p;
+    int sequence = 0;
+    result = demod_bt(t, demods, -1, flag, &steps, &sequence);
+    for (p = steps; p != NULL; p = p->next)
+      *just_head = ilist_prepend(*just_head, p->i);
+    zap_i3list(steps);
+  }
   term_flag_clear_recursively(result, flag);
   release_term_flag(flag);
   return result;
 }  /* demodulate */
+
+/*************
+ *
+ *   demodulate_ac()
+ *
+ *************/
+
+/* DOCUMENTATION
+Demodulate a term modulo AC (backtrack matching, sub-multiset
+rewriting at AC roots).  The index must be BACKTRACK_UNIF.  Rewrite
+steps are prepended to *steps as <demodulator-id, sequence, direction>
+triples for demod_just; *sequence carries the running subterm-visit
+counter across the literals of one clause.  The result is
+ac_canonical.
+*/
+
+/* PUBLIC */
+Term demodulate_ac(Term t, Mindex demods, I3list *steps, int *sequence)
+{
+  int flag = claim_term_flag();
+  Term result = demod_bt(t, demods, -1, flag, steps, sequence);
+  term_flag_clear_recursively(result, flag);
+  release_term_flag(flag);
+  return result;
+}  /* demodulate_ac */
 
 /*************
  *
@@ -410,8 +564,15 @@ static
 Term demod1_recurse(Term top_term, Term t, Topform demodulator, int direction,
 		    Ilist *ipos, BOOL lex_order_vars)
 {
-  /* Iterative innermost-leftmost single rewrite. */
-  struct { Term node; int child; } stack[1000];
+  /* Iterative innermost-leftmost single rewrite.
+     Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). */
+  typedef struct { Term node; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int stop;
 
   if (VARIABLE(t))
@@ -435,6 +596,15 @@ Term demod1_recurse(Term top_term, Term t, Topform demodulator, int direction,
       Term ch = ARG(cur, ci);
       stack[stop].child++;
       if (!VARIABLE(ch)) {
+        if (stop + 1 >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stop++;
         stack[stop].node = ch;
         stack[stop].child = 0;
@@ -483,6 +653,8 @@ Term demod1_recurse(Term top_term, Term t, Topform demodulator, int direction,
     }
     stop--;
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return t;
 }  /* demod1_recurse */
 
@@ -537,8 +709,15 @@ static
 Term part_recurse(Term top_term, Term t, Topform demod, int target, int direction,
 		  int *sequence, Ilist *ipos)
 {
-  /* Iterative innermost-leftmost search for the target-th matchable subterm. */
-  struct { Term node; int child; } stack[1000];
+  /* Iterative innermost-leftmost search for the target-th matchable subterm.
+     Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). */
+  typedef struct { Term node; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int stop;
 
   if (VARIABLE(t))
@@ -562,6 +741,15 @@ Term part_recurse(Term top_term, Term t, Topform demod, int target, int directio
       Term ch = ARG(cur, ci);
       stack[stop].child++;
       if (!VARIABLE(ch)) {
+        if (stop + 1 >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         stop++;
         stack[stop].node = ch;
         stack[stop].child = 0;
@@ -601,16 +789,23 @@ Term part_recurse(Term top_term, Term t, Topform demod, int target, int directio
         }
         zap_term(cur);
       }
-      else {
-        printf("demodulator%s: ", direction == 1 ? "" : " (R)");
-        fprint_clause(stdout, demod);
-        printf("target=%d: ", target); p_term(cur);
-        fatal_error("part_recurse, not rewitable");
-      }
+      /* else: the target-th node doesn't actually match ordinarily --
+         most commonly because AC canonicalization elsewhere in the term
+         has invalidated the recorded position (demod_bt's own comment:
+         sequence numbers are advisory under AC).  Leave *ipos NULL and
+         fall through without crashing; the loop below unwinds (sequence
+         is now >= target, so every remaining node is skipped) and
+         particular_demod's existing "*ipos == NULL" check reports this
+         as an ordinary "not rewritable" failure -- which xproofs.c's
+         DEMOD_JUST loop already treats as an expand_failed signal (now
+         handled per-clause via expand_proof's fallback, not fatal to
+         the whole proof or the process). */
       free_context(subst);
     }
     stop--;
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return t;
 }  /* part_recurse */
 
@@ -642,7 +837,10 @@ BOOL particular_demod(Topform c, Topform demodulator, int target, int direction,
   }
 
   if (*ipos == NULL) {
-    fprintf(stderr, "particular_demod, clause not rewritable\n");
+    /* Silent failure: under AC compound-chain expansion the recorded
+       sequence is often stale, and callers (particular_demod_scan /
+       expand_proof) retry other positions.  Spamming stderr here made
+       those scans unusable. */
     return FALSE;
   }
   else {

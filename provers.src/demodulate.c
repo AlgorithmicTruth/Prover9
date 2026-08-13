@@ -290,11 +290,37 @@ void demodulate_clause(Topform c, int step_limit, int increase_limit,
   increase_limit = increase_limit == -1 ? INT_MAX : increase_limit;
   starting_step_limit = step_limit;
 
+  if (Demod_idx != NULL && Demod_idx->unif_type == BACKTRACK_UNIF) {
+    /* AC demodulation (item D): btm backtrack matching, so an AC-rooted
+       demodulator rewrites a sub-multiset of a larger AC term (x+x=x
+       rewrites a+a+b).  Every clause through here also leaves in
+       ac_canonical form, the input contract of btm/btu, which in turn
+       makes AC-variant duplicates syntactically identical for
+       subsumption.  Step limits do not apply: AC demodulators are
+       ORIENTED under the AC weight ordering, so every rewrite strictly
+       decreases weight and chains terminate on their own. */
+    Literals lit;
+    I3list steps = NULL;
+    int sequence = 0;
+    for (lit = c->literals; lit != NULL; lit = lit->next) {
+      if (mindex_empty(Demod_idx))
+        ac_canonical(lit->atom, -1);
+      else
+        lit->atom = demodulate_ac(lit->atom, Demod_idx, &steps, &sequence);
+    }
+    upward_clause_links(c);
+    if (steps != NULL) {
+      steps = reverse_i3list(steps);
+      c->justification = append_just(c->justification, demod_just(steps));
+    }
+    return;
+  }
+
   fdemod_clause(c, Demod_idx, &step_limit, &increase_limit, lex_order_vars);
 
   if (step_limit == 0 || increase_limit == -1) {
-    limit_hits++;
     char *mess = (step_limit == 0 ? "step" : "increase");
+    limit_hits++;
 
     if (print) {
       if (limit_hits == 1) {
@@ -332,6 +358,21 @@ Plist back_demodulatable(Topform demod, int type, BOOL lex_order_vars)
 {
   return back_demod_indexed(demod, type, Back_demod_idx, lex_order_vars);
 }  /* back_demodulatable */
+
+/*************
+ *
+ *   back_demodulatable_ac_idx()
+ *
+ *************/
+
+/* DOCUMENTATION
+*/
+
+/* PUBLIC */
+Plist back_demodulatable_ac_idx(Topform demod)
+{
+  return back_demodulatable_ac_indexed(demod, Back_demod_idx);
+}  /* back_demodulatable_ac_idx */
 
 /*************
  *

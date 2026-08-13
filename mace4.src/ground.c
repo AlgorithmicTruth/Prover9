@@ -20,6 +20,7 @@
 
 extern int Domain_size;
 extern Term *Domain;
+extern Term Bool_domain[2];
 extern Plist Ground_clauses;
 extern struct mace_stats Mstats;
 
@@ -336,11 +337,11 @@ Term simp_tv(Term t)
 {
   if (true_term(t)) {
     zap_mterm(t);
-    return Domain[1];
+    return Bool_domain[1];
   }
   else if (false_term(t)) {
     zap_mterm(t);
-    return Domain[0];
+    return Bool_domain[0];
   }
   else if (OR_TERM(t)) {
     t = merge(t);
@@ -353,7 +354,7 @@ Term simp_tv(Term t)
 
       if (TRUE_TERM(ARG(t,0)) || TRUE_TERM(ARG(t,1))) {
 	zap_mterm(t);
-	return Domain[1];
+	return Bool_domain[1];
       }
       else if (FALSE_TERM(ARG(t,0))) {
 	Term t2 = ARG(t,1);
@@ -376,11 +377,11 @@ Term simp_tv(Term t)
     
     if (TRUE_TERM(ARG(t,0))) {
       zap_mterm(t);
-      return Domain[0];
+      return Bool_domain[0];
     }
     else if (FALSE_TERM(ARG(t,0))) {
       zap_mterm(t);
-      return Domain[1];
+      return Bool_domain[1];
     }
     else
       return t;
@@ -395,7 +396,7 @@ Term simp_tv(Term t)
       int b = arith_eval(t, &evaluated);
       if (evaluated) {
 	zap_term(t);
-	return (b ? Domain[1] : Domain[0]);
+	return (b ? Bool_domain[1] : Bool_domain[0]);
       }
       else
 	return t;
@@ -415,7 +416,7 @@ Term simp_tv(Term t)
 	return t;
       if (Cells[id].possible[value] == NULL) {
 	zap_mterm(t);
-	return Domain[0];
+	return Bool_domain[0];
       }
       else
 	return t;

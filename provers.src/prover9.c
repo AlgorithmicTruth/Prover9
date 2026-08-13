@@ -29,18 +29,27 @@
 #include "features.h"
 #include "dtree.h"
 #include "strategy_config.h"
+#include "../ladr/nonport.h"
 
 #ifndef __EMSCRIPTEN__
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/time.h>
 #include <sys/mman.h>
+#include <errno.h>
+#include <string.h>
 /* Portability: older BSD/macOS uses MAP_ANON instead of MAP_ANONYMOUS */
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
 #endif
 #include <signal.h>
 #include <fcntl.h>
+#ifdef __APPLE__
+#ifndef NO_LIBPROC
+#include <libproc.h>
+#endif
+#include <sys/sysctl.h>
+#endif
 #endif /* !__EMSCRIPTEN__ */
 
 #ifndef __EMSCRIPTEN__
@@ -148,6 +157,26 @@ static void install_parent_death_handler(void)
   sigaction(SIGTERM, &sa, NULL);
   sigaction(SIGXCPU, &sa, NULL);
   sigaction(SIGINT, &sa, NULL);
+  /* SIGALRM too: -t N's own internal deadline (armed early in main() via
+     setup_timeout_signal(), before -cores is even known to be active)
+     fires SIGALRM, not SIGTERM. Without this, an -t N timeout reaching
+     zero while -cores children are still running (or SIGSTOP'd mid-
+     slice, mid sliding-window scheduling) falls through to provers.c's
+     generic timeout_handler() instead -- which has no knowledge of
+     cores children at all and just _exit()s, orphaning them. Found via
+     a real 950-problem concurrent sweep (6-way process concurrency,
+     -cores 8, -t 90, no external "timeout" wrapper -- termination
+     relied entirely on this alarm): genuine kernel OOM kills of
+     multiple simultaneous prover9 processes, clustered in time, after
+     ~230 problems -- consistent with orphaned children silently
+     accumulating run over run rather than any single runaway search.
+     This overrides setup_timeout_signal()'s earlier SIGALRM handler
+     the moment -cores actually starts (this function is only called
+     from inside cores_search()/cores_search_ladr(), never before), so
+     the internal-alarm and external-kill paths now behave identically:
+     both go through parent_death_handler(), which kills every tracked
+     child before the parent exits. */
+  sigaction(SIGALRM, &sa, NULL);
 }
 #endif /* !NO_OPEN_MEMSTREAM */
 
@@ -364,6 +393,116 @@ void child_exit(int code)
 
 /*************
  *
+ *   child_rss_megs()
+ *
+ *   Read a child's current resident-set size (RSS), in megabytes,
+ *   directly from the OS -- used for -cores's per-child memory-budget
+ *   enforcement instead of the child's own self-reported megs_used (an
+ *   in-process palloc counter written via shared memory at a handful of
+ *   checkpoints -- see shm_progress_update()). That IPC-reported figure
+ *   can go stale for large-theory problems: preprocessing functions
+ *   like index_and_process_initial_clauses() and predicate_elimination()
+ *   have no progress checkpoints of their own, only calls bracketing
+ *   them, so a child that self-suspends WHILE inside one of them (a
+ *   large SInE-selected theory can occupy an entire Phase-1 slice there)
+ *   reports whatever megs_used was at its last checkpoint -- understating
+ *   real usage by however much that one call has consumed since. Found
+ *   live, 2026-08-11, via an independently-developed prover: an explicit
+ *   8000MB budget was exceeded by 6-7x on a large-theory problem for
+ *   exactly this reason, even though
+ *   the budget arithmetic and the -tptp magic-comment plumbing that sets
+ *   it were both independently confirmed correct.
+ *
+ *   Reading the OS's own RSS accounting sidesteps the gap: it reflects
+ *   ALL memory the process holds, however it was allocated (not just
+ *   palloc-tracked allocations), at the exact moment this is called --
+ *   and since the caller only calls this after confirming WIFSTOPPED,
+ *   the child is genuinely frozen by the time this runs, so the read is
+ *   a true snapshot, not an estimate racing a still-running process.
+ *
+ *   Returns -1 if unavailable (unsupported platform, or the read
+ *   failed -- e.g. the child exited between waitpid() and this call) so
+ *   callers treat "unknown" as "don't kill" rather than misreading -1
+ *   as a real, tiny memory figure.
+ *
+ *************/
+
+static
+long child_rss_megs(pid_t pid)
+{
+#if defined(__linux__)
+  char path[64];
+  FILE *fp;
+  long rss_kb = -1;
+  snprintf(path, sizeof(path), "/proc/%d/status", (int) pid);
+  fp = fopen(path, "r");
+  if (fp != NULL) {
+    char line[256];
+    while (fgets(line, sizeof(line), fp) != NULL) {
+      if (strncmp(line, "VmRSS:", 6) == 0) {
+        sscanf(line + 6, "%ld", &rss_kb);
+        break;
+      }
+    }
+    fclose(fp);
+  }
+  return (rss_kb >= 0) ? (rss_kb / 1024) : -1;
+#elif defined(__APPLE__) && !defined(NO_LIBPROC)
+  struct proc_taskinfo info;
+  int n = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &info, sizeof(info));
+  return (n == (int) sizeof(info))
+         ? (long) (info.pti_resident_size / (1024 * 1024))
+         : -1;
+#else
+  /* No RSS source available on this platform (e.g. an old Darwin/
+     PowerPC SDK predating libproc.h) -- -1 means "unknown", which
+     every caller already treats as "don't kill", not as 0 MB. This
+     only degrades the RSS-based per-child kill check on such a
+     platform; system_ram_megs()'s sysctlbyname-based default budget
+     (below) is unaffected, since it's unrelated to libproc. */
+  (void) pid;
+  return -1;
+#endif
+}  /* child_rss_megs */
+
+/*************
+ *
+ *   system_ram_megs()
+ *
+ *   Return this machine's total physical RAM, in megabytes, or -1 if
+ *   it can't be determined.  Used only to give -cores a machine-aware
+ *   DEFAULT memory budget instead of the fixed 48GB compiled-in
+ *   default (ladr/memory.c's DEFAULT_MAX_MEGS) -- that fixed value is
+ *   fine for an ordinary single-strategy run, but for -cores it's
+ *   backwards on both ends of the hardware range: meaningless on a
+ *   small box (e.g. a 1.9GB Lightsail instance -- 48GB "protection"
+ *   never engages before the box is already in trouble) and needlessly
+ *   conservative on a large one (a 503GB machine could safely allow
+ *   far more per instance).  An explicit assign(max_megs,N) always
+ *   wins over this -- see the parm_is_user_set() check at each call
+ *   site below; this function only feeds the case where the user
+ *   never asked for a specific figure at all. */
+
+static
+long system_ram_megs(void)
+{
+#if defined(__linux__)
+  long pages = sysconf(_SC_PHYS_PAGES);
+  long page_size = sysconf(_SC_PAGE_SIZE);
+  return (pages > 0 && page_size > 0) ? (pages * page_size) / (1024 * 1024) : -1;
+#elif defined(__APPLE__)
+  uint64_t bytes = 0;
+  size_t sz = sizeof(bytes);
+  return (sysctlbyname("hw.memsize", &bytes, &sz, NULL, 0) == 0 && bytes > 0)
+         ? (long) (bytes / (1024 * 1024))
+         : -1;
+#else
+  return -1;
+#endif
+}  /* system_ram_megs */
+
+/*************
+ *
  *   kill_child()
  *
  *   Gracefully kill a child process: wake if stopped (SIGCONT is a
@@ -524,6 +663,18 @@ int pick_best_suspended(struct suspended_child *pool, int n,
  *   Modify options for portfolio strategy idx.
  *   All changes are silent (echo=FALSE).
  *
+ *   Additive, not overriding: every field below is skipped when the
+ *   user has already set the corresponding option explicitly (input
+ *   file, TPTP magic comment, stdin, or command line -- see options.c's
+ *   user_set field and *_is_user_set() accessors).  The portfolio was
+ *   trained on general FOL problems and knows nothing about a specific
+ *   problem's own hand-tuning (e.g. assign(max_weight, 35) chosen for a
+ *   delicate equational derivation); stomping such a choice on 95 of 96
+ *   -cores workers left only the untouched "auto_default" slot doing
+ *   useful work, so -cores N showed real CPU usage on N cores but no
+ *   speedup over N=1.  Only fields
+ *   still at their compiled-in default get the strategy's variation.
+ *
  *************/
 
 static
@@ -531,81 +682,120 @@ void apply_strategy(Prover_options opt, int idx)
 {
   const struct strategy_config *s = &Portfolio[idx];
 
-  if (s->order == 0)
-    assign_stringparm(opt->order, "lpo", FALSE);
-  else if (s->order == 1)
-    assign_stringparm(opt->order, "rpo", FALSE);
-  else if (s->order == 2)
-    assign_stringparm(opt->order, "kbo", FALSE);
+  if (!stringparm_is_user_set(opt->order)) {
+    if (s->order == 0)
+      assign_stringparm(opt->order, "lpo", FALSE);
+    else if (s->order == 1)
+      assign_stringparm(opt->order, "rpo", FALSE);
+    else if (s->order == 2)
+      assign_stringparm(opt->order, "kbo", FALSE);
+  }
 
-  if (s->age_part >= 0)
+  if (s->age_part >= 0 && !parm_is_user_set(opt->age_part))
     assign_parm(opt->age_part, s->age_part, FALSE);
-  if (s->weight_part >= 0)
+  if (s->weight_part >= 0 && !parm_is_user_set(opt->weight_part))
     assign_parm(opt->weight_part, s->weight_part, FALSE);
-  if (s->max_weight >= 0)
+  if (s->max_weight >= 0 && !floatparm_is_user_set(opt->max_weight))
     assign_floatparm(opt->max_weight, (double) s->max_weight, FALSE);
-  if (s->sine_weight >= 0)
+  if (s->sine_weight >= 0 && !parm_is_user_set(opt->sine_weight))
     assign_parm(opt->sine_weight, s->sine_weight, FALSE);
 
-  if (s->binary_resolution == 1) set_flag(opt->binary_resolution, FALSE);
-  else if (s->binary_resolution == 0) clear_flag(opt->binary_resolution, FALSE);
+  if (!flag_is_user_set(opt->binary_resolution)) {
+    if (s->binary_resolution == 1) set_flag(opt->binary_resolution, FALSE);
+    else if (s->binary_resolution == 0) clear_flag(opt->binary_resolution, FALSE);
+  }
 
-  if (s->hyper_resolution == 1) set_flag(opt->hyper_resolution, FALSE);
-  else if (s->hyper_resolution == 0) clear_flag(opt->hyper_resolution, FALSE);
+  if (!flag_is_user_set(opt->hyper_resolution)) {
+    if (s->hyper_resolution == 1) set_flag(opt->hyper_resolution, FALSE);
+    else if (s->hyper_resolution == 0) clear_flag(opt->hyper_resolution, FALSE);
+  }
 
-  if (s->ur_resolution == 1) set_flag(opt->ur_resolution, FALSE);
-  else if (s->ur_resolution == 0) clear_flag(opt->ur_resolution, FALSE);
+  if (!flag_is_user_set(opt->ur_resolution)) {
+    if (s->ur_resolution == 1) set_flag(opt->ur_resolution, FALSE);
+    else if (s->ur_resolution == 0) clear_flag(opt->ur_resolution, FALSE);
+  }
 
-  if (s->paramodulation == 1) set_flag(opt->paramodulation, FALSE);
-  else if (s->paramodulation == 0) clear_flag(opt->paramodulation, FALSE);
+  if (!flag_is_user_set(opt->paramodulation)) {
+    if (s->paramodulation == 1) set_flag(opt->paramodulation, FALSE);
+    else if (s->paramodulation == 0) clear_flag(opt->paramodulation, FALSE);
+  }
 
-  if (s->multi_order_trial == 1) set_flag(opt->multi_order_trial, FALSE);
-  else if (s->multi_order_trial == 0) clear_flag(opt->multi_order_trial, FALSE);
+  if (!flag_is_user_set(opt->multi_order_trial)) {
+    if (s->multi_order_trial == 1) set_flag(opt->multi_order_trial, FALSE);
+    else if (s->multi_order_trial == 0) clear_flag(opt->multi_order_trial, FALSE);
+  }
 
-  if (s->process_initial_sos == 1) set_flag(opt->process_initial_sos, FALSE);
-  else if (s->process_initial_sos == 0) clear_flag(opt->process_initial_sos, FALSE);
+  if (!flag_is_user_set(opt->process_initial_sos)) {
+    if (s->process_initial_sos == 1) set_flag(opt->process_initial_sos, FALSE);
+    else if (s->process_initial_sos == 0) clear_flag(opt->process_initial_sos, FALSE);
+  }
 
-  if (s->back_subsume == 1) set_flag(opt->back_subsume, FALSE);
-  else if (s->back_subsume == 0) clear_flag(opt->back_subsume, FALSE);
+  if (!flag_is_user_set(opt->back_subsume)) {
+    if (s->back_subsume == 1) set_flag(opt->back_subsume, FALSE);
+    else if (s->back_subsume == 0) clear_flag(opt->back_subsume, FALSE);
+  }
 
-  if (s->lightest_first == 1) set_flag(opt->lightest_first, FALSE);
-  else if (s->lightest_first == 0) clear_flag(opt->lightest_first, FALSE);
+  if (!flag_is_user_set(opt->lightest_first)) {
+    if (s->lightest_first == 1) set_flag(opt->lightest_first, FALSE);
+    else if (s->lightest_first == 0) clear_flag(opt->lightest_first, FALSE);
+  }
 
-  if (s->breadth_first == 1) set_flag(opt->breadth_first, FALSE);
-  else if (s->breadth_first == 0) clear_flag(opt->breadth_first, FALSE);
+  if (!flag_is_user_set(opt->breadth_first)) {
+    if (s->breadth_first == 1) set_flag(opt->breadth_first, FALSE);
+    else if (s->breadth_first == 0) clear_flag(opt->breadth_first, FALSE);
+  }
 
-  if (s->safe_unit_conflict == 1) set_flag(opt->safe_unit_conflict, FALSE);
-  else if (s->safe_unit_conflict == 0) clear_flag(opt->safe_unit_conflict, FALSE);
+  if (!flag_is_user_set(opt->safe_unit_conflict)) {
+    if (s->safe_unit_conflict == 1) set_flag(opt->safe_unit_conflict, FALSE);
+    else if (s->safe_unit_conflict == 0) clear_flag(opt->safe_unit_conflict, FALSE);
+  }
 
-  if (s->factor == 1) set_flag(opt->factor, FALSE);
-  else if (s->factor == 0) clear_flag(opt->factor, FALSE);
+  if (!flag_is_user_set(opt->factor)) {
+    if (s->factor == 1) set_flag(opt->factor, FALSE);
+    else if (s->factor == 0) clear_flag(opt->factor, FALSE);
+  }
 
-  if (s->unit_deletion == 1) set_flag(opt->unit_deletion, FALSE);
-  else if (s->unit_deletion == 0) clear_flag(opt->unit_deletion, FALSE);
+  if (!flag_is_user_set(opt->unit_deletion)) {
+    if (s->unit_deletion == 1) set_flag(opt->unit_deletion, FALSE);
+    else if (s->unit_deletion == 0) clear_flag(opt->unit_deletion, FALSE);
+  }
 
-  if (s->para_units_only == 1) set_flag(opt->para_units_only, FALSE);
-  else if (s->para_units_only == 0) clear_flag(opt->para_units_only, FALSE);
+  if (!flag_is_user_set(opt->para_units_only)) {
+    if (s->para_units_only == 1) set_flag(opt->para_units_only, FALSE);
+    else if (s->para_units_only == 0) clear_flag(opt->para_units_only, FALSE);
+  }
 
-  if (s->back_demod == 1) set_flag(opt->back_demod, FALSE);
-  else if (s->back_demod == 0) clear_flag(opt->back_demod, FALSE);
+  if (!flag_is_user_set(opt->back_demod)) {
+    if (s->back_demod == 1) set_flag(opt->back_demod, FALSE);
+    else if (s->back_demod == 0) clear_flag(opt->back_demod, FALSE);
+  }
 
-  if (s->ordered_res == 1) set_flag(opt->ordered_res, FALSE);
-  else if (s->ordered_res == 0) clear_flag(opt->ordered_res, FALSE);
+  if (!flag_is_user_set(opt->ordered_res)) {
+    if (s->ordered_res == 1) set_flag(opt->ordered_res, FALSE);
+    else if (s->ordered_res == 0) clear_flag(opt->ordered_res, FALSE);
+  }
 
-  if (s->ordered_para == 1) set_flag(opt->ordered_para, FALSE);
-  else if (s->ordered_para == 0) clear_flag(opt->ordered_para, FALSE);
+  if (!flag_is_user_set(opt->ordered_para)) {
+    if (s->ordered_para == 1) set_flag(opt->ordered_para, FALSE);
+    else if (s->ordered_para == 0) clear_flag(opt->ordered_para, FALSE);
+  }
 
-  if (s->literal_selection == 0)
-    assign_stringparm(opt->literal_selection, "max_negative", FALSE);
-  else if (s->literal_selection == 1)
-    assign_stringparm(opt->literal_selection, "all_negative", FALSE);
+  if (!stringparm_is_user_set(opt->literal_selection)) {
+    if (s->literal_selection == 0)
+      assign_stringparm(opt->literal_selection, "max_negative", FALSE);
+    else if (s->literal_selection == 1)
+      assign_stringparm(opt->literal_selection, "all_negative", FALSE);
+  }
 
-  if (s->nest_penalty >= 0)
+  if (s->nest_penalty >= 0 && !floatparm_is_user_set(opt->nest_penalty))
     assign_floatparm(opt->nest_penalty, (double) s->nest_penalty, FALSE);
-  if (s->depth_penalty >= 0)
+  if (s->depth_penalty >= 0 && !floatparm_is_user_set(opt->depth_penalty))
     assign_floatparm(opt->depth_penalty, (double) s->depth_penalty, FALSE);
 
-  /* Disable periodic checkpoints in strategy children. */
+  /* Disable periodic checkpoints in strategy children -- internal
+     scheduler bookkeeping, not a search-tuning choice, so this one is
+     NOT conditioned on user_set (a user's own checkpoint_minutes setting
+     is for the top-level run, not per-worker children). */
   assign_parm(opt->checkpoint_minutes, -1, FALSE);
 }  /* apply_strategy */
 
@@ -739,7 +929,8 @@ pid_t spawn_child(int slot, int si, int order_idx, int slice_sec,
                   struct child_output *output_shm,
                   Prover_input input,
                   Prover_scan_result psr,
-                  struct child_hints *hints_shm)
+                  struct child_hints *hints_shm,
+                  BOOL force_single_proof)
 {
   pid_t cpid;
   sigset_t fork_block, fork_old;
@@ -797,10 +988,24 @@ pid_t spawn_child(int slot, int si, int order_idx, int slice_sec,
     sigprocmask(SIG_SETMASK, &fork_old, NULL);
     close(saved_stdout);
 
-    /* Redirect fd 1 to /dev/null as safety net for stray raw writes */
+    /* Redirect fd 1 to /dev/null as safety net for stray raw writes.
+       Also redirect fd 2 (stderr): every child inherits the SAME real
+       terminal stderr from the parent, and per-proof progress banners
+       ("-------- Proof N --------", search.c) print via fprintf(stderr,
+       ...) -- unlike stdout, that path was never captured/buffered per
+       child, so with N>1 concurrent children each solving the same
+       problem, their banners interleaved live on the real terminal,
+       unlabeled and duplicated (confirmed live, 2026-08-06, racing 2
+       strategies against a multi-goal problem: "Proof 1/Proof 2/Proof
+       1/Proof 2/Proof 3..." from two different children print-racing
+       each other). Losing children's stderr is discarded anyway, same
+       as their stdout; suppressing it here instead of leaking it live
+       is consistent with -cores's existing all-buffered-until-the-end
+       design (the winner's stdout output isn't streamed live either). */
     devnull_fd = open("/dev/null", O_WRONLY);
     if (devnull_fd >= 0) {
       dup2(devnull_fd, STDOUT_FILENO);
+      dup2(devnull_fd, STDERR_FILENO);
       close(devnull_fd);
     }
 
@@ -812,7 +1017,18 @@ pid_t spawn_child(int slot, int si, int order_idx, int slice_sec,
 #ifndef NO_OPEN_MEMSTREAM
     if (output_shm) {
       FILE *memfp;
-      my_output = &output_shm[slot];
+      /* Indexed by order_idx, not slot: a suspended child can be resumed
+         into a DIFFERENT physical slot than the one it was originally
+         spawned into (cores_poll_loop's Phase 2 resume assigns whichever
+         slot just freed up, not the child's original slot -- see
+         "slots[i] = rpid" there). order_idx is the child's stable identity
+         across that reassignment (same pattern hints_shm already uses).
+         Indexing by slot here made a winner's captured output land in a
+         shared-memory cell the parent had stopped associating with that
+         child, so the parent read a still-zeroed neighbor slot instead --
+         a genuine proof, fully printed, silently reported as no status at
+         all. Found live, 2026-08-07, TPTP v9.3.0 sweep. */
+      my_output = &output_shm[order_idx];
       my_output->output_len = 0;
       Memstream_buf = NULL;
       Memstream_len = 0;
@@ -820,6 +1036,28 @@ pid_t spawn_child(int slot, int si, int order_idx, int slice_sec,
       if (memfp) {
         fclose(stdout);
         stdout = memfp;
+      }
+      else {
+        /* open_memstream failed (e.g. ENOMEM under heavy concurrent load).
+           Without it, everything this child prints to stdout goes to
+           /dev/null (redirected above) and is never captured -- if this
+           child wins, child_exit()'s "my_output && Memstream_buf" copy
+           check sees Memstream_buf still NULL and skips the copy
+           entirely, so a winner with a real proof reports a clean exit
+           with zero output, indistinguishable from a plain failure.
+           Seed a fallback status directly into the shared buffer so a
+           win is still reported as something, not silence. */
+        static const char msg[] =
+          "\n% SZS status Unknown : proof output buffer allocation failed "
+          "(open_memstream)\n";
+        size_t len = sizeof(msg) - 1;
+        if (len > sizeof(my_output->buf))
+          len = sizeof(my_output->buf);
+        memcpy(my_output->buf, msg, len);
+        my_output->output_len = (int) len;
+        fprintf(stderr, "%% WARNING: Cores slot %d: open_memstream failed "
+                "(%s) -- this child's output, if it wins, is unrecoverable "
+                "beyond the fallback status.\n", slot, strerror(errno));
       }
     }
 #endif
@@ -847,6 +1085,16 @@ pid_t spawn_child(int slot, int si, int order_idx, int slice_sec,
       apply_strategy(input->options, si);
       assign_parm(input->options->max_seconds, -1, FALSE);
       assign_parm(input->options->cores, 0, FALSE);  /* child, not parent */
+      if (force_single_proof) {
+        /* LADR -cores race (cores_search_ladr): force exactly one proof
+           of ANY goal, overriding auto_denials()'s own bump of
+           max_proofs to the file's goal count for a multi-goal Horn set
+           -- single_proof_race is what makes the override actually
+           stick (see search.c's auto_denials, and docs/cores-ladr-
+           single-goal-race-spec.md). TPTP mode never sets this. */
+        assign_parm(input->options->max_proofs, 1, FALSE);
+        set_flag(input->options->single_proof_race, FALSE);
+      }
       results = search(input);
       child_exit(results->return_code);
     }
@@ -876,6 +1124,20 @@ pid_t spawn_child(int slot, int si, int order_idx, int slice_sec,
   }
 
   /* Parent */
+  /* Track the new child BEFORE unblocking SIGALRM/SIGTERM/SIGINT/SIGXCPU
+     (blocked since before fork(), above) -- not after, back in the
+     caller. If unblocked first, there's a real window where a signal
+     landing right here would run parent_death_handler() (or the
+     no-cleanup pre-SIGALRM-fix handler) with this child's pid not yet
+     in Child_pids[], leaking it as an orphan indistinguishable from a
+     completely different bug. Found live, 2026-08-10: 54ef0b4 (wiring
+     parent_death_handler to SIGALRM) fixed the single-shot repro but
+     a real 950-problem sustained sweep still accumulated orphans into
+     a much worse OOM burst (227 concurrent processes vs. an expected
+     ~48) -- this window, hit repeatedly at the volume of many
+     sequential -cores invocations rather than as a rare one-off, is
+     the second leak path. */
+  track_child(cpid);
   sigprocmask(SIG_SETMASK, &fork_old, NULL);
   return cpid;
 }  /* spawn_child */
@@ -985,6 +1247,7 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
   int best_code;
   int i;
   unsigned start_time;
+  unsigned last_mem_check;
 
   /* Suspended pool for sleep/wake scheduling (sized for phase1_limit) */
   struct suspended_child *suspended;
@@ -999,6 +1262,7 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
   best_code = -1;
   n_suspended = 0;
   start_time = absolute_wallclock();
+  last_mem_check = start_time;
 
   /* Install cleanup handler so external kill (SIGTERM/SIGXCPU)
      kills all children instead of orphaning them. */
@@ -1012,9 +1276,8 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
     int si = order[next];
     int slice = (si == AUTO_DEFAULT_IDX) ? total_deadline : per_child_sec;
     pid_t cpid = spawn_child(i, si, next, slice, saved_stdout,
-                             output_shm, input, psr, hints_shm);
+                             output_shm, input, psr, hints_shm, FALSE);
     if (cpid > 0) {
-      track_child(cpid);
       slots[i] = cpid;
       slot_strat[i] = si;
       slot_oidx[i] = next;
@@ -1054,6 +1317,35 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
       break;
     }
 
+    /* Periodic memory check on RUNNING children, throttled to once a
+       second. Without this, a child is only ever checked against the
+       budget at the moment it self-suspends (WIFSTOPPED below) -- for
+       a long slice, or when phase1_limit<=N and no slicing happens at
+       all (per_child_sec==total_time, see the caller), a fast-
+       ballooning child would otherwise go completely uncaught until it
+       either finishes or hits the backstop deadline above. Suspended
+       children are NOT re-checked here: they're frozen (SIGSTOPped),
+       so their RSS can't grow, and they were already checked once at
+       the moment they were suspended. */
+    if (per_child_megs_budget > 0 &&
+        absolute_wallclock() != last_mem_check) {
+      last_mem_check = absolute_wallclock();
+      for (i = 0; i < N; i++) {
+        long rss_megs;
+        if (slots[i] <= 0) continue;
+        rss_megs = child_rss_megs(slots[i]);
+        if (rss_megs >= 0 && rss_megs > per_child_megs_budget) {
+#ifdef DEBUG
+          fprintf(stderr, "%% Cores: killed s%d (slot %d): %ld MB "
+                  "(RSS, running) > %d MB budget\n",
+                  slot_strat[i], i, rss_megs, per_child_megs_budget);
+#endif
+          kill_child(slots[i]);
+          slots[i] = 0;
+        }
+      }
+    }
+
     /* Poll each slot */
     for (i = 0; i < N; i++) {
       int status;
@@ -1077,25 +1369,37 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
       if (WIFSTOPPED(status)) {
         /* Child self-suspended (SIGALRM -> SIGSTOP) */
         int oidx = slot_oidx[i];
+        /* Read real OS-level RSS now, while the child is genuinely
+           frozen (WIFSTOPPED confirmed above) -- see child_rss_megs()
+           for why this replaces hints_shm[oidx].megs_used for the
+           budget decision below (that IPC figure can be stale for
+           large-theory problems stuck inside a preprocessing call with
+           no checkpoints of its own). Still read for the DEBUG trace
+           below, to make a stale-vs-real mismatch visible if it recurs. */
+        long rss_megs = (per_child_megs_budget > 0)
+                        ? child_rss_megs(slots[i]) : -1;
 
 #ifdef DEBUG
         fprintf(stderr, "%% Cores slot %d (%s) [pid %d]: suspended"
-                " (stage=%d given=%d kept=%d megs=%d)\n",
+                " (stage=%d given=%d kept=%d megs=%d rss=%ld)\n",
                 i, Portfolio[slot_strat[i]].name, (int) slots[i],
                 hints_shm ? hints_shm[oidx].stage : -1,
                 hints_shm ? hints_shm[oidx].given : -1,
                 hints_shm ? hints_shm[oidx].kept  : -1,
-                hints_shm ? hints_shm[oidx].megs_used : -1);
+                hints_shm ? hints_shm[oidx].megs_used : -1,
+                rss_megs);
 #endif
 
-        /* Memory ejection: kill children exceeding budget */
-        if (hints_shm && per_child_megs_budget > 0 &&
-            hints_shm[oidx].megs_used > per_child_megs_budget) {
+        /* Memory ejection: kill children exceeding budget. rss_megs<0
+           means "unknown" (unsupported platform, or the read raced the
+           child's own exit) -- treat as "don't kill", not as 0 MB. */
+        if (per_child_megs_budget > 0 &&
+            rss_megs >= 0 && rss_megs > per_child_megs_budget) {
 #ifdef DEBUG
           fprintf(stderr, "%% Cores: killed s%d (slot %d): "
-                  "%d MB > %d MB budget\n",
+                  "%ld MB (RSS) > %d MB budget\n",
                   slot_strat[i], i,
-                  hints_shm[oidx].megs_used, per_child_megs_budget);
+                  rss_megs, per_child_megs_budget);
 #endif
           kill_child(slots[i]);
           slots[i] = 0;
@@ -1124,9 +1428,8 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
           /* Phase 1: launch next unstarted strategy */
           int si = order[next];
           pid_t cpid = spawn_child(i, si, next, per_child_sec, saved_stdout,
-                                   output_shm, input, psr, hints_shm);
+                                   output_shm, input, psr, hints_shm, FALSE);
           if (cpid > 0) {
-            track_child(cpid);
             slots[i] = cpid;
             slot_strat[i] = si;
             slot_oidx[i] = next;
@@ -1182,8 +1485,15 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
         int child_code;
         if (WIFEXITED(status))
           child_code = WEXITSTATUS(status);
-        else
+        else {
           child_code = FATAL_EXIT;
+          if (WIFSIGNALED(status))
+            fprintf(stderr, "%% WARNING: Cores slot %d (%s): child pid %d "
+                    "killed by signal %d (%s)%s\n",
+                    i, Portfolio[slot_strat[i]].name, slots[i],
+                    WTERMSIG(status), strsignal(WTERMSIG(status)),
+                    WCOREDUMP(status) ? ", core dumped" : "");
+        }
 
 
 #ifdef DEBUG
@@ -1207,11 +1517,42 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
           n_suspended = 0;
 
           if (output_shm) {
+            /* Indexed by slot_oidx[i], not i: this child may have been
+               resumed into slot i from a suspend (Phase 2 above), in which
+               case it was originally spawned -- and wrote its captured
+               output -- under a different order_idx (see spawn_child's
+               my_output comment). slot_oidx[i] is this slot's CURRENT
+               occupant's order_idx, kept in sync at every spawn/resume. */
             /* Arm the death handler with the winner's own status line so a
                kill landing before the publish below still emits the correct
                status; then publish status-first (see cores_publish_winner). */
-            cores_arm_death_from_winner(&output_shm[i]);
-            cores_publish_winner(&output_shm[i], saved_stdout);
+            cores_arm_death_from_winner(&output_shm[slot_oidx[i]]);
+            cores_publish_winner(&output_shm[slot_oidx[i]], saved_stdout);
+          }
+          else {
+            /* output_shm allocation failed at start-up (mmap under heavy
+               concurrent -cores load, e.g. many racing instances at once
+               -- found live, 2026-08-07, TPTP sweep at -P4 x 8-way): every
+               child also skipped its own output-capture setup (spawn_child
+               only redirects stdout to a memstream when output_shm is
+               non-NULL), so there is no captured transcript to publish for
+               ANY slot, not just this one -- the whole race's outputs went
+               to /dev/null from the moment they were spawned. Silently
+               falling through here previously made the whole process
+               exit(MAX_PROOFS_EXIT) (0) with zero output: indistinguishable
+               from a hung/killed process to anything scripting around this
+               tool. Print an honest, minimal status instead of nothing --
+               never claim the specific proof/theorem status without the
+               transcript to back it up. */
+            FILE *fp = fdopen(dup(saved_stdout), "w");
+            if (fp) {
+              fprintf(fp, "\n%% SZS status Unknown : -cores winner found but "
+                          "its output was never captured (shared-memory "
+                          "allocation failed at start-up, likely from heavy "
+                          "concurrent -cores load) -- rerun with less "
+                          "concurrent -cores load for a definitive result.\n");
+              fclose(fp);
+            }
           }
 
 #ifdef DEBUG
@@ -1242,9 +1583,8 @@ int cores_poll_loop(int N, int *order, int num_strats, int phase1_limit,
         if (next < phase1_limit) {
           int si = order[next];
           pid_t cpid = spawn_child(i, si, next, per_child_sec, saved_stdout,
-                                   output_shm, input, psr, hints_shm);
+                                   output_shm, input, psr, hints_shm, FALSE);
           if (cpid > 0) {
-            track_child(cpid);
             slots[i] = cpid;
             slot_strat[i] = si;
             slot_oidx[i] = next;
@@ -1328,6 +1668,16 @@ void cores_search(Prover_input input, const short *ml_ranking,
 {
   int N = parm(input->options->cores);
   int total_time = parm(input->options->max_seconds);
+  /* No -t given (total_time <= 0): race exactly N strategies with no
+     time limit, instead of silently falling back to a single, non-raced
+     auto search -- see cores_search_ladr's identical fix/comment
+     (2026-08-09) for the full rationale.  The Phase 1 breadth-then-depth
+     formula below fundamentally needs a known total budget to divide
+     between breadth and depth; with none, skip it entirely rather than
+     feeding it a nonsensical total_time and race N un-sliced,
+     unbounded strategies instead (per_child_sec=0 and, further down,
+     a <=0 deadline both already mean "no limit" to cores_poll_loop). */
+  BOOL unbounded = (total_time <= 0);
   int max_megs_val = parm(input->options->max_megs);
   int num_strats = NUM_PORTFOLIO_STRATS;
   int min_slice = (slice_arg > 0) ? slice_arg : CORES_MIN_SLICE;
@@ -1340,37 +1690,78 @@ void cores_search(Prover_input input, const short *ml_ranking,
   struct child_hints *hints_shm;
   struct child_output *output_shm;
 
-  if (total_time <= 0 || N <= 0)
+  if (N <= 0)
     return;  /* fall through to single strategy */
 
-  /* Phase 1 limit: -strategies N overrides, else automatic formula */
-  if (max_strats_arg > 0) {
-    phase1_limit = max_strats_arg;
-    if (phase1_limit > num_strats)
-      phase1_limit = num_strats;
+  if (unbounded) {
+    phase1_limit = N;
+    per_child_sec = 0;
   }
   else {
-    /* Default: use half the wall-clock budget for breadth, half for depth */
-    phase1_limit = (total_time * N) / (2 * min_slice);
-    if (phase1_limit > num_strats)
-      phase1_limit = num_strats;
+    /* Phase 1 limit: -strategies N overrides, else automatic formula */
+    if (max_strats_arg > 0) {
+      phase1_limit = max_strats_arg;
+      if (phase1_limit > num_strats)
+        phase1_limit = num_strats;
+    }
+    else {
+      /* Default: use half the wall-clock budget for breadth, half for depth */
+      phase1_limit = (total_time * N) / (2 * min_slice);
+      if (phase1_limit > num_strats)
+        phase1_limit = num_strats;
+    }
+    if (phase1_limit < N)
+      phase1_limit = N;
+
+    /* Compute per-child time slice: short slices for Phase 1 breadth,
+       full time only when all strategies fit in parallel. */
+    if (phase1_limit <= N)
+      per_child_sec = total_time;  /* all fit in parallel, no time-slicing */
+    else
+      per_child_sec = min_slice;
   }
-  if (phase1_limit < N)
-    phase1_limit = N;
 
-  /* Compute per-child time slice: short slices for Phase 1 breadth,
-     full time only when all strategies fit in parallel. */
-  if (phase1_limit <= N)
-    per_child_sec = total_time;  /* all fit in parallel, no time-slicing */
+  /* Per-child memory budget: always enforced (unless max_megs is
+     explicitly set to -1, meaning "no limit"), scaled to phase1_limit --
+     the real worst-case number of children ONE instance can hold at
+     once (N running + up to phase1_limit-N suspended-but-not-killed in
+     the Phase 1 breadth pool) -- not num_strats (a fixed 96, unrelated
+     to how many are ever actually held concurrently). Previously this
+     only activated when max_megs was explicitly set to a small value,
+     so the default 48GB max_megs left the breadth pool completely
+     uncapped: for -cores 8 -t90 (phase1_limit=45), that's up to ~37
+     suspended children, each holding real memory, times however many
+     independent -cores instances an outside driver runs concurrently.
+     Found live, 2026-08-10/11 via an independently-developed prover:
+     this, not either of the two process-tracking races already fixed
+     (54ef0b4, 8ea44ba), is what
+     actually drove a 6-way-concurrent sweep to 227-230 processes and a
+     near-reboot on a 503GB box -- reproduced directly and safely on a
+     single local instance (-cores 8 -slice 2 -t 30: process count
+     climbed to N+phase1_limit and held, memory passed 1GB and was still
+     climbing). Dividing by phase1_limit caps ONE instance's aggregate
+     Phase-1 memory at max_megs total -- the same ceiling a single
+     non-cores prover9 run already gets -- instead of unbounded; an
+     outside driver running many concurrent instances should still pass
+     an explicit, appropriately-divided assign(max_megs,N) of its own,
+     since this can only bound each instance individually, not the sum
+     across instances it has no visibility into. */
+  if (max_megs_val > 0) {
+    /* An untouched max_megs is still exactly ladr/memory.c's compiled-in
+       48GB default -- fine as a ceiling for a single ordinary
+       (non-cores) run, but not a meaningful DEFAULT for -cores itself
+       (see system_ram_megs()'s own comment): swap it for 80% of this
+       machine's real RAM in that case. An explicit assign(max_megs,N)
+       (parm_is_user_set) always wins and is used as-is, unchanged. */
+    if (!parm_is_user_set(input->options->max_megs)) {
+      long ram_megs = system_ram_megs();
+      if (ram_megs > 0)
+        max_megs_val = (int) (ram_megs * 0.8);
+    }
+    per_child_megs = max_megs_val / phase1_limit;
+  }
   else
-    per_child_sec = min_slice;
-
-  /* Per-child memory budget: only enforce when max_megs is explicitly
-     set to a competition-appropriate value (<=8192 MB). */
-  if (max_megs_val > 0 && max_megs_val <= 8192)
-    per_child_megs = max_megs_val / (num_strats > N ? num_strats : N);
-  else
-    per_child_megs = 0;  /* no budget enforcement */
+    per_child_megs = 0;  /* max_megs explicitly disabled (-1) */
 
   order = safe_malloc(num_strats * sizeof(int));
   build_cores_order(ml_ranking, ml_ranking_len, order, num_strats);
@@ -1387,13 +1778,31 @@ void cores_search(Prover_input input, const short *ml_ranking,
   else
     memset(hints_shm, 0, phase1_limit * sizeof(struct child_hints));
 
-  /* Allocate shared-memory output buffers (16 MB per slot, indexed by slot) */
+  /* Allocate shared-memory output buffers (16 MB per slot, indexed by
+     order_idx -- a suspended child can be resumed into a different
+     physical slot than it was spawned into, so this must be sized for
+     the full order_idx range (phase1_limit), not just N slots. */
   output_shm = (struct child_output *) mmap(NULL,
-      N * sizeof(struct child_output),
+      phase1_limit * sizeof(struct child_output),
       PROT_READ | PROT_WRITE,
       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-  if (output_shm == MAP_FAILED)
+  if (output_shm == MAP_FAILED) {
+    /* Losing this buffer silently disables output capture for every child
+       spawned from here on (spawn_child only redirects a child's stdout to
+       a memstream when output_shm is non-NULL) -- the eventual winner-
+       publish fallback further down handles the "no captured output"
+       case, but the root cause (why the mmap itself failed) is worth a
+       permanent, unconditional record: this is small (a few dozen MB at
+       most) and every prior anonymous mmap in this same process already
+       succeeded, so a failure here means something environmental (an
+       existing memory-mapping-count limit, transient memory pressure from
+       many concurrent -cores instances, etc.), not this allocation being
+       unreasonably large. */
+    fprintf(stderr, "%% WARNING: Cores: output_shm mmap failed (%s) -- "
+                    "winner output will be uncapturable this run.\n",
+            strerror(errno));
     output_shm = NULL;
+  }
 
 
 #ifdef DEBUG
@@ -1416,14 +1825,14 @@ void cores_search(Prover_input input, const short *ml_ranking,
 
   result = cores_poll_loop(N, order, num_strats, phase1_limit, per_child_sec,
                            saved_stdout, input, NULL,
-                           total_time + 2,
+                           unbounded ? 0 : (total_time + 2),
                            hints_shm, per_child_megs, output_shm);
   safe_free(order);
 
   if (hints_shm)
     munmap(hints_shm, phase1_limit * sizeof(struct child_hints));
   if (output_shm)
-    munmap(output_shm, N * sizeof(struct child_output));
+    munmap(output_shm, phase1_limit * sizeof(struct child_output));
 
   if (result == MAX_PROOFS_EXIT) {
     close(saved_stdout);
@@ -1434,6 +1843,376 @@ void cores_search(Prover_input input, const short *ml_ranking,
                       input->options, input->problem_name);
   /* Does not return */
 }  /* cores_search */
+
+/*************
+ *
+ *   cores_poll_loop_ladr()
+ *
+ *   Simplified sliding-window loop for LADR-mode -cores: race exactly
+ *   n_race DISTINCT strategies concurrently, each running unsliced for
+ *   the whole per-child budget -- no suspend/resume, no Phase 1/Phase 2
+ *   breadth-then-depth expansion beyond n_race (see docs/cores-ladr-
+ *   single-goal-race-spec.md). Every child is spawned with
+ *   force_single_proof=TRUE, so whichever finds ANY one proof first
+ *   wins; the others are killed and discarded, same publish-winner
+ *   mechanics as cores_poll_loop(). Deliberately NOT shared with
+ *   cores_poll_loop() itself: this keeps the TPTP-mode scheduler's own
+ *   behavior structurally untouched rather than threading a mode flag
+ *   through its breadth/depth machinery.
+ *
+ *   A slot whose strategy finishes without a proof is NOT refilled --
+ *   once its distinct strategy is done, it's simply done. Only
+ *   n_race strategies are ever tried in one race, never more.
+ *
+ *   Returns: MAX_PROOFS_EXIT if a proof was found, otherwise the best
+ *   non-proof exit code seen (or -1 if nothing exited before the
+ *   backstop deadline).
+ *
+ *************/
+
+static
+int cores_poll_loop_ladr(int n_race, int *order, int per_child_sec,
+                         int saved_stdout, Prover_input input,
+                         int total_deadline,
+                         struct child_hints *hints_shm,
+                         int per_child_megs_budget,
+                         struct child_output *output_shm)
+{
+  pid_t *slots;
+  int *slot_strat;
+  int best_code;
+  int i;
+  unsigned start_time;
+  unsigned last_mem_check;
+
+  slots = safe_calloc(n_race, sizeof(pid_t));
+  slot_strat = safe_calloc(n_race, sizeof(int));
+
+  best_code = -1;
+  start_time = absolute_wallclock();
+  last_mem_check = start_time;
+
+  install_parent_death_handler();
+
+  /* Launch all n_race strategies at once -- no breadth-then-depth
+     expansion: each runs the full budget uninterrupted (auto_default
+     gets total_deadline, matching cores_poll_loop's own treatment;
+     everyone else gets per_child_sec, which for this design IS the
+     whole time budget, not a short slice). */
+  for (i = 0; i < n_race; i++) {
+    int si = order[i];
+    int slice = (si == AUTO_DEFAULT_IDX) ? total_deadline : per_child_sec;
+    pid_t cpid = spawn_child(i, si, i, slice, saved_stdout,
+                             output_shm, input, NULL, hints_shm, TRUE);
+    if (cpid > 0) {
+      slots[i] = cpid;
+      slot_strat[i] = si;
+#ifdef DEBUG
+      fprintf(stderr, "%% Cores(ladr) slot %d [pid %d]: %s (%ds)\n",
+              i, (int) cpid, Portfolio[si].name, slice);
+#endif
+    }
+  }
+
+  while (1) {
+    int all_empty;
+    int elapsed = (int)(absolute_wallclock() - start_time);
+    /* Throttle the memory check below to once a second: RSS reads
+       (child_rss_megs(), a /proc read or syscall) are cheap
+       individually but need not run at the poll loop's own 10ms
+       cadence -- once a second is still far more responsive than
+       "only at suspend", which this design never does at all. */
+    BOOL do_mem_check = (absolute_wallclock() != last_mem_check);
+    if (do_mem_check) last_mem_check = absolute_wallclock();
+
+    if (total_deadline > 0 && elapsed >= total_deadline) {
+#ifdef DEBUG
+      fprintf(stderr, "%% Cores(ladr): backstop deadline (%ds) reached\n",
+              total_deadline);
+#endif
+      for (i = 0; i < n_race; i++) {
+        if (slots[i] > 0) { kill_child(slots[i]); slots[i] = 0; }
+      }
+      break;
+    }
+
+    for (i = 0; i < n_race; i++) {
+      int status;
+      pid_t wpid;
+
+      if (slots[i] <= 0)
+        continue;
+
+      /* Memory ejection: same protection cores_poll_loop applies at
+         suspend time, checked here on every poll tick (throttled,
+         see do_mem_check above) instead since this design has no
+         suspend events to hang it off of. Uses real OS-level RSS
+         (child_rss_megs()), not hints_shm[i].megs_used -- that
+         self-reported figure can go stale for large-theory problems
+         stuck inside a preprocessing call with no checkpoints of its
+         own, same gap 3733dcd fixed for cores_poll_loop's own
+         suspend-time check; this is the same fix applied here too. */
+      if (do_mem_check && per_child_megs_budget > 0) {
+        long rss_megs = child_rss_megs(slots[i]);
+        if (rss_megs >= 0 && rss_megs > per_child_megs_budget) {
+#ifdef DEBUG
+          fprintf(stderr, "%% Cores(ladr): killed s%d (slot %d): "
+                  "%ld MB (RSS) > %d MB budget\n",
+                  slot_strat[i], i, rss_megs, per_child_megs_budget);
+#endif
+          kill_child(slots[i]);
+          slots[i] = 0;
+          continue;
+        }
+      }
+
+      wpid = waitpid(slots[i], &status, WNOHANG | WUNTRACED);
+      if (wpid == 0)
+        continue;  /* still running */
+
+      if (wpid < 0) {
+        untrack_child(slots[i]);
+        slots[i] = 0;
+        continue;
+      }
+
+      if (WIFSTOPPED(status)) {
+        /* Nothing self-suspends before the deadline in this design --
+           if a child's own full-budget alarm fires right as the
+           backstop is about to anyway, treat it as done, not
+           resumable (there is no resume mechanism here). */
+        kill_child(slots[i]);
+        slots[i] = 0;
+        continue;
+      }
+
+      {
+        int child_code;
+        if (WIFEXITED(status))
+          child_code = WEXITSTATUS(status);
+        else {
+          child_code = FATAL_EXIT;
+          if (WIFSIGNALED(status))
+            fprintf(stderr, "%% WARNING: Cores(ladr) slot %d (%s): child pid %d "
+                    "killed by signal %d (%s)%s\n",
+                    i, Portfolio[slot_strat[i]].name, slots[i],
+                    WTERMSIG(status), strsignal(WTERMSIG(status)),
+                    WCOREDUMP(status) ? ", core dumped" : "");
+        }
+
+#ifdef DEBUG
+        fprintf(stderr, "%% Cores(ladr) slot %d (%s): exit %d (%s)\n",
+                i, Portfolio[slot_strat[i]].name, child_code,
+                child_code == MAX_PROOFS_EXIT ? "proof" :
+                child_code == SOS_EMPTY_EXIT ? "sos_empty" : "other");
+#endif
+
+        if (child_code == MAX_PROOFS_EXIT) {
+          int j;
+          for (j = 0; j < n_race; j++) {
+            if (j != i && slots[j] > 0) {
+              kill_child(slots[j]);
+              slots[j] = 0;
+            }
+          }
+          if (output_shm) {
+            cores_arm_death_from_winner(&output_shm[i]);
+            cores_publish_winner(&output_shm[i], saved_stdout);
+          }
+#ifdef DEBUG
+          fprintf(stderr, "%% Cores(ladr) winner: slot %d (%s)\n",
+                  i, Portfolio[slot_strat[i]].name);
+#endif
+          safe_free(slots);
+          safe_free(slot_strat);
+          return MAX_PROOFS_EXIT;
+        }
+
+        if (best_code < 0)
+          best_code = child_code;
+        else if (child_code == SOS_EMPTY_EXIT)
+          best_code = SOS_EMPTY_EXIT;
+        else if (child_code == MAX_SECONDS_EXIT &&
+                 best_code != SOS_EMPTY_EXIT)
+          best_code = MAX_SECONDS_EXIT;
+
+        untrack_child(slots[i]);
+        slots[i] = 0;
+        /* No refill -- see function comment. */
+      }
+    }
+
+    all_empty = 1;
+    for (i = 0; i < n_race; i++) {
+      if (slots[i] > 0) { all_empty = 0; break; }
+    }
+    if (all_empty)
+      break;
+
+    usleep(10000);  /* 10ms poll */
+  }
+
+  safe_free(slots);
+  safe_free(slot_strat);
+  return best_code;
+}  /* cores_poll_loop_ladr */
+
+/*************
+ *
+ *   cores_search_ladr()
+ *
+ *   LADR-mode -cores entry point: race up to N DISTINCT strategies
+ *   (never more than requested, never more than actually exist -- a
+ *   request exceeding the portfolio's size just races however many
+ *   distinct strategies there are, per jpm's own call) to a single
+ *   proof of ANY goal, each running unsliced for the whole time
+ *   budget. Does not return (calls exit()).
+ *
+ *   See docs/cores-ladr-single-goal-race-spec.md for the full
+ *   background: -cores was designed for TPTP mode's single-goal,
+ *   max_proofs==1 world; LADR mode's own auto_denials() bumps
+ *   max_proofs up to the file's goal count for a multi-goal Horn set,
+ *   which made every -cores child sweep ALL goals with its own
+ *   strategy instead of racing to the first proof of ANY of them.
+ *   Deliberately a separate function from cores_search(), not a mode
+ *   flag threaded through it -- TPTP mode's own scheduler is completely
+ *   untouched by this, structurally, not just by inspection.
+ *
+ *************/
+
+static
+void cores_search_ladr(Prover_input input, int max_strats_arg)
+{
+  int N = parm(input->options->cores);
+  int total_time = parm(input->options->max_seconds);
+  /* No -t given (total_time <= 0, LADR's "unset" sentinel): race n_race
+     strategies with no time limit at all, rather than silently falling
+     back to a single, non-raced auto search -- that fallback used to
+     happen with zero diagnostic output, which from the outside is
+     indistinguishable from -cores being ignored entirely (found live,
+     2026-08-09: -cores 4 with no -t showed exactly one prover9 process
+     for the whole run). We deliberately do NOT invent a default time
+     limit here (e.g. some large sentinel) -- if the user didn't ask for
+     one, there isn't one; each racer just runs to its own natural
+     conclusion (proof or SOS-exhausted) and the loop below already
+     treats a <=0 deadline as "no backstop" and a 0 per-child slice as
+     "no alarm" (setup_timeout_signal/alarm() semantics), so passing a
+     genuine 0 through -- not the raw -1 sentinel, whose arithmetic
+     (total_time+2) would arm a bogus near-immediate deadline -- gets
+     unbounded racing for free from machinery that already existed. */
+  BOOL unbounded = (total_time <= 0);
+  int max_megs_val = parm(input->options->max_megs);
+  int num_strats = NUM_PORTFOLIO_STRATS;
+  int cap;
+  int n_race;
+  int *order;
+  int saved_stdout;
+  int result;
+  int per_child_megs;
+  struct child_hints *hints_shm;
+  struct child_output *output_shm;
+
+  if (N <= 0)
+    return;  /* fall through to single strategy */
+
+  /* -strategies N (if given) caps how many distinct strategies to
+     race, same as it caps cores_search's Phase 1 breadth; otherwise
+     race up to N (the -cores value), capped by however many distinct
+     strategies the portfolio actually has. */
+  cap = num_strats;
+  if (max_strats_arg > 0 && max_strats_arg < cap)
+    cap = max_strats_arg;
+  n_race = (N < cap) ? N : cap;
+
+  /* Per-child memory budget: same treatment as cores_search()/
+     cores_from_scan() above -- always enforced (unless max_megs is
+     explicitly -1), with a machine-aware default (80% of real RAM)
+     when the user never set max_megs at all, instead of the old
+     <=8192MB opt-in gate (which left this LADR-native racing path
+     completely uncapped by default, same gap as the other two
+     entry points had before 2f46dd1/6c10103). n_race (not
+     phase1_limit) is already the correct divisor here: this mode
+     races a flat, unsliced n_race<=N with no Phase-1 breadth pool. */
+  if (max_megs_val > 0) {
+    if (!parm_is_user_set(input->options->max_megs)) {
+      long ram_megs = system_ram_megs();
+      if (ram_megs > 0)
+        max_megs_val = (int) (ram_megs * 0.8);
+    }
+    per_child_megs = max_megs_val / n_race;
+  }
+  else
+    per_child_megs = 0;  /* max_megs explicitly disabled (-1) */
+
+  order = safe_malloc(num_strats * sizeof(int));
+  build_cores_order(NULL, 0, order, num_strats);  /* LADR: no ML ranking */
+
+  saved_stdout = dup(STDOUT_FILENO);
+
+  hints_shm = (struct child_hints *) mmap(NULL,
+      n_race * sizeof(struct child_hints),
+      PROT_READ | PROT_WRITE,
+      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (hints_shm == MAP_FAILED)
+    hints_shm = NULL;
+  else
+    memset(hints_shm, 0, n_race * sizeof(struct child_hints));
+
+  output_shm = (struct child_output *) mmap(NULL,
+      n_race * sizeof(struct child_output),
+      PROT_READ | PROT_WRITE,
+      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (output_shm == MAP_FAILED) {
+    /* Losing this buffer silently disables output capture for every child
+       spawned from here on (spawn_child only redirects a child's stdout to
+       a memstream when output_shm is non-NULL) -- the eventual winner-
+       publish fallback further down handles the "no captured output"
+       case, but the root cause (why the mmap itself failed) is worth a
+       permanent, unconditional record: this is small (a few dozen MB at
+       most) and every prior anonymous mmap in this same process already
+       succeeded, so a failure here means something environmental (an
+       existing memory-mapping-count limit, transient memory pressure from
+       many concurrent -cores instances, etc.), not this allocation being
+       unreasonably large. */
+    fprintf(stderr, "%% WARNING: Cores: output_shm mmap failed (%s) -- "
+                    "winner output will be uncapturable this run.\n",
+            strerror(errno));
+    output_shm = NULL;
+  }
+
+  fflush(stdout);
+  fflush(stderr);
+
+  /* Disarm parent's SIGALRM so the poll loop manages its own timing. */
+  {
+    struct itimerval disarm;
+    memset(&disarm, 0, sizeof(disarm));
+    setitimer(ITIMER_REAL, &disarm, NULL);
+  }
+
+  cores_arm_death_status(saved_stdout, flag(input->options->tptp_output),
+                         input->problem_name);
+
+  result = cores_poll_loop_ladr(n_race, order, unbounded ? 0 : total_time,
+                                saved_stdout, input,
+                                unbounded ? 0 : (total_time + 2),
+                                hints_shm, per_child_megs, output_shm);
+  safe_free(order);
+
+  if (hints_shm)
+    munmap(hints_shm, n_race * sizeof(struct child_hints));
+  if (output_shm)
+    munmap(output_shm, n_race * sizeof(struct child_output));
+
+  if (result == MAX_PROOFS_EXIT) {
+    close(saved_stdout);
+    exit(MAX_PROOFS_EXIT);
+  }
+
+  cores_emit_no_proof(saved_stdout, result,
+                      input->options, input->problem_name);
+  /* Does not return */
+}  /* cores_search_ladr */
 
 /*************
  *
@@ -1451,6 +2230,9 @@ void cores_from_scan(Prover_scan_result psr, const short *ml_ranking,
 {
   int N = parm(psr->options->cores);
   int total_time = parm(psr->options->max_seconds);
+  /* No -t given: race exactly N strategies with no time limit, same
+     fix/rationale as cores_search()/cores_search_ladr() (2026-08-09). */
+  BOOL unbounded = (total_time <= 0);
   int max_megs_val = parm(psr->options->max_megs);
   int num_strats = NUM_PORTFOLIO_STRATS;
   int min_slice = (slice_arg > 0) ? slice_arg : CORES_MIN_SLICE;
@@ -1465,37 +2247,57 @@ void cores_from_scan(Prover_scan_result psr, const short *ml_ranking,
   struct child_hints *hints_shm;
   struct child_output *output_shm;
 
-  if (total_time <= 0 || N <= 0)
+  if (N <= 0)
     return;  /* fall through to single strategy */
 
-  /* Phase 1 limit: -strategies N overrides, else automatic formula */
-  if (max_strats_arg > 0) {
-    phase1_limit = max_strats_arg;
-    if (phase1_limit > num_strats)
-      phase1_limit = num_strats;
+  if (unbounded) {
+    phase1_limit = N;
+    per_child_sec = 0;
   }
   else {
-    /* Default: use half the wall-clock budget for breadth, half for depth */
-    phase1_limit = (total_time * N) / (2 * min_slice);
-    if (phase1_limit > num_strats)
-      phase1_limit = num_strats;
+    /* Phase 1 limit: -strategies N overrides, else automatic formula */
+    if (max_strats_arg > 0) {
+      phase1_limit = max_strats_arg;
+      if (phase1_limit > num_strats)
+        phase1_limit = num_strats;
+    }
+    else {
+      /* Default: use half the wall-clock budget for breadth, half for depth */
+      phase1_limit = (total_time * N) / (2 * min_slice);
+      if (phase1_limit > num_strats)
+        phase1_limit = num_strats;
+    }
+    if (phase1_limit < N)
+      phase1_limit = N;
+
+    /* Compute per-child time slice: short slices for Phase 1 breadth,
+       full time only when all strategies fit in parallel. */
+    if (phase1_limit <= N)
+      per_child_sec = total_time;  /* all fit in parallel, no time-slicing */
+    else
+      per_child_sec = min_slice;
   }
-  if (phase1_limit < N)
-    phase1_limit = N;
 
-  /* Compute per-child time slice: short slices for Phase 1 breadth,
-     full time only when all strategies fit in parallel. */
-  if (phase1_limit <= N)
-    per_child_sec = total_time;  /* all fit in parallel, no time-slicing */
+  /* Per-child memory budget: same fix and rationale as cores_search()'s
+     identical block above -- always enforced (unless max_megs is
+     explicitly -1), scaled to phase1_limit rather than the unrelated
+     num_strats constant, closing the same uncapped-breadth-pool gap for
+     this (>5000-axiom) SInE entry point too. */
+  if (max_megs_val > 0) {
+    /* Same machine-aware default as cores_search() above -- an
+       untouched max_megs is still just the 48GB compiled-in constant,
+       not a real signal the user wants that specific figure for
+       -cores. Swap it for 80% of real RAM when untouched; an explicit
+       assign(max_megs,N) always wins. */
+    if (!parm_is_user_set(psr->options->max_megs)) {
+      long ram_megs = system_ram_megs();
+      if (ram_megs > 0)
+        max_megs_val = (int) (ram_megs * 0.8);
+    }
+    per_child_megs = max_megs_val / phase1_limit;
+  }
   else
-    per_child_sec = min_slice;
-
-  /* Per-child memory budget: only enforce when max_megs is explicitly
-     set to a competition-appropriate value (<=8192 MB). */
-  if (max_megs_val > 0 && max_megs_val <= 8192)
-    per_child_megs = max_megs_val / (num_strats > N ? num_strats : N);
-  else
-    per_child_megs = 0;  /* no budget enforcement */
+    per_child_megs = 0;  /* max_megs explicitly disabled (-1) */
 
   order = safe_malloc(num_strats * sizeof(int));
   build_cores_order(ml_ranking, ml_ranking_len, order, num_strats);
@@ -1527,13 +2329,31 @@ void cores_from_scan(Prover_scan_result psr, const short *ml_ranking,
   else
     memset(hints_shm, 0, phase1_limit * sizeof(struct child_hints));
 
-  /* Allocate shared-memory output buffers (16 MB per slot, indexed by slot) */
+  /* Allocate shared-memory output buffers (16 MB per slot, indexed by
+     order_idx -- a suspended child can be resumed into a different
+     physical slot than it was spawned into, so this must be sized for
+     the full order_idx range (phase1_limit), not just N slots. */
   output_shm = (struct child_output *) mmap(NULL,
-      N * sizeof(struct child_output),
+      phase1_limit * sizeof(struct child_output),
       PROT_READ | PROT_WRITE,
       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-  if (output_shm == MAP_FAILED)
+  if (output_shm == MAP_FAILED) {
+    /* Losing this buffer silently disables output capture for every child
+       spawned from here on (spawn_child only redirects a child's stdout to
+       a memstream when output_shm is non-NULL) -- the eventual winner-
+       publish fallback further down handles the "no captured output"
+       case, but the root cause (why the mmap itself failed) is worth a
+       permanent, unconditional record: this is small (a few dozen MB at
+       most) and every prior anonymous mmap in this same process already
+       succeeded, so a failure here means something environmental (an
+       existing memory-mapping-count limit, transient memory pressure from
+       many concurrent -cores instances, etc.), not this allocation being
+       unreasonably large. */
+    fprintf(stderr, "%% WARNING: Cores: output_shm mmap failed (%s) -- "
+                    "winner output will be uncapturable this run.\n",
+            strerror(errno));
     output_shm = NULL;
+  }
 
 
 #ifdef DEBUG
@@ -1555,14 +2375,14 @@ void cores_from_scan(Prover_scan_result psr, const short *ml_ranking,
 
   result = cores_poll_loop(N, order, num_strats, phase1_limit, per_child_sec,
                            saved_stdout, NULL, psr,
-                           total_time + 2,
+                           unbounded ? 0 : (total_time + 2),
                            hints_shm, per_child_megs, output_shm);
   safe_free(order);
 
   if (hints_shm)
     munmap(hints_shm, phase1_limit * sizeof(struct child_hints));
   if (output_shm)
-    munmap(output_shm, N * sizeof(struct child_output));
+    munmap(output_shm, phase1_limit * sizeof(struct child_output));
 
   if (result == MAX_PROOFS_EXIT) {
     close(saved_stdout);
@@ -1596,6 +2416,12 @@ int main(int argc, char **argv)
   int max_strategies = -1;  /* -strategies N: cap Phase 1 breadth */
   int slice_sec = -1;       /* -slice N: per-child time slice override */
 #endif
+
+  /* Raise the stack limit before any parsing: the TPTP recursive-descent
+     parser has no iterative fallback, and a legitimately very deeply
+     nested input can otherwise overflow the OS default stack. Inherited
+     by -cores children via fork(), so this one call covers them too. */
+  raise_stack_limit();
 
   /* Save original command line before any argv mutation. */
   saved_command = build_command_string(argc, argv);
@@ -1686,6 +2512,27 @@ int main(int argc, char **argv)
     for (i = 1; i < argc; i++) {
       if (strcmp(argv[i], "-nomem") == 0) {
         nomem = TRUE;
+        break;
+      }
+    }
+  }
+
+  /* Check for -modern_parse flag: opt-in precedence-climbing LADR-native
+     parser instead of the classic backtracking one -- see the "modern
+     LADR parser" comment in ladr/parse.c for what this trades away.
+     Must neutralize argv[i] like -strategy/-strategies/-slice above:
+     std_prover_init_and_input() later runs getopt() with an optstring
+     containing "r:" (for -r, resume-from-checkpoint), and getopt reads
+     an unrecognized long flag as a cluster of short options -- it would
+     otherwise walk into the 'r' in "-modern_parse" and swallow the rest
+     of the token ("n_parse") as -r's argument. */
+  {
+    int i;
+    for (i = 1; i < argc; i++) {
+      if (strcmp(argv[i], "-modern_parse") == 0 ||
+          strcmp(argv[i], "-modern-parse") == 0) {
+        use_modern_ladr_parser(TRUE);
+        argv[i] = "-_";  /* neutralize so getopt skips it */
         break;
       }
     }
@@ -1812,10 +2659,14 @@ int main(int argc, char **argv)
         cmd_max_sec = parm(psr->options->max_seconds);
 
 #ifndef NO_OPEN_MEMSTREAM
-      /* Sliding-window cores (from scan) for large inputs */
+      /* Sliding-window cores (from scan) for large inputs.  No cmd_max_sec
+         gate: an unset/non-positive value means "no -t given", and
+         cores_from_scan() itself now races unbounded in that case
+         (2026-08-09) rather than silently skipping -cores entirely --
+         only assign it into the options when it's a genuine positive
+         value the user actually gave. */
       if (force_strategy < 0 &&
           parm(psr->options->cores) > 0 &&
-          cmd_max_sec > 0 &&
           psr->scan != NULL &&
           psr->scan->n_axioms > 5000) {
         if (cmd_max_sec > 0)
@@ -1830,10 +2681,11 @@ int main(int argc, char **argv)
     input = std_prover_from_scan(psr, -1, -1, -1);
 
 #ifndef NO_OPEN_MEMSTREAM
-    /* Sliding-window cores (post-clausify) for small inputs */
+    /* Sliding-window cores (post-clausify) for small inputs.  No
+       max_seconds gate here either -- see the from-scan branch above
+       and cores_search()'s own 2026-08-09 fix for the rationale. */
     if (force_strategy < 0 &&
-        parm(input->options->cores) > 0 &&
-        parm(input->options->max_seconds) > 0) {
+        parm(input->options->cores) > 0) {
       cores_search(input, ml_ranking, ml_ranking_len, max_strategies, slice_sec);
       /* Does not return on success. */
     }
@@ -1859,9 +2711,11 @@ int main(int argc, char **argv)
       disable_max_megs();
 
 #ifndef NO_OPEN_MEMSTREAM
-    if (parm(input->options->cores) > 0 &&
-        parm(input->options->max_seconds) > 0) {
-      cores_search(input, NULL, 0, max_strategies, slice_sec);
+    /* No max_seconds gate -- see cores_search_ladr()'s own 2026-08-09
+       fix for the rationale (race unbounded rather than silently
+       skipping -cores when no -t was given). */
+    if (parm(input->options->cores) > 0) {
+      cores_search_ladr(input, max_strategies);
     }
 #endif
   }

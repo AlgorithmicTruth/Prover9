@@ -17,6 +17,8 @@
 */
 
 #include "paramod.h"
+#include "btu.h"     /* AC unification (assoc_comm symbols); see doc/AC-unification-implementation-notes.md */
+#include "accanon.h" /* ac_canonical, for the AC unifier soundness guard below */
 
 /* Private definitions and types */
 
@@ -344,8 +346,17 @@ void para_into(Literals from_lit, int from_side, Context cf, Ilist from_pos,
 	       BOOL skip_top,
 	       void (*proc_proc) (Topform))
 {
-  /* Iterative subterm traversal for paramodulation-into. */
-  struct { Term node; int child; Ilist pos_node; BOOL skip; } stack[1000];
+  /* Iterative subterm traversal for paramodulation-into.
+     Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume. */
+  typedef struct { Term node; int child; Ilist pos_node; BOOL skip; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top;
 
   if (!(((!VARIABLE(into)) | Para_into_vars) && basic_check(into)))
@@ -384,6 +395,15 @@ void para_into(Literals from_lit, int from_side, Context cf, Ilist from_pos,
       stack[top].pos_node->i++;
 
       if (((!VARIABLE(ch)) | Para_into_vars) && basic_check(ch)) {
+        if (top + 1 >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         top++;
         stack[top].node = ch;
         stack[top].child = -1;
@@ -416,25 +436,76 @@ void para_into(Literals from_lit, int from_side, Context cf, Ilist from_pos,
 
     /* Try unifying at this node (unless skip_top). */
     if (!stack[top].skip) {
-      Trail tr = NULL;
       Term alpha = ARG(from_lit->atom, from_side);
-      if (unify(alpha, cf, cur, ci, &tr)) {
-        if (check_instances(from_lit, from_side, cf, into_lit, cur, ci)) {
-          Topform p = paramodulate(from_lit, from_side, cf,
-                                    into_clause, into_pos, ci);
-          p->justification = para_just(PARA_JUST,
-                                        from_lit->atom->container,
-                                        copy_ilist(from_pos),
-                                        into_clause,
-                                        copy_ilist(into_pos));
-          (*proc_proc)(p);
+      if (assoc_comm_symbols()) {
+        /* AC path: iterate the SET of AC unifiers (btu backtracking
+           unifier).  Only taken when assoc_comm symbols are declared;
+           otherwise the syntactic path below runs, byte-identical to
+           the historical behavior. */
+        Btu_state bt = unify_bt_first(alpha, cf, cur, ci);
+        while (bt != NULL) {
+          /* SOUNDNESS GUARD: every AC unifier must be
+             genuine.  Instantiated alpha (the paramodulation source
+             term) must equal the instantiated target subterm cur,
+             modulo AC.  unify_ac must never return a unifier that
+             fails this; if it does, an unsound paramodulation is
+             about to happen, so abort loudly.  Companion to the
+             demod.c AC-match guard -- both are a temporary
+             trust-but-verify measure, candidates for removal once
+             the AC engine has enough track record. */
+          {
+            Term s1 = apply(alpha, cf);
+            Term s2 = apply(cur, ci);
+            ac_canonical(s1, -1);
+            ac_canonical(s2, -1);
+            if (!term_ident(s1, s2)) {
+              fprintf(stderr, "\n%% UNSOUND AC UNIFIER: ");
+              fprint_term(stderr, s1);
+              fprintf(stderr, " != ");
+              fprint_term(stderr, s2);
+              fprintf(stderr, "\n");
+              fatal_error("AC unifier verification failed "
+                          "(instantiated alpha != instantiated target "
+                          "mod AC)");
+            }
+            zap_term(s1);
+            zap_term(s2);
+          }
+          if (check_instances(from_lit, from_side, cf, into_lit, cur, ci)) {
+            Topform p = paramodulate(from_lit, from_side, cf,
+                                      into_clause, into_pos, ci);
+            p->justification = para_just(PARA_JUST,
+                                          from_lit->atom->container,
+                                          copy_ilist(from_pos),
+                                          into_clause,
+                                          copy_ilist(into_pos));
+            (*proc_proc)(p);
+          }
+          bt = unify_bt_next(bt);
         }
-        undo_subst(tr);
+      }
+      else {
+        Trail tr = NULL;
+        if (unify(alpha, cf, cur, ci, &tr)) {
+          if (check_instances(from_lit, from_side, cf, into_lit, cur, ci)) {
+            Topform p = paramodulate(from_lit, from_side, cf,
+                                      into_clause, into_pos, ci);
+            p->justification = para_just(PARA_JUST,
+                                          from_lit->atom->container,
+                                          copy_ilist(from_pos),
+                                          into_clause,
+                                          copy_ilist(into_pos));
+            (*proc_proc)(p);
+          }
+          undo_subst(tr);
+        }
       }
     }
 
     top--;
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
 }  /* para_into */
 
 /*************
@@ -526,9 +597,14 @@ void para_from_into(Topform from, Context cf,
  *************/
 
 /* DOCUMENTATION
-Construct a paramodulant from the given data.  A fatal error
-occurs if it does not exist.  In building the justification,
-the position vectors are copied.
+Construct a paramodulant from the given data.  Returns NULL if `into_term`
+doesn't exist at the given position, or if `alpha` doesn't unify with it
+(e.g. a recorded AC-based paramodulation step, which ordinary unify() can't
+replay -- see xproofs.c's expand_proof, whose PARA_JUST branch treats NULL
+as an expansion-failed signal and falls back to the unexpanded proof,
+exactly like its other primary-justification branches already do for
+factor()/xx_res2()/new_constant()).  In building the justification, the
+position vectors are copied.
 */
 
 /* PUBLIC */
@@ -546,12 +622,18 @@ Topform para_pos(Topform from_clause, Ilist from_pos,
   int from_side = (from_pos->next->i == 1 ? 0 : 1);
   Term alpha = ARG(from_lit->atom, from_side);
   Term into_term = term_at_pos(into_lit->atom, into_pos->next);
-  if (into_term == NULL)
-    fatal_error("paramod2_instances, term does not exist");
+  if (into_term == NULL) {
+    free_context(cf);
+    free_context(ci);
+    return NULL;
+  }
 
   ok = unify(alpha, cf, into_term, ci, &tr);
-  if (!ok)
-    fatal_error("para_pos, terms do not unify");
+  if (!ok) {
+    free_context(cf);
+    free_context(ci);
+    return NULL;
+  }
 
   paramodulant = paramodulate(from_lit, from_side, cf,
 			      into_clause, into_pos, ci);

@@ -22,6 +22,7 @@
 #include "nonport.h"
 #include "clausify.h"
 #include "definitions.h"
+#include "tptp_parse.h"  /* get_tptp_cnf_attr() */
 #include <ctype.h>  /* for toupper, tolower */
 
 /* Private definitions and types */
@@ -1156,6 +1157,50 @@ int get_clausal_fof_attr(void)
 
 /*************
  *
+ *   ensure_native_tptp_name()
+ *
+ *************/
+
+/* DOCUMENTATION
+Native-syntax Topforms never get a tptp_name (that attribute is only
+set by ladr/tptp_parse.c, for genuine TPTP fof()/cnf() input), so
+build_sk_groups()/skolem_group_of() (provers.src/search.c) silently
+skip them when printing a proof in TSTP form -- the printer then
+drops the pre-clausification conjecture/axiom leaf even though
+record_full_clausification() recorded everything needed to print it
+(see docs/tstp-native-syntax-tptp-name-gap-spec.md).
+
+Reuse the clause's own "# label(...)" if the input gave it one (this
+project's own convention -- axioms/goals are routinely tagged, e.g.
+"# label(ax1)") for a legible name; fall back to a generated,
+guaranteed-unique in<id> name only when no label exists.
+*/
+
+/* PRIVATE */
+static
+void ensure_native_tptp_name(Topform tf)
+{
+  char *label;
+  char name[32];
+
+  if (get_string_attribute(tf->attributes, get_tptp_name_attr(), 1))
+    return;  /* already has one -- shouldn't happen for native input,
+                but don't clobber it if some future path sets one */
+
+  label = (label_att() >= 0) ?
+    get_string_attribute(tf->attributes, label_att(), 1) : NULL;
+  if (label != NULL)
+    tf->attributes = set_string_attribute(tf->attributes,
+					  get_tptp_name_attr(), label);
+  else {
+    sprintf(name, "in%llu", tf->id);
+    tf->attributes = set_string_attribute(tf->attributes,
+					  get_tptp_name_attr(), name);
+  }
+}  /* ensure_native_tptp_name */
+
+/*************
+ *
  *   process_input_formulas()
  *
  *************/
@@ -1180,8 +1225,13 @@ Plist process_input_formulas(Plist formulas, BOOL echo)
       /* Mark it: this fof axiom is already in clause form, so clausify() is a
          no-op and no fof-leaf + clausify node would otherwise be emitted.  The
          marker lets TSTP output emit a documented fof leaf + clausify(thm).
-         TPTP mode only (see Mark_clausal_fofs). */
-      if (Mark_clausal_fofs)
+         TPTP mode only (see Mark_clausal_fofs).  A cnf() input record is
+         excluded (tptp_cnf attribute, set by the TPTP parser): it underwent
+         no translation at all, so TSTP output must echo it as a bare cnf
+         leaf citing the file -- restating it as a quantified fof leaf makes
+         the leaf fail verifiers' literal-copy provenance checks. */
+      if (Mark_clausal_fofs &&
+          get_int_attribute(tf->attributes, get_tptp_cnf_attr(), 1) != 1)
         tf->attributes = set_int_attribute(tf->attributes,
 					   get_clausal_fof_attr(), 1);
       /* just make it into a clause data structure and use the same Topform */
@@ -1200,6 +1250,7 @@ Plist process_input_formulas(Plist formulas, BOOL echo)
       Formula nnf_form = NULL, skolem_form = NULL;
       Plist skolem_map = NULL;
       assign_clause_id(tf);
+      ensure_native_tptp_name(tf);
       f2 = universal_closure(formula_copy(tf->formula));
       clauses = clausify_formula_cap(f2, &nnf_form, &skolem_form, &skolem_map);
       if (clauses == NULL) {
@@ -1320,6 +1371,7 @@ Plist process_goal_formulas(Plist formulas, BOOL echo)
       /* Otherwise the formula simplified to TRUE (0 clauses) -- skip it. */
     }
     assign_clause_id(tf);
+    ensure_native_tptp_name(tf);
     record_full_clausification(tf, clauses, nnf_form, skolem_form,
 			       skolem_map);
     for (q = clauses; q; q = q->next) {

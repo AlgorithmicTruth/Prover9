@@ -51,6 +51,7 @@ PROVER_SRC = provers.src/prover9.c \
 # Mace4 sources
 MACE_SRC = mace4.src/mace4.c \
            mace4.src/msearch.c \
+           mace4.src/sizesched.c \
            mace4.src/commandline.c \
            mace4.src/ground.c \
            mace4.src/propagate.c \

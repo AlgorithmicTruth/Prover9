@@ -61,6 +61,13 @@ test6:
 	@echo ""
 	@echo "**** Expected: GaveUp, CounterSatisfiable ****"
 	@echo "**** If both match, mace4 TPTP mode is okay. ****"
+	@echo "**** Next try 'make test7'. ****"
+	@echo ""
+
+test7:
+	@test.src/distinctness_test.sh bin/prover9
+	@echo ""
+	@echo "**** Distinctness/numeral-unification regression matrix. ****"
 	@echo ""
 	@echo "*** All of the programs are in ./bin, and they can be copied anywhere you like. ***"
 	@echo ""

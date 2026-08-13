@@ -94,7 +94,11 @@ void p_options(void);
 
 int flag(int flag_id);
 
+BOOL flag_is_user_set(int flag_id);
+
 int parm(int parm_id);
+
+BOOL parm_is_user_set(int parm_id);
 
 BOOL at_parm_limit(int value, int parm_id);
 
@@ -102,9 +106,13 @@ BOOL over_parm_limit(int value, int parm_id);
 
 double floatparm(int floatparm_id);
 
+BOOL floatparm_is_user_set(int floatparm_id);
+
 BOOL stringparm(int id, char *s);
 
 char *stringparm1(int id);
+
+BOOL stringparm_is_user_set(int id);
 
 void update_flag(FILE *fout, int id, BOOL val, BOOL echo);
 

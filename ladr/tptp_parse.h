@@ -58,6 +58,9 @@ struct scan_entry {
   int   role;        /* SCAN_ROLE_* */
   BOOL  is_fof;      /* TRUE for fof, FALSE for cnf */
   char  name[256];   /* formula name for diagnostics */
+  char  source_file[256]; /* file this formula was scanned from (basename):
+                              the top-level problem file, or an include()'d
+                              axiom file */
   int   eq_count;        /* occurrences of = in body */
   int   pipe_count;      /* occurrences of | in body */
   int   tilde_count;     /* occurrences of ~ in body */
@@ -95,8 +98,16 @@ Tptp_input parse_scanned_formulas(Scan_result scan, BOOL *keep);
 
 void free_scan_result(Scan_result scan);
 
+void tptp_tag_distinct_objects(Plist distinct_names);
+
 Plist tptp_distinct_object_axioms(Plist distinct_names);
 
 int get_tptp_name_attr(void);
+
+int get_tptp_source_file_attr(void);
+
+int get_tptp_cnf_attr(void);
+
+int get_tptp_neg_conj_attr(void);
 
 #endif  /* conditional compilation of whole file */

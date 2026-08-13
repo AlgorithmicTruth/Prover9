@@ -292,8 +292,17 @@ Ordertype can_compare(Term a, Term b, int sn)
 static
 Term canon(Term t, int flag)
 {
-  /* Iterative term-tree canonicalization using explicit stack. */
-  struct { Term node; int child; } stack[1000];
+  /* Iterative term-tree canonicalization using explicit stack.
+     Small-buffer optimization: a small on-stack buffer handles the
+     common shallow case at zero allocation cost; only pathologically
+     deep terms spill to a growable heap array (safe_malloc/free
+     doubling). A fixed array here silently corrupts memory on very
+     deep terms; an unconditional heap allocation on every call is
+     measurably slower at this function's call volume. */
+  typedef struct { Term node; int child; } Sframe;
+  Sframe sbo_buf[64];
+  Sframe *stack = sbo_buf;
+  int cap = 64;
   int top = 0;
   BOOL restart;
 
@@ -312,9 +321,18 @@ Term canon(Term t, int flag)
     /* Phase 1: push children that still need processing. */
     if (stack[top].child < ARITY(cur)) {
       int c = stack[top].child;
-      stack[top].child++;
       Term ch = ARG(cur, c);
+      stack[top].child++;
       if (!term_flag(ch, flag) && !VARIABLE(ch)) {
+        if (top + 1 >= cap) {
+          int new_cap = cap * 2;
+          Sframe *new_stack = safe_malloc(new_cap * sizeof(Sframe));
+          memcpy(new_stack, stack, cap * sizeof(Sframe));
+          if (stack != sbo_buf)
+            safe_free(stack);
+          stack = new_stack;
+          cap = new_cap;
+        }
         top++;
         stack[top].node = ch;
         stack[top].child = 0;
@@ -360,6 +378,8 @@ Term canon(Term t, int flag)
       top--;
     }
   }
+  if (stack != sbo_buf)
+    safe_free(stack);
   return t;
 }  /* canon */
 

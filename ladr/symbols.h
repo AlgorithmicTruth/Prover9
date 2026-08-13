@@ -246,6 +246,10 @@ void set_distinct_object(int symnum);
 
 BOOL is_distinct_object(int symnum);
 
+void set_numeral(int symnum);
+
+BOOL is_numeral(int symnum);
+
 void set_quoted(int symnum);
 
 BOOL is_quoted(int symnum);

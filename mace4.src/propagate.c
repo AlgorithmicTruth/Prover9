@@ -28,6 +28,7 @@ extern struct cell *Cells;
 
 extern int Domain_size;
 extern Term *Domain; /* array of terms representing (shared) domain elements */
+extern Term Bool_domain[2];
 
 extern int Relation_flag;  /* term flag */
 extern int Negation_flag;  /* term flag */
@@ -100,12 +101,29 @@ Term decode_eterm_id(int id)
  *
  *   pvalues_check()
  *
- *   If there is exactly 1 possible value, return it; else return NULL;
+ *   If there is exactly 1 possible value, return it; if more than 1
+ *   remain, return NULL ("nothing forced yet").  If NONE remain, that
+ *   is a genuine contradiction (this cell has no valid value left) --
+ *   set state->ok = FALSE (the caller's existing convention, matching
+ *   new_assignment's) and return NULL, rather than treating it as an
+ *   unreachable program error.
+ *
+ *   Previously a bare fatal_error() here, on the assumption this case
+ *   can never happen: with 2+ possible values, the FIRST elimination
+ *   always leaves at least 1, which forces an assignment via
+ *   new_assignment before any further elimination is attempted on the
+ *   same cell (Cells[id].value != NULL short-circuits it, see
+ *   new_elimination).  That assumption silently depended on
+ *   Domain_size >= 2 -- at domain size 1, a cell's possible[] array has
+ *   exactly one slot, so its very FIRST elimination can legitimately
+ *   exhaust it in one step (e.g. testing x != y is unsatisfiable when
+ *   there is only one domain element, which is simply true, not a bug).
+ *   See docs/mace4-domain-size-1-spec.md.
  *
  *************/
 
 static
-Term pvalues_check(Term *a, int n)
+Term pvalues_check(Term *a, int n, Mstate state)
 {
   Term b = NULL;
   int i;
@@ -118,7 +136,7 @@ Term pvalues_check(Term *a, int n)
     }
   }
   if (b == NULL)
-    fatal_error("pvalues_check: no possible values\n");
+    state->ok = FALSE;
   return b;
 }  /* pvalues_check */
 
@@ -161,7 +179,7 @@ void nterm_check_and_process(Term lit, Mstate state)
   else if (nterm(lit, &pos, &id)) {
     insert_negprop_noneq(lit, state);
     job_prepend(state, NEAR_ASSIGNMENT, id, lit,
-		(neg ? Domain[0] : Domain[1]), pos);
+		(neg ? Bool_domain[0] : Bool_domain[1]), pos);
   }
 }  /* nterm_check_and_process */
 
@@ -241,7 +259,7 @@ void new_elimination(int id, Term beta, Mstate state)
     if (flag(Opt->negprop))
       job_prepend(state, ELIMINATION, id, NULL, beta, -1);
 
-    value = pvalues_check(Cells[id].possible, Domain_size);
+    value = pvalues_check(Cells[id].possible, id_to_domain_size(id), state);
     if (value == NULL)
       return;  /* ok: nothing more to do */
     else {
@@ -299,7 +317,7 @@ void process_clause(Mclause c, Mstate state)
 #endif
 
     if (!eq && eterm(lit, &id))
-      beta = Domain[negated ? 0 : 1]; /* P(1,2,3) or ~P(1,2,3) */
+      beta = Bool_domain[negated ? 0 : 1]; /* P(1,2,3) or ~P(1,2,3) */
     else if (eq && eterm(ARG(lit,0),&id) && VARIABLE(ARG(lit,1)))
       beta = ARG(lit,1);  /* f(1,2)=3 or f(1,2)!=3 */
     else if (eq && eterm(ARG(lit,1),&id) && VARIABLE(ARG(lit,0)))
@@ -336,7 +354,7 @@ Mclause handle_literal(Term lit, Term result, Mstate state)
   /* Result should be either 0 or 1, because lit is a literal.
      if the literal is negated, negate the result. */
   if (negated)
-    result = (result == Domain[0] ? Domain[1] : Domain[0]);
+    result = (FALSE_TERM(result) ? Bool_domain[1] : Bool_domain[0]);
   state->stack = update_and_push((void **) &(LIT(parent_clause,pos)),
 				 result, state->stack);
 				    
@@ -415,7 +433,7 @@ void propagate_positive(int id, Mstate state)
 	  Term result;
 	  if (b != 0 && b != 1)
 	    fatal_error("propagate_positive, arith_eval should be Boolean");
-	  result = (b ? Domain[1] : Domain[0]);
+	  result = (b ? Bool_domain[1] : Bool_domain[0]);
 	  clause_to_process = handle_literal(parent_lit, result, state);
 	}
 	else if (EQ_TERM(curr))
