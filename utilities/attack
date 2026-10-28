@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 
 # This script takes a Mace4 input file (the head) and a stream of
 # candidates.  It builds a list of models (M) of the candidates w.r.t.
@@ -33,10 +33,11 @@ from subprocess import *
 def runjob4(command_and_args, stdin_string=None):
 
     if debug:
-        print "Starting job:", command_and_args
+        print("Starting job:", command_and_args)
 
     # Must have stdin arg; otherwise, it uses this process's stdin.
-    p1 = Popen(command_and_args, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+    p1 = Popen(command_and_args, stdin=PIPE, stdout=PIPE, stderr=PIPE,
+               text=True)
     (out, err) = p1.communicate(stdin_string)
         
     exit_code = p1.wait()
@@ -45,7 +46,7 @@ def runjob4(command_and_args, stdin_string=None):
     if debug:
         sys.stdout.writelines(out)
         sys.stdout.writelines(err)
-        print "pid=%d, exit_code=%d" % (pid,exit_code)
+        print("pid=%d, exit_code=%d" % (pid,exit_code))
 
     return (pid, exit_code, out, err)
 
@@ -83,7 +84,7 @@ mace4_error_exits = [1,102]
 
 for line in sys.stdin:
 
-    if re.match('\s*%', line):
+    if re.match(r'\s*%', line):
         # passs comment line through to stdout
         sys.stdout.write(line)
         continue

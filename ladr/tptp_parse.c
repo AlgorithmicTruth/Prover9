@@ -24,7 +24,8 @@
  * Grammar (simplified):
  *   tptp_file   = { annotated | include } EOF
  *   annotated   = ("fof"|"cnf") "(" name "," role "," formula ")" "."
- *   include     = "include" "(" quoted ")" "."
+ *   include     = "include" "(" quoted [ "," "[" [ name { "," name } ] "]" ]
+ *                 ")" "."
  *   fof_formula = fof_binary | fof_unitary
  *   fof_binary  = fof_or { ("<=>" | "<~>" | "~|" | "~&") fof_or }
  *   fof_or      = fof_and { "|" fof_and }
@@ -1420,6 +1421,71 @@ static Formula expand_distinct_atoms(Lexer *lex, Formula f, BOOL legal_pos,
 }
 
 /*
+ * include() formula selection.  TPTP's include has an optional second
+ * argument, a list of formula names:
+ *
+ *   include('Axioms/FOO.ax').              the whole file
+ *   include('Axioms/FOO.ax', [ia1,ia3]).   only the named formulas
+ *
+ * A selection applies to every formula the included file yields,
+ * including those from files it includes in turn, so when includes nest,
+ * a formula is kept only if every enclosing selection names it (as in
+ * tptp4X).  The enclosing selections are passed down as a Plist of name
+ * lists (each a Plist of char *), innermost first; NULL means no
+ * selection.  An empty list selects nothing.  Names compare as the lexer
+ * returns them, so 'ia1' and ia1 are the same name.
+ */
+
+/* Parse the optional ", [name, ...]" after an include's file name.
+   Returns TRUE, with the names in *names, if there is one. */
+static BOOL parse_include_selection(Lexer *lex, Plist *names)
+{
+  char nbuf[MAX_TOKEN_LEN];
+  char *n;
+
+  *names = NULL;
+  if (peek(lex)->type != TOK_COMMA)
+    return FALSE;
+  consume(lex);
+  expect(lex, TOK_LBRACKET, "'['");
+  if (peek(lex)->type != TOK_RBRACKET) {
+    while (TRUE) {
+      parse_name(lex, nbuf, sizeof(nbuf));
+      n = safe_malloc(strlen(nbuf) + 1);
+      strcpy(n, nbuf);
+      *names = plist_prepend(*names, n);
+      if (peek(lex)->type != TOK_COMMA)
+        break;
+      consume(lex);
+    }
+  }
+  expect(lex, TOK_RBRACKET, "']'");
+  return TRUE;
+}
+
+static void free_include_selection(Plist names)
+{
+  Plist p;
+  for (p = names; p; p = p->next)
+    safe_free(p->v);
+  zap_plist(names);
+}
+
+static BOOL tptp_name_selected(const char *name, Plist selections)
+{
+  Plist s, p;
+  for (s = selections; s != NULL; s = s->next) {
+    for (p = s->v; p != NULL; p = p->next) {
+      if (strcmp((char *) p->v, name) == 0)
+        break;
+    }
+    if (p == NULL)
+      return FALSE;
+  }
+  return TRUE;
+}
+
+/*
  * Main parsing entry point (recursive for includes)
  */
 
@@ -1427,6 +1493,7 @@ static void parse_tptp_input(Lexer *lex,
                              Plist *assumps,
                              Plist *goals,
                              BOOL *has_neg_conj,
+                             Plist selections,
                              int include_depth)
 {
   if (include_depth > MAX_INCLUDE_DEPTH)
@@ -1450,6 +1517,7 @@ static void parse_tptp_input(Lexer *lex,
       Token *qt;
       char *include_name;
       Plist name_filter = NULL;
+      BOOL has_filter;
       char *path;
       FILE *inc_file;
       Lexer inc_lex;
@@ -1463,24 +1531,7 @@ static void parse_tptp_input(Lexer *lex,
       consume(lex);
 
       /* Optional name filter: include('file', [name1, name2]) */
-      if (peek(lex)->type == TOK_COMMA) {
-        char nbuf[MAX_TOKEN_LEN];
-        char *n;
-        consume(lex);
-        expect(lex, TOK_LBRACKET, "'['");
-        parse_name(lex, nbuf, sizeof(nbuf));
-        n = safe_malloc(strlen(nbuf) + 1);
-        strcpy(n, nbuf);
-        name_filter = plist_prepend(name_filter, n);
-        while (peek(lex)->type == TOK_COMMA) {
-          consume(lex);
-          parse_name(lex, nbuf, sizeof(nbuf));
-          n = safe_malloc(strlen(nbuf) + 1);
-          strcpy(n, nbuf);
-          name_filter = plist_prepend(name_filter, n);
-        }
-        expect(lex, TOK_RBRACKET, "']'");
-      }
+      has_filter = parse_include_selection(lex, &name_filter);
 
       expect(lex, TOK_RPAREN, "')'");
       expect(lex, TOK_DOT, "'.'");
@@ -1548,22 +1599,15 @@ static void parse_tptp_input(Lexer *lex,
 
       lexer_init(&inc_lex, inc_file, path);
 
-      if (name_filter == NULL) {
-        /* No filter: include everything */
+      {
+        /* With a filter, keep only the named formulas (see
+           tptp_name_selected()). */
+        Plist sels = (has_filter ? plist_prepend(selections, name_filter)
+                                 : selections);
         parse_tptp_input(&inc_lex, assumps, goals, has_neg_conj,
-                         include_depth + 1);
-      }
-      else {
-        /* With filter: parse into temp lists, keep only matching names */
-        Plist temp_assumps = NULL;
-        Plist temp_goals = NULL;
-        /* We need to filter by name, but our parser doesn't track names
-           of individual formulas in the Plist.  For simplicity, include
-           everything (name filtering is rarely used in practice). */
-        parse_tptp_input(&inc_lex, &temp_assumps, &temp_goals,
-                         has_neg_conj, include_depth + 1);
-        *assumps = plist_cat(*assumps, temp_assumps);
-        *goals = plist_cat(*goals, temp_goals);
+                         sels, include_depth + 1);
+        if (has_filter)
+          free_plist(sels);
       }
 
       /* Propagate magic commands from included file */
@@ -1573,13 +1617,7 @@ static void parse_tptp_input(Lexer *lex,
       fclose(inc_file);
       safe_free(path);
       safe_free(include_name);
-      /* Free name filter strings */
-      if (name_filter) {
-        Plist p;
-        for (p = name_filter; p; p = p->next)
-          safe_free(p->v);
-        zap_plist(name_filter);
-      }
+      free_include_selection(name_filter);
       continue;
     }
 
@@ -1657,6 +1695,12 @@ static void parse_tptp_input(Lexer *lex,
 
     expect(lex, TOK_RPAREN, "')'");
     expect(lex, TOK_DOT, "'.'");
+
+    /* Drop a formula that an enclosing include() did not select. */
+    if (!tptp_name_selected(formula_name, selections)) {
+      zap_formula(f);
+      continue;
+    }
 
     /* Attach the TPTP formula name so it survives clausification.
        The attribute propagates: Formula -> Topform -> clausified clauses. */
@@ -1764,7 +1808,7 @@ Tptp_input read_tptp_stream(FILE *fin, const char *source_name)
   lexer_init(&lex, fin, source_name);
 
   init_symbol_cache();
-  parse_tptp_input(&lex, &assumps, &goals, &neg_conj, 0);
+  parse_tptp_input(&lex, &assumps, &goals, &neg_conj, NULL, 0);
 
   result = safe_malloc(sizeof(struct tptp_input));
   result->assumptions = reverse_plist(assumps);
@@ -1993,6 +2037,7 @@ static void scan_tptp_input(Lexer *lex,
                             int *n_goals,
                             BOOL *has_neg_conj,
                             Plist *distinct_objects,
+                            Plist selections,
                             int include_depth)
 {
   if (include_depth > MAX_INCLUDE_DEPTH)
@@ -2009,6 +2054,8 @@ static void scan_tptp_input(Lexer *lex,
     /* include */
     if (strcmp(t->text, "include") == 0) {
       char *include_name;
+      Plist name_filter;
+      BOOL has_filter;
       char *path;
       FILE *inc_file;
       Lexer inc_lex;
@@ -2023,24 +2070,8 @@ static void scan_tptp_input(Lexer *lex,
       strcpy(include_name, t->text);
       consume(lex);
 
-      /* Skip optional name filter */
-      if (peek(lex)->type == TOK_COMMA) {
-        int depth = 0;
-        consume(lex);
-        /* Skip to closing paren at depth 0 */
-        while (TRUE) {
-          Token *at = peek(lex);
-          if (at->type == TOK_EOF)
-            tptp_parse_error(lex, "unexpected EOF in include name filter");
-          if (at->type == TOK_LBRACKET) { depth++; consume(lex); }
-          else if (at->type == TOK_RBRACKET) {
-            if (depth <= 1) { consume(lex); break; }
-            depth--;
-            consume(lex);
-          }
-          else { consume(lex); }
-        }
-      }
+      /* Optional name filter: include('file', [name1, name2]) */
+      has_filter = parse_include_selection(lex, &name_filter);
 
       expect(lex, TOK_RPAREN, "')'");
       expect(lex, TOK_DOT, "'.'");
@@ -2093,9 +2124,17 @@ static void scan_tptp_input(Lexer *lex,
 #endif
 
       lexer_init(&inc_lex, inc_file, path);
-      scan_tptp_input(&inc_lex, ht, eb, sa,
-                       n_axioms, n_goals, has_neg_conj,
-                       distinct_objects, include_depth + 1);
+      {
+        /* With a filter, keep only the named formulas (see
+           tptp_name_selected()). */
+        Plist sels = (has_filter ? plist_prepend(selections, name_filter)
+                                 : selections);
+        scan_tptp_input(&inc_lex, ht, eb, sa,
+                         n_axioms, n_goals, has_neg_conj,
+                         distinct_objects, sels, include_depth + 1);
+        if (has_filter)
+          free_plist(sels);
+      }
 
       /* Propagate magic commands */
       lex->magic_commands = plist_cat(lex->magic_commands,
@@ -2103,6 +2142,7 @@ static void scan_tptp_input(Lexer *lex,
       fclose(inc_file);
       safe_free(path);
       safe_free(include_name);
+      free_include_selection(name_filter);
       continue;
     }
 
@@ -2124,6 +2164,7 @@ static void scan_tptp_input(Lexer *lex,
       int scan_role;
       int depth;
       int eq_cnt = 0, pipe_cnt = 0, tilde_cnt = 0, max_depth = 0;
+      BOOL selected;
 
       if (strcmp(t->text, "fof") == 0)
         is_fof = TRUE;
@@ -2136,8 +2177,11 @@ static void scan_tptp_input(Lexer *lex,
 
       expect(lex, TOK_LPAREN, "'('");
 
-      /* Name */
+      /* Name.  A formula that an enclosing include() did not select is
+         scanned past and dropped below, and its distinct objects are not
+         collected. */
       parse_name(lex, formula_name, sizeof(formula_name));
+      selected = tptp_name_selected(formula_name, selections);
       expect(lex, TOK_COMMA, "','");
 
       /* Role */
@@ -2190,7 +2234,7 @@ static void scan_tptp_input(Lexer *lex,
           int qlen;
           char *qbuf, *d;
           /* Collect distinct object names (with prefix) */
-          if (t->type == TOK_DISTINCT) {
+          if (t->type == TOK_DISTINCT && selected) {
             char prefixed[MAX_TOKEN_LEN];
             snprintf(prefixed, sizeof(prefixed), "%s%s", prefix, t->text);
             *distinct_objects = add_distinct_name(*distinct_objects, prefixed);
@@ -2287,6 +2331,11 @@ static void scan_tptp_input(Lexer *lex,
 
       expect(lex, TOK_RPAREN, "')'");
       expect(lex, TOK_DOT, "'.'");
+
+      if (!selected) {
+        safe_free(bb.data);
+        continue;
+      }
 
       /* Classify by role */
       if (strcmp(role, "conjecture") == 0) {
@@ -2387,7 +2436,7 @@ Scan_result scan_tptp_stream(FILE *fin, const char *source_name)
 
   lexer_init(&lex, fin, source_name);
   scan_tptp_input(&lex, ht, &eb, &sa,
-                   &n_axioms, &n_goals, &neg_conj, &dist_objs, 0);
+                   &n_axioms, &n_goals, &neg_conj, &dist_objs, NULL, 0);
 
   result = safe_malloc(sizeof(struct scan_result));
   result->entries = eb.entries;

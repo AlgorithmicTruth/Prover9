@@ -214,9 +214,7 @@ int main(int argc, char **argv)
     filename = argv[rc+1];
     fin = fopen(filename, "r");
     if (fin == NULL) {
-      char s[100];
-      sprintf(s, "file %s not found", argv[rc+1]);
-      fatal_error(s);
+      fatal_file_not_found(NULL, argv[rc+1]);
     }
   }
 

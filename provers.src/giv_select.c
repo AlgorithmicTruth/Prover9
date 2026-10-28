@@ -20,6 +20,7 @@
 #include "semantics.h"
 #include "../ladr/avltree.h"
 #include "../ladr/clause_eval.h"
+#include <math.h>
 
 /* Private definitions and types */
 
@@ -98,6 +99,21 @@ void free_giv_select(Giv_select p)
 
 /*************
  *
+ *   add_parts()
+ *
+ *************/
+
+/* Parts are nonnegative, and a part can be INT_MAX ("take everything
+   from this selector first"), so a sum of parts saturates at INT_MAX. */
+
+static
+int add_parts(int a, int b)
+{
+  return (a > INT_MAX - b ? INT_MAX : a + b);
+}  /* add_parts */
+
+/*************
+ *
  *   current_cycle_size()
  *
  *************/
@@ -110,7 +126,7 @@ int current_cycle_size(Select_state s)
   for (p = s->selectors; p; p = p->next) {
     Giv_select gs = p->v;
     if (avl_size(gs->idx) > 0)
-      sum += gs->part;
+      sum = add_parts(sum, gs->part);
   }
   return sum;
 }  /* current_cycle_size */
@@ -558,18 +574,19 @@ BOOL sos_keep2(Topform c, Clist sos, Prover_options opt)
   if (sos_size < sos_limit / keep_factor)
     keep = TRUE;
   else {
-    int iters;
+    double iters;
     c->id = INT_MAX;
     iters = least_iters_to_selection(c, &Low, NULL);
     if (Debug)
-      printf("iters=%d, wt=%.3f\n", iters, c->weight);
+      printf("iters=%.0f, wt=%.3f\n", trunc(iters), c->weight);
     if (iters < sos_limit / keep_factor)
       keep = TRUE;
     else {
       if (c->weight < Low_water_keep) {
 	Low_water_keep = c->weight;
 	if (!flag(opt->quiet)) {
-	  printf("\nLow Water (keep): wt=%.3f, iters=%d\n", c->weight, iters);
+	  printf("\nLow Water (keep): wt=%.3f, iters=%.0f\n",
+		 c->weight, trunc(iters));
 	  if (stringparm(opt->stats, "all"))
 	    selector_report();
 	  fflush(stdout);

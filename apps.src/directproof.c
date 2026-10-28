@@ -32,6 +32,15 @@ static int Transformations = 0;
 
 #define BUF_MAX 1000
 
+/* fscanf's "%s" has no bound of its own, so the proof tokens (a "%" or a
+   clause id) are read with a field width of BUF_MAX, into a buffer of
+   BUF_MAX+1 to leave room for the NUL.  A longer token is malformed
+   input, which the parsing below rejects. */
+
+#define STRINGIFY_(x) #x
+#define STRINGIFY(x)  STRINGIFY_(x)
+#define TOKEN_FMT     "%" STRINGIFY(BUF_MAX) "s"
+
 /*************
  *
  *   read_heading()
@@ -665,9 +674,7 @@ int main(int argc, char **argv)
     filename = argv[n+1];
     fin = fopen(filename, "r");
     if (fin == NULL) {
-      char s[100];
-      sprintf(s, "file %s not found", argv[n+1]);
-      fatal_error(s);
+      fatal_file_not_found(NULL, argv[n+1]);
     }
   }
   
@@ -697,11 +704,11 @@ int main(int argc, char **argv)
     /* ok, we have a proof */
     String_buf comment = get_string_buf();
 
-    char s[BUF_MAX];
+    char s[BUF_MAX+1];  /* +1: TOKEN_FMT's width is BUF_MAX */
     Plist proof = NULL;
     number_of_proofs++;
 
-    if (fscanf(fin, "%s", s) < 1) s[0] = '\0';  /* "%" or clause id */
+    if (fscanf(fin, TOKEN_FMT, s) < 1) s[0] = '\0';  /* "%" or clause id */
     while (str_ident(s, "%")) {
       if (!fgets(s, BUF_MAX, fin)) s[0] = '\0';
       /* in case prooftrans is run multiple times */
@@ -710,21 +717,25 @@ int main(int argc, char **argv)
 	sb_append(comment, s);
       }
       /* in case there are any long comment lines (answers) */
-      if (s[strlen(s)] != '\n') {
-	char c;
-	do {
-	  c = fgetc(fin);
+      if (s[0] != '\0' && s[strlen(s)-1] != '\n') {
+	int c;  /* int, so that EOF is not mistaken for a char */
+	while ((c = fgetc(fin)) != EOF) {
 	  sb_append_char(comment, c);
-	} while (c != '\n');
+	  if (c == '\n')
+	    break;
+	}
       }
-      if (fscanf(fin, "%s", s) < 1) s[0] = '\0';  /* "%" or clause id */
+      if (fscanf(fin, TOKEN_FMT, s) < 1) s[0] = '\0';  /* "%" or clause id */
     }
 
     while (!substring("==========", s)) {  /* separator at end of proof */
       Term clause_term = read_term(fin, stderr);
       Term just_term = read_term(fin, stderr);
       int id;
-      Topform cl = term_to_clause(clause_term);
+      Topform cl;
+      if (clause_term == NULL || just_term == NULL)
+	fatal_error("proof ends prematurely (truncated input?)");
+      cl = term_to_clause(clause_term);
       clause_set_variables(cl, MAX_VARS);
       cl->justification = term_to_just(just_term);
       if (str_to_int(s, &id))
@@ -734,7 +745,7 @@ int main(int argc, char **argv)
 
       proof = plist_prepend(proof, cl);
 
-      if (fscanf(fin, "%s", s) < 1) s[0] = '\0';  /* clause id */
+      if (fscanf(fin, TOKEN_FMT, s) < 1) s[0] = '\0';  /* clause id */
     }
     proof = reverse_plist(proof);
     proofs = plist_append(proofs, proof);

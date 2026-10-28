@@ -45,6 +45,8 @@ void set_fatal_exit_code(int exit_code);
 
 NORETURN void fatal_error(char *message);
 
+NORETURN void fatal_file_not_found(char *context, char *filename);
+
 void set_fatal_tptp_mode(BOOL mode, char *problem_name);
 
 void set_fatal_szs_status(const char *status);

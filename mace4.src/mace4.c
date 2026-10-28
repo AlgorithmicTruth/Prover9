@@ -308,6 +308,24 @@ Plist read_mace4_input(int argc, char **argv, BOOL allow_unknown_things,
 
 /*************
  *
+ *   resume_path()
+ *
+ *************/
+
+/* Return "<dir>/<name>" in a buffer sized to fit; the -r directory comes
+   from the command line, so its length is not bounded.  The caller frees
+   it with safe_free(). */
+
+static
+char *resume_path(const char *dir, const char *name)
+{
+  char *path = safe_malloc(strlen(dir) + strlen(name) + 2);
+  sprintf(path, "%s/%s", dir, name);
+  return path;
+}  /* resume_path */
+
+/*************
+ *
  *   main()
  *
  *************/
@@ -504,13 +522,14 @@ int main(int argc, char **argv)
   /* If resuming from checkpoint, check if original was TPTP mode
      and redirect stdin to saved_input.txt */
   if (resume_dir != NULL && !tptp_mode) {
-    char saved_input_path[512];
-    char meta_path[512];
+    char *saved_input_path;
+    char *meta_path;
     FILE *mfp;
 
     /* Early read of metadata.txt to check tptp_mode */
-    sprintf(meta_path, "%s/metadata.txt", resume_dir);
+    meta_path = resume_path(resume_dir, "metadata.txt");
     mfp = fopen(meta_path, "r");
+    safe_free(meta_path);
     if (mfp != NULL) {
       char key[64];
       char val[64];
@@ -527,11 +546,12 @@ int main(int argc, char **argv)
       fclose(mfp);
     }
 
-    sprintf(saved_input_path, "%s/saved_input.txt", resume_dir);
+    saved_input_path = resume_path(resume_dir, "saved_input.txt");
     if (freopen(saved_input_path, "r", stdin) == NULL) {
       fprintf(stderr, "ERROR: cannot open %s for resume\n", saved_input_path);
       exit(1);
     }
+    safe_free(saved_input_path);
     fprintf(stderr, "Resuming from checkpoint: %s\n", resume_dir);
   }
 
@@ -702,19 +722,20 @@ int main(int argc, char **argv)
   /* Handle resume: read trail and modify mace4 behavior */
   if (resume_dir != NULL) {
     /* Read metadata */
-    char meta_path[512];
+    char *meta_path;
     FILE *mfp;
     int saved_domain_size = 0;
     unsigned saved_total_models = 0;
     unsigned saved_selections = 0;
     int saved_depth = 0;
 
-    sprintf(meta_path, "%s/metadata.txt", resume_dir);
+    meta_path = resume_path(resume_dir, "metadata.txt");
     mfp = fopen(meta_path, "r");
     if (mfp == NULL) {
       fprintf(stderr, "ERROR: cannot read %s\n", meta_path);
       exit(1);
     }
+    safe_free(meta_path);
     {
       char key[64];
       char val[64];
@@ -733,17 +754,18 @@ int main(int argc, char **argv)
 
     /* Read trail */
     {
-      char trail_path[512];
+      char *trail_path;
       FILE *tfp;
       struct search_frame *saved_trail = NULL;
       int d;
 
-      sprintf(trail_path, "%s/trail.txt", resume_dir);
+      trail_path = resume_path(resume_dir, "trail.txt");
       tfp = fopen(trail_path, "r");
       if (tfp == NULL) {
         fprintf(stderr, "ERROR: cannot read %s\n", trail_path);
         exit(1);
       }
+      safe_free(trail_path);
 
       if (saved_depth > 0)
         saved_trail = (struct search_frame *)

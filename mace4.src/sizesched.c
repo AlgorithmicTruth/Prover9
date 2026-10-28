@@ -38,6 +38,8 @@
  *        no model, clock  -> Timeout       (we timed out)
  *        no model, we
  *          chose to stop  -> GaveUp        (range/overflow exhausted)
+ *        no model, a size
+ *          hit max_megs   -> MemoryOut     (as the sequential search)
  *
  *  Fork-only (no exec): children are forked AFTER initialize_for_search()
  *  has run in the parent, so they inherit the parsed/clausified problem
@@ -297,6 +299,7 @@ static pid_t fork_size_child(Plist clauses, int size, int *out_fd)
     /* This child prints only the model to the pipe; the parent emits the
        SZS status line, status-first, when it publishes the winner. */
     Mace4_cores_child = 1;
+    enable_max_megs();  /* off in the parent; see mace4_parallel() */
 
     code = mace4_one_size_exit_code(clauses, size);
     fflush(stdout);
@@ -340,11 +343,16 @@ Mace_results mace4_parallel(Plist clauses, Mace_options opt, int ncores)
   int best_size = INT_MAX;
   String_buf best_text = NULL;               /* winning model's stdout */
   int overflow_floor = INT_MAX;              /* sizes >= this are unlaunchable */
+  int megs_floor = INT_MAX;                  /* sizes >= this exceed max_megs */
   int decided_to_stop = 0;                   /* hit range/overflow with nothing smaller left */
   double t0 = user_seconds();
 
   if (ncores > MAX_KIDS) ncores = MAX_KIDS;
   if (ncores < 1) ncores = 1;
+
+  /* max_megs applies to each child's search.  The parent only collects
+     their output, and must not exit on max_megs with children running. */
+  disable_max_megs();
 
   /* Parent owns the deadline.  SIGALRM (our internal wall timer) and
      SIGINT (interactive) set Deadline_hit and let the main loop publish
@@ -367,6 +375,7 @@ Mace_results mace4_parallel(Plist clauses, Mace_options opt, int ncores)
            next >= start &&
            next < best_size &&
            next < overflow_floor &&
+           next < megs_floor &&
            (end < 0 || next <= end)) {
       int fd = -1;
       pid_t pid = fork_size_child(clauses, next, &fd);
@@ -451,19 +460,25 @@ Mace_results mace4_parallel(Plist clauses, Mace_options opt, int ncores)
           /* Larger sizes are only worse: don't launch sizes >= sz. */
           if (sz < overflow_floor) overflow_floor = sz;
         }
+        else if (code == MAX_MEGS_NO_EXIT) {
+          /* Out of max_megs.  The sequential search stops here too, and
+             larger sizes need more: don't launch sizes >= sz. */
+          if (sz < megs_floor) megs_floor = sz;
+        }
         /* EXHAUSTED_EXIT / MACE_DOMAIN_OOR_EXIT / MAX_SEC_NO_EXIT:
            no model at this size; smaller sizes remain candidates. */
       }
     }
 
     /* Compaction + supersede: kill any child that can no longer help
-       (size >= best_size or size >= overflow_floor), and drop finished
-       slots from the array. */
+       (size >= best_size, overflow_floor or megs_floor), and drop
+       finished slots from the array. */
     {
       int j = 0;
       for (i = 0; i < nkids; i++) {
         if (!kids[i].done &&
-            (kids[i].size >= best_size || kids[i].size >= overflow_floor))
+            (kids[i].size >= best_size || kids[i].size >= overflow_floor ||
+             kids[i].size >= megs_floor))
           kill_kid(&kids[i]);
         if (kids[i].done) {
           if (kids[i].buf) { zap_string_buf(kids[i].buf); kids[i].buf = NULL; }
@@ -543,6 +558,10 @@ Mace_results mace4_parallel(Plist clauses, Mace_options opt, int ncores)
   else if (Deadline_hit && !decided_to_stop) {
     results->success = FALSE;
     results->return_code = MAX_SEC_NO_EXIT;   /* -> Timeout */
+  }
+  else if (megs_floor < overflow_floor) {
+    results->success = FALSE;
+    results->return_code = MAX_MEGS_NO_EXIT;  /* -> MemoryOut */
   }
   else {
     results->success = FALSE;

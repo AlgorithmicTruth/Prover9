@@ -24,6 +24,7 @@ static int Fatal_exit_code = 1;
 static BOOL Fatal_tptp_mode = FALSE;
 static char *Fatal_problem_name = NULL;
 static char *Fatal_szs_status = NULL;  /* NULL = default "Error" */
+static char *Fatal_message = NULL;     /* see fatal_file_not_found() */
 
 /*************
  *
@@ -139,3 +140,46 @@ void fatal_error(char *message)
   fprintf(stderr, "\nFatal error:  %s\n\n", message);
   exit(Fatal_exit_code);
 }  /* fatal_error */
+
+/*************
+ *
+ *   fatal_file_not_found()
+ *
+ *************/
+
+/* DOCUMENTATION
+Report that a file could not be opened, and exit as fatal_error() does.
+If <context> is not NULL, it names the routine that was trying to open
+the file.
+
+The filename comes from the command line or from the input, so its
+length is not bounded.  The message is measured with snprintf() and
+allocated to fit, so the whole name is reported however long it is.
+The allocation is plain malloc(), not the LADR allocator, which can call
+fatal_error() itself.  The message is held in a file-scope pointer,
+because fatal_error() does not return and the message cannot be freed.
+*/
+
+/* PUBLIC */
+void fatal_file_not_found(char *context, char *filename)
+{
+  char *ctx = (context == NULL ? "" : context);
+  char *sep = (context == NULL ? "" : ", ");
+  int n = snprintf(NULL, 0, "%s%sfile %s not found", ctx, sep, filename);
+
+  if (n >= 0) {
+    Fatal_message = malloc((size_t) n + 1);
+    if (Fatal_message != NULL) {
+      snprintf(Fatal_message, (size_t) n + 1,
+	       "%s%sfile %s not found", ctx, sep, filename);
+      fatal_error(Fatal_message);
+    }
+  }
+
+  {
+    /* Out of memory: report as much of the name as fits. */
+    char s[1000];
+    snprintf(s, sizeof(s), "%s%sfile %s not found", ctx, sep, filename);
+    fatal_error(s);
+  }
+}  /* fatal_file_not_found */

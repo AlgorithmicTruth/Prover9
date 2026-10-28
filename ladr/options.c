@@ -847,7 +847,19 @@ void assign_parm(int id, int val, BOOL echo)
       for (p = Parms[id].dependencies; p; p = p->next) {
 	if (p->type == PARMT) {
 	  /* parm -> parm */
-	  int dval = p->multiply ? p->val * val : p->val;
+	  long long d;
+	  int dval;
+	  if (!p->multiply)
+	    d = p->val;
+	  else if (val < 0)
+	    d = val;  /* -1 (unset, no limit) is not scaled */
+	  else
+	    d = (long long) p->val * val;
+	  if (d > Parms[p->id].max)
+	    d = Parms[p->id].max;  /* saturate instead of overflowing */
+	  else if (val < 0 && d < Parms[p->id].min)
+	    d = Parms[p->id].min;  /* -1 is out of the dependent's range */
+	  dval = (int) d;
 	  if (echo) {
 	    fprintf(stdout, "    %% assign(%s, %d) -> assign(%s, %d).\n",
 		    Parms[id].name,

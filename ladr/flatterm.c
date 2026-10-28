@@ -149,7 +149,8 @@ BOOL flatterm_ident(Flatterm a, Flatterm b)
 void zap_flatterm(Flatterm f)
 {
   Flatterm fi = f;
-  while (fi != f->end->next) {
+  Flatterm stop = f->end->next;  /* f is freed in the first iteration */
+  while (fi != stop) {
     Flatterm tmp = fi;
     fi = fi->next;
     free_flatterm(tmp);

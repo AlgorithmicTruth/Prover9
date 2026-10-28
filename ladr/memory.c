@@ -42,6 +42,10 @@ static int Malloc_calls = 0;   /* number of calls to malloc by palloc */
 
 static unsigned long long Bytes_palloced = 0;  /* 64-bit to handle >4GB */
 
+/* Bytes held in chunks of MAX_MEM_LISTS or more pointers.  Those come
+   from safe_malloc(), not palloc(), so Malloc_calls does not count them. */
+static unsigned long long Big_bytes = 0;
+
 static void *Block = NULL;        /* location returned by most recent malloc */
 static void *Block_pos = NULL;    /* current position in block */
 
@@ -75,7 +79,7 @@ void *palloc(size_t n)
 	printf("palloc, n=%d\n", (int) n);
 	fatal_error("palloc, request too big; reset MALLOC_MEGS");
       }
-      else if (Max_megs_check && (long long)(Malloc_calls+1)*MALLOC_MEGS > Max_megs) {
+      else if (Max_megs_check && megs_malloced() + MALLOC_MEGS > Max_megs) {
 	if (Exit_proc)
 	  (*Exit_proc)();
 	else
@@ -155,6 +159,33 @@ BOOL big_put(void **p, unsigned n)
 
 /*************
  *
+ *   big_malloc()
+ *
+ *   A new large chunk.  It does not come from palloc(), so it is counted
+ *   in Big_bytes and checked against max_megs here.  A chunk reused
+ *   through big_get() was counted when it was first allocated.
+ *
+ *************/
+
+static
+void *big_malloc(unsigned n, BOOL zero)
+{
+  size_t bytes = (size_t) n * BYTES_POINTER;
+
+  if (Max_megs_check &&
+      (long long) Malloc_calls * MALLOC_MEGS +
+      (long long) ((Big_bytes + bytes) / (1024*1024)) > Max_megs) {
+    if (Exit_proc)
+      (*Exit_proc)();
+    else
+      fatal_error("get_mem, Max_megs parameter exceeded");
+  }
+  Big_bytes += bytes;
+  return zero ? safe_calloc(n, BYTES_POINTER) : safe_malloc(bytes);
+}  /* big_malloc */
+
+/*************
+ *
  *   get_cmem()
  *
  *************/
@@ -175,7 +206,7 @@ void *get_cmem(unsigned n)
     if (n >= MAX_MEM_LISTS) {
       p = big_get(n);
       if (p == NULL)
-	return safe_calloc(n, BYTES_POINTER);
+	return big_malloc(n, TRUE);
       memset(p, 0, n * BYTES_POINTER);
       return p;
     }
@@ -218,7 +249,7 @@ void *get_mem(unsigned n)
     if (n >= MAX_MEM_LISTS) {
       p = big_get(n);
       if (p == NULL)
-	p = safe_malloc(n * BYTES_POINTER);
+	p = big_malloc(n, FALSE);
     }
     else if (M[n] == NULL)
       p = palloc(n * BYTES_POINTER);
@@ -251,8 +282,11 @@ void free_mem(void *q, unsigned n)
     /* put it on the appropriate avail list */
     void **p = q;
     if (n >= MAX_MEM_LISTS) {
-      if (!big_put(p, n))
+      if (!big_put(p, n)) {
+	unsigned long long bytes = (unsigned long long) n * BYTES_POINTER;
 	safe_free(p);  /* Big table full; raw free as before */
+	Big_bytes = (Big_bytes >= bytes ? Big_bytes - bytes : 0);
+      }
     }
     else {
       /* the first pointer is used for the avail list */
@@ -308,13 +342,16 @@ void memory_report(FILE *fp)
 
 /* DOCUMENTATION
 This routine returns the number of megabytes that palloc()
-has obtained from the operating system by malloc();
+has obtained from the operating system by malloc(), plus the
+megabytes held in chunks too large for palloc()
+(MAX_MEM_LISTS or more pointers).
 */
 
 /* PUBLIC */
 long long megs_malloced(void)
 {
-  return (long long) Malloc_calls * MALLOC_MEGS;
+  return (long long) Malloc_calls * MALLOC_MEGS
+    + (long long) (Big_bytes / (1024*1024));
 }  /* megs_malloced */
 
 /*************

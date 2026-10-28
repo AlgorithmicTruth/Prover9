@@ -68,6 +68,55 @@ test7:
 	@test.src/distinctness_test.sh bin/prover9
 	@echo ""
 	@echo "**** Distinctness/numeral-unification regression matrix. ****"
+	@echo "**** Next try 'make test8'. ****"
+	@echo ""
+
+test8:
+	@test.src/tptp_translate_test.sh bin
+	@echo ""
+	@echo "**** TPTP input regression matrix (tptp_to_ladr and native). ****"
+	@echo "**** Next try 'make test9'. ****"
+	@echo ""
+
+test9:
+	@test.src/overflow_test.sh bin
+	@echo ""
+	@echo "**** Long-argument and long-token overflow regressions. ****"
+	@echo "**** Next try 'make test10'. ****"
+	@echo ""
+
+test10:
+	@test.src/truncated_proof_test.sh bin
+	@echo ""
+	@echo "**** Truncated-proof regressions for prooftrans and directproof. ****"
+	@echo "**** Next try 'make test11'. ****"
+	@echo ""
+
+test11:
+	@test.src/memory_safety_test.sh bin/prover9
+	@echo ""
+	@echo "**** Memory-safety checks.  SKIP means the tool a case needs is unavailable. ****"
+	@echo "**** Next try 'make test12'. ****"
+	@echo ""
+
+test12:
+	@test.src/option_parsing_test.sh bin/prover9
+	@echo ""
+	@echo "**** Option-dependency checks. ****"
+	@echo "**** Next try 'make test13'. ****"
+	@echo ""
+
+test13:
+	@test.src/memory_limit_test.sh bin
+	@echo ""
+	@echo "**** max_megs regression cases. ****"
+	@echo "**** Next try 'make test14'. ****"
+	@echo ""
+
+test14:
+	@test.src/helper_scripts_test.sh bin
+	@echo ""
+	@echo "**** If all pass, the helper scripts in ./bin are okay. ****"
 	@echo ""
 	@echo "*** All of the programs are in ./bin, and they can be copied anywhere you like. ***"
 	@echo ""
